@@ -1,0 +1,1586 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Ledgerly — Accounting</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+  :root{
+    --bg:#ECF0EA;
+    --ink:#11201A;
+    --ink-2:#1B3229;
+    --surface:#FFFFFF;
+    --surface-2:#F5F7F3;
+    --accent:#1F7A5C;
+    --accent-dark:#155943;
+    --gold:#B8892B;
+    --red:#A63B2E;
+    --border:#DDE3D9;
+    --border-strong:#C4CDC0;
+    --text:#152019;
+    --text-muted:#5C665F;
+    --text-inverse:#EDF3EE;
+    --radius:8px;
+    --shadow:0 1px 2px rgba(17,32,26,.06), 0 4px 14px rgba(17,32,26,.05);
+  }
+  *{box-sizing:border-box;}
+  html,body{margin:0;padding:0;height:100%;}
+  body{
+    font-family:'IBM Plex Sans',system-ui,sans-serif;
+    background:var(--bg);
+    color:var(--text);
+    font-size:14px;
+    -webkit-font-smoothing:antialiased;
+  }
+  .mono{font-family:'IBM Plex Mono',monospace;}
+  .num{font-family:'IBM Plex Mono',monospace; font-variant-numeric:tabular-nums; letter-spacing:-0.2px;}
+  #shell{display:flex; min-height:100vh;}
+
+  /* Sidebar */
+  #sidebar{
+    width:228px; flex:0 0 228px; background:var(--ink); color:var(--text-inverse);
+    display:flex; flex-direction:column; padding:20px 0;
+    position:sticky; top:0; height:100vh;
+  }
+  .brand{ padding:0 20px 18px 20px; border-bottom:1px solid rgba(237,243,238,.12); margin-bottom:10px;}
+  .brand-mark{ display:flex; align-items:baseline; gap:8px;}
+  .brand-mark .glyph{
+    width:26px; height:26px; border:1.5px solid var(--gold); border-radius:4px;
+    display:flex; align-items:center; justify-content:center; color:var(--gold);
+    font-family:'IBM Plex Mono',monospace; font-weight:600; font-size:13px; flex:0 0 26px;
+  }
+  .brand-mark .name{font-size:17px; font-weight:600; letter-spacing:.2px;}
+  .brand-sub{font-size:10.5px; color:rgba(237,243,238,.5); text-transform:uppercase; letter-spacing:1.4px; margin-top:6px; margin-left:34px;}
+  nav{flex:1; padding:10px 12px;}
+  .nav-item{
+    display:flex; align-items:center; gap:10px; padding:9px 12px; margin-bottom:2px;
+    border-radius:6px; color:rgba(237,243,238,.72); text-decoration:none; cursor:pointer;
+    font-size:13.5px; font-weight:500; border-left:2px solid transparent; transition:background .12s;
+  }
+  .nav-item:hover{background:rgba(237,243,238,.06); color:var(--text-inverse);}
+  .nav-item.active{background:rgba(184,137,43,.14); color:var(--text-inverse); border-left:2px solid var(--gold);}
+  .nav-item .ic{width:16px; text-align:center; opacity:.85; font-size:13px;}
+  .nav-section-label{font-size:10px; text-transform:uppercase; letter-spacing:1.3px; color:rgba(237,243,238,.35); padding:14px 12px 6px;}
+  .sidebar-foot{padding:14px 20px; border-top:1px solid rgba(237,243,238,.12); font-size:11px; color:rgba(237,243,238,.4);}
+  .co-switch-btn{
+    width:100%; display:flex; align-items:center; justify-content:space-between; gap:8px;
+    background:rgba(237,243,238,.06); border:1px solid rgba(237,243,238,.14); color:var(--text-inverse);
+    border-radius:7px; padding:8px 10px; font-family:inherit; font-size:12.5px; font-weight:600; cursor:pointer;
+  }
+  .co-switch-btn:hover{background:rgba(237,243,238,.11);}
+  .co-switch-btn .co-name{overflow:hidden; text-overflow:ellipsis; white-space:nowrap; text-align:left;}
+  .co-switch-btn .chev{color:var(--gold); flex:0 0 auto;}
+
+  /* Main */
+  #main{flex:1; min-width:0; display:flex; flex-direction:column;}
+  #topbar{
+    height:60px; flex:0 0 60px; background:var(--surface); border-bottom:1px solid var(--border);
+    display:flex; align-items:center; justify-content:space-between; padding:0 26px; position:sticky; top:0; z-index:5;
+  }
+  #topbar h1{font-size:17px; font-weight:600; margin:0; letter-spacing:.1px;}
+  #topbar .sub{font-size:12px; color:var(--text-muted); margin-top:1px;}
+  #content{padding:26px; flex:1;}
+
+  /* Buttons */
+  .btn{
+    font-family:inherit; font-size:13px; font-weight:600; border-radius:6px; border:1px solid transparent;
+    padding:8px 14px; cursor:pointer; display:inline-flex; align-items:center; gap:6px; transition:filter .1s, background .1s;
+  }
+  .btn-primary{background:var(--accent); color:#fff;}
+  .btn-primary:hover{background:var(--accent-dark);}
+  .btn-ghost{background:transparent; border-color:var(--border-strong); color:var(--text);}
+  .btn-ghost:hover{background:var(--surface-2);}
+  .btn-danger{background:transparent; border-color:var(--red); color:var(--red);}
+  .btn-danger:hover{background:rgba(166,59,46,.08);}
+  .btn-sm{padding:5px 10px; font-size:12px;}
+  .btn:disabled{opacity:.45; cursor:not-allowed;}
+  .icon-btn{background:transparent;border:none;color:var(--text-muted);cursor:pointer;font-size:14px;padding:4px 6px;border-radius:4px;}
+  .icon-btn:hover{background:var(--surface-2); color:var(--text);}
+
+  /* Cards / KPIs */
+  .grid-4{display:grid; grid-template-columns:repeat(4,1fr); gap:14px; margin-bottom:22px;}
+  .grid-2{display:grid; grid-template-columns:1.4fr 1fr; gap:14px;}
+  .kpi{background:var(--surface); border:1px solid var(--border); border-radius:var(--radius); padding:16px 18px; box-shadow:var(--shadow);}
+  .kpi .label{font-size:11px; text-transform:uppercase; letter-spacing:1px; color:var(--text-muted); font-weight:600;}
+  .kpi .value{font-size:23px; margin-top:8px; font-weight:600;}
+  .kpi .delta{font-size:11.5px; margin-top:5px; color:var(--text-muted);}
+  .card{background:var(--surface); border:1px solid var(--border); border-radius:var(--radius); box-shadow:var(--shadow); overflow:hidden;}
+  .card-head{padding:14px 18px; border-bottom:1px solid var(--border); display:flex; align-items:center; justify-content:space-between;}
+  .card-head h3{margin:0; font-size:14px; font-weight:600;}
+  .card-body{padding:14px 18px;}
+
+  /* Tables */
+  table{width:100%; border-collapse:collapse;}
+  thead th{
+    text-align:left; font-size:10.5px; text-transform:uppercase; letter-spacing:.8px; color:var(--text-muted);
+    padding:9px 10px; border-bottom:1px solid var(--border); font-weight:600; white-space:nowrap;
+  }
+  tbody td{padding:11px 10px; border-bottom:1px solid var(--border); font-size:13.5px; vertical-align:middle;}
+  tbody tr:last-child td{border-bottom:none;}
+  tbody tr.clickable{cursor:pointer;}
+  tbody tr.clickable:hover{background:var(--surface-2);}
+  .amt-right{text-align:right;}
+  .pos{color:var(--accent-dark);}
+  .neg{color:var(--red);}
+  td.amt, th.amt{text-align:right;}
+
+  .badge{display:inline-block; font-size:10.5px; font-weight:600; padding:3px 8px; border-radius:20px; text-transform:uppercase; letter-spacing:.4px;}
+  .badge-draft{background:#EDEEE9; color:#6B6F63;}
+  .badge-open{background:#FCEFD9; color:#8A6212;}
+  .badge-partial{background:#E4EEFB; color:#2B5C9A;}
+  .badge-paid{background:#E1F1E8; color:var(--accent-dark);}
+  .badge-void{background:#F7E6E3; color:var(--red);}
+
+  .empty{padding:40px 20px; text-align:center; color:var(--text-muted);}
+  .empty .big{font-size:28px; margin-bottom:8px;}
+  .empty p{margin:4px 0 14px; font-size:13px;}
+
+  /* Forms */
+  label{display:block; font-size:11.5px; font-weight:600; color:var(--text-muted); margin-bottom:5px; text-transform:uppercase; letter-spacing:.5px;}
+  input,select,textarea{
+    width:100%; font-family:inherit; font-size:13.5px; padding:8px 10px; border:1px solid var(--border-strong);
+    border-radius:6px; background:#fff; color:var(--text);
+  }
+  input:focus,select:focus,textarea:focus{outline:2px solid rgba(31,122,92,.3); border-color:var(--accent);}
+  .field{margin-bottom:14px;}
+  .field-row{display:grid; grid-template-columns:1fr 1fr; gap:12px;}
+  .field-row3{display:grid; grid-template-columns:1fr 1fr 1fr; gap:12px;}
+  .hint{font-size:11px; color:var(--text-muted); margin-top:4px;}
+
+  /* Modal */
+  .overlay{position:fixed; inset:0; background:rgba(17,32,26,.45); display:flex; align-items:flex-start; justify-content:center; padding:40px 20px; z-index:100; overflow:auto;}
+  .modal{background:var(--surface); border-radius:10px; width:100%; max-width:560px; box-shadow:0 20px 50px rgba(0,0,0,.25); animation:pop .12s ease-out;}
+  .modal.wide{max-width:760px;}
+  @keyframes pop{from{transform:translateY(6px); opacity:0;} to{transform:translateY(0); opacity:1;}}
+  .modal-head{padding:16px 20px; border-bottom:1px solid var(--border); display:flex; align-items:center; justify-content:space-between;}
+  .modal-head h3{margin:0; font-size:15px; font-weight:600;}
+  .modal-body{padding:20px; max-height:70vh; overflow:auto;}
+  .modal-foot{padding:14px 20px; border-top:1px solid var(--border); display:flex; justify-content:flex-end; gap:8px;}
+  .x-close{background:none; border:none; font-size:18px; color:var(--text-muted); cursor:pointer; line-height:1;}
+
+  /* Line items table */
+  .li-table th, .li-table td{padding:6px 6px;}
+  .li-table input{padding:6px 8px; font-size:13px;}
+  .li-total-row td{font-weight:600; border-top:1.5px solid var(--border-strong);}
+
+  .tabs{display:flex; gap:4px; margin-bottom:16px; border-bottom:1px solid var(--border);}
+  .tab{padding:9px 14px; font-size:13px; font-weight:600; color:var(--text-muted); cursor:pointer; border-bottom:2px solid transparent; margin-bottom:-1px;}
+  .tab.active{color:var(--accent-dark); border-bottom:2px solid var(--accent);}
+
+  .balance-check{display:flex; align-items:center; gap:8px; font-size:12.5px; padding:8px 12px; border-radius:6px; background:var(--surface-2); border:1px solid var(--border); width:fit-content;}
+  .balance-check .dot{width:8px; height:8px; border-radius:50%; background:var(--accent);}
+
+  .section-title{font-size:11px; text-transform:uppercase; letter-spacing:1px; color:var(--text-muted); font-weight:700; margin:22px 0 10px;}
+  .section-title:first-child{margin-top:0;}
+  .report-row{display:flex; justify-content:space-between; padding:7px 2px; font-size:13.5px; border-bottom:1px dashed var(--border);}
+  .report-row.total{font-weight:700; border-bottom:none; border-top:1.5px solid var(--border-strong); margin-top:4px; padding-top:9px;}
+  .report-row .lbl{color:var(--text);}
+  .indent{padding-left:14px; color:var(--text-muted);}
+
+  .toolbar{display:flex; align-items:center; justify-content:space-between; margin-bottom:16px; gap:10px; flex-wrap:wrap;}
+  .filter-pills{display:flex; gap:6px;}
+  .pill{padding:5px 11px; border-radius:20px; font-size:12px; font-weight:600; border:1px solid var(--border-strong); cursor:pointer; color:var(--text-muted); background:#fff;}
+  .pill.active{background:var(--ink); color:#fff; border-color:var(--ink);}
+
+  .contact-tag{font-size:11px; padding:2px 7px; border-radius:4px; font-weight:600;}
+  .tag-customer{background:#E1F1E8; color:var(--accent-dark);}
+  .tag-supplier{background:#F0E7F6; color:#6A3D91;}
+
+  ::-webkit-scrollbar{width:9px; height:9px;}
+  ::-webkit-scrollbar-thumb{background:#C9D0C5; border-radius:5px;}
+  .toast{position:fixed; bottom:22px; right:22px; background:var(--ink); color:#fff; padding:11px 18px; border-radius:8px; font-size:13px; box-shadow:0 8px 24px rgba(0,0,0,.25); z-index:200; opacity:0; transform:translateY(8px); transition:all .18s;}
+  .toast.show{opacity:1; transform:translateY(0);}
+
+  @media (max-width: 880px){
+    #sidebar{position:fixed; left:-228px; z-index:50; transition:left .18s;}
+    #sidebar.open{left:0;}
+    .grid-4{grid-template-columns:1fr 1fr;}
+    .grid-2{grid-template-columns:1fr;}
+    .field-row, .field-row3{grid-template-columns:1fr;}
+    #menu-toggle{display:inline-flex !important;}
+  }
+</style>
+</head>
+<body>
+<div id="shell">
+  <aside id="sidebar">
+    <div class="brand">
+      <div class="brand-mark"><div class="glyph">£</div><div class="name">Ledgerly</div></div>
+      <div class="brand-sub">Books &amp; Ledgers</div>
+    </div>
+    <div id="company-switcher" style="padding:0 12px 12px;"></div>
+    <nav id="nav"></nav>
+    <div class="sidebar-foot">Local demo data · not connected to a bank</div>
+  </aside>
+  <div id="main">
+    <div id="topbar">
+      <div style="display:flex; align-items:center; gap:10px;">
+        <button id="menu-toggle" class="icon-btn" style="display:none; font-size:18px;" onclick="document.getElementById('sidebar').classList.toggle('open')">☰</button>
+        <div>
+          <h1 id="page-title">Dashboard</h1>
+          <div class="sub" id="page-sub"></div>
+        </div>
+      </div>
+      <div id="topbar-actions"></div>
+    </div>
+    <div id="content"></div>
+  </div>
+</div>
+<div id="modal-root"></div>
+<div id="toast" class="toast"></div>
+
+<script>
+/* ============================= STATE ============================= */
+let S = null; // active company's data (reference into WORKSPACE.companies)
+let WORKSPACE = null; // {companies:{id:companyData}, order:[ids], activeId}
+let VIEW = 'dashboard';
+let STORAGE_KEY = 'ledgerly-workspace-v2';
+let OLD_STORAGE_KEY = 'ledgerly-data-v1';
+let SAVE_TIMER = null;
+
+const NAV = [
+  {sec:'Overview'},
+  {id:'dashboard', label:'Dashboard', ic:'◆'},
+  {sec:'Money'},
+  {id:'sales', label:'Sales / Invoices', ic:'↗'},
+  {id:'purchases', label:'Purchases / Bills', ic:'↙'},
+  {id:'banking', label:'Banking', ic:'▤'},
+  {sec:'Records'},
+  {id:'contacts', label:'Contacts', ic:'●'},
+  {id:'accounts', label:'Chart of Accounts', ic:'≡'},
+  {sec:'Insights'},
+  {id:'reports', label:'Reports', ic:'▦'},
+  {id:'settings', label:'Settings', ic:'⚙'},
+];
+
+function uid(p){ return p+'_'+Date.now().toString(36)+Math.random().toString(36).slice(2,7); }
+
+function defaultData(){
+  return {
+    settings:{ businessName:'My Business', currency:'R', taxLabel:'VAT', taxRate:15, nextInvoiceNo:1001, nextBillNo:2001 },
+    accounts:[
+      {id:'acc_bank', code:'1000', name:'Business Bank Account', type:'Asset', isBank:true, system:true},
+      {id:'acc_ar', code:'1100', name:'Accounts Receivable', type:'Asset', system:true},
+      {id:'acc_vatr', code:'1200', name:'VAT Receivable (Input)', type:'Asset', system:true},
+      {id:'acc_ap', code:'2000', name:'Accounts Payable', type:'Liability', system:true},
+      {id:'acc_vatp', code:'2100', name:'VAT Payable (Output)', type:'Liability', system:true},
+      {id:'acc_equity', code:'3000', name:"Owner's Equity", type:'Equity', system:true},
+      {id:'acc_sales', code:'4000', name:'Sales Income', type:'Income', system:true},
+      {id:'acc_other_inc', code:'4100', name:'Other Income', type:'Income'},
+      {id:'acc_cos', code:'5000', name:'Cost of Sales', type:'Expense'},
+      {id:'acc_office', code:'6000', name:'Office Expenses', type:'Expense'},
+      {id:'acc_rent', code:'6010', name:'Rent', type:'Expense'},
+      {id:'acc_utilities', code:'6020', name:'Utilities', type:'Expense'},
+      {id:'acc_software', code:'6030', name:'Software & Subscriptions', type:'Expense'},
+      {id:'acc_travel', code:'6040', name:'Travel', type:'Expense'},
+      {id:'acc_bankfees', code:'6050', name:'Bank Charges', type:'Expense'},
+    ],
+    contacts:[],
+    invoices:[],
+    bills:[],
+    journal:[],
+    seeded:false,
+  };
+}
+
+/* ============================= PERSISTENCE (multi-company workspace) ============================= */
+function newCompanyRecord(name){
+  const co = defaultData();
+  co.settings.businessName = name || 'New Company';
+  return co;
+}
+async function loadState(){
+  try{
+    const res = await window.storage.get(STORAGE_KEY, false);
+    if(res && res.value){
+      WORKSPACE = JSON.parse(res.value);
+      S = WORKSPACE.companies[WORKSPACE.activeId];
+      if(S) return;
+    }
+  }catch(e){ /* not found or storage unavailable */ }
+
+  // Migrate a legacy single-company save if present
+  try{
+    const old = await window.storage.get(OLD_STORAGE_KEY, false);
+    if(old && old.value){
+      const co = JSON.parse(old.value);
+      const id = uid('co');
+      WORKSPACE = { companies:{ [id]: co }, order:[id], activeId:id };
+      S = co;
+      await saveState(true);
+      return;
+    }
+  }catch(e){ /* none found */ }
+
+  // Fresh install — one seeded sample company
+  const id = uid('co');
+  const co = newCompanyRecord('My Business');
+  WORKSPACE = { companies:{ [id]: co }, order:[id], activeId:id };
+  S = co;
+  seedDemoData();
+  await saveState(true);
+}
+
+async function saveState(immediate){
+  clearTimeout(SAVE_TIMER);
+  const doSave = async ()=>{
+    try{ await window.storage.set(STORAGE_KEY, JSON.stringify(WORKSPACE), false); }
+    catch(e){ console.error('save failed', e); showToast('Could not save — changes may not persist'); }
+  };
+  if(immediate) return doSave();
+  SAVE_TIMER = setTimeout(doSave, 250);
+}
+
+function companyList(){
+  return (WORKSPACE.order||Object.keys(WORKSPACE.companies)).map(id=>({id, name:WORKSPACE.companies[id].settings.businessName}));
+}
+function switchCompany(id){
+  if(!WORKSPACE.companies[id]) return;
+  WORKSPACE.activeId = id;
+  S = WORKSPACE.companies[id];
+  closeModal();
+  saveState(true);
+  navigate('dashboard');
+}
+function openCompanySwitcher(){
+  const list = companyList();
+  const rows = list.map(c=>`
+    <div style="display:flex; align-items:center; justify-content:space-between; padding:10px 12px; border:1px solid var(--border); border-radius:7px; margin-bottom:8px; ${c.id===WORKSPACE.activeId?'background:var(--surface-2); border-color:var(--accent);':''}">
+      <div style="display:flex; align-items:center; gap:9px; cursor:pointer; flex:1;" onclick="switchCompany('${c.id}')">
+        <span style="width:9px;height:9px;border-radius:50%;background:${c.id===WORKSPACE.activeId?'var(--accent)':'var(--border-strong)'};display:inline-block;"></span>
+        <strong style="font-size:13.5px;">${c.name}</strong>
+      </div>
+      ${list.length>1 ? `<button class="icon-btn" onclick="event.stopPropagation(); deleteCompanyAction('${c.id}')">Delete</button>` : ''}
+    </div>`).join('');
+  const body = `${rows}<button class="btn btn-ghost" style="width:100%; margin-top:6px; justify-content:center;" onclick="openNewCompanyForm()">+ Add company</button>`;
+  openModal('Switch company', body, []);
+}
+function openNewCompanyForm(){
+  const body = `
+    <div class="field"><label>Company name</label><input type="text" id="co-name" placeholder="e.g. Second Trading Pty Ltd"></div>
+    <div class="field-row">
+      <div class="field"><label>Currency symbol</label><input type="text" id="co-currency" value="R"></div>
+      <div class="field"><label>Default tax rate (%)</label><input type="number" id="co-taxrate" value="15" step="0.1"></div>
+    </div>
+    <div class="field"><label><input type="checkbox" id="co-sample" style="width:auto; display:inline-block; margin-right:6px;"> Start with sample demo data</label></div>
+  `;
+  openModal('New company', body, [{label:'Create company', cls:'btn-primary', onclick:'submitNewCompany()'}]);
+}
+function submitNewCompany(){
+  const name = document.getElementById('co-name').value.trim();
+  if(!name){ showToast('Enter a company name'); return; }
+  const currency = document.getElementById('co-currency').value.trim() || 'R';
+  const taxRate = Number(document.getElementById('co-taxrate').value)||0;
+  const withSample = document.getElementById('co-sample').checked;
+  const co = newCompanyRecord(name);
+  co.settings.currency = currency;
+  co.settings.taxRate = taxRate;
+  const id = uid('co');
+  WORKSPACE.companies[id] = co;
+  (WORKSPACE.order = WORKSPACE.order||Object.keys(WORKSPACE.companies)).push(id);
+  if(withSample){ const prevS = S; S = co; seedDemoData(); S = prevS; }
+  WORKSPACE.activeId = id;
+  S = WORKSPACE.companies[id];
+  closeModal(); showToast('Company created'); saveState(true); navigate('dashboard');
+}
+function deleteCompanyAction(id){
+  const list = companyList();
+  if(list.length<=1){ showToast('You need at least one company'); return; }
+  const name = WORKSPACE.companies[id].settings.businessName;
+  if(!confirm(`Delete "${name}" and all of its data? This cannot be undone.`)) return;
+  delete WORKSPACE.companies[id];
+  WORKSPACE.order = (WORKSPACE.order||[]).filter(x=>x!==id);
+  if(WORKSPACE.activeId===id){ WORKSPACE.activeId = WORKSPACE.order[0]; S = WORKSPACE.companies[WORKSPACE.activeId]; }
+  showToast('Company deleted'); saveState(true);
+  openCompanySwitcher();
+}
+
+/* ============================= SEED DEMO DATA ============================= */
+function seedDemoData(){
+  const c1 = {id:uid('ct'), type:'customer', name:'Table Mountain Coffee Co.', email:'accounts@tmcoffee.co.za', phone:'021 555 0134'};
+  const c2 = {id:uid('ct'), type:'customer', name:'Harbour View Studios', email:'billing@harbourview.studio', phone:'021 555 0198'};
+  const s1 = {id:uid('ct'), type:'supplier', name:'Kloof Office Supplies', email:'sales@kloofoffice.co.za', phone:'021 555 0221'};
+  S.contacts.push(c1,c2,s1);
+
+  // Opening equity contribution
+  postJournal('Owner opening capital contribution', daysAgo(60), [
+    {accountId:'acc_bank', debit:50000, credit:0},
+    {accountId:'acc_equity', debit:0, credit:50000},
+  ]);
+
+  // Invoice 1 - issued and paid
+  const inv1 = makeInvoiceObj(c1.id, daysAgo(24), daysAgo(10), [
+    {desc:'Web design — landing page', qty:1, price:8500, accountId:'acc_sales'},
+    {desc:'Monthly hosting', qty:3, price:350, accountId:'acc_sales'},
+  ], true);
+  S.invoices.push(inv1);
+  issueInvoice(inv1.id, daysAgo(24));
+  recordInvoicePayment(inv1.id, invoiceTotal(inv1), daysAgo(9), 'acc_bank');
+
+  // Invoice 2 - issued, unpaid
+  const inv2 = makeInvoiceObj(c2.id, daysAgo(6), daysAgo(-9), [
+    {desc:'Brand identity package', qty:1, price:14000, accountId:'acc_sales'},
+  ], true);
+  S.invoices.push(inv2);
+  issueInvoice(inv2.id, daysAgo(6));
+
+  // Invoice 3 - draft
+  const inv3 = makeInvoiceObj(c2.id, daysAgo(0), daysAgo(-14), [
+    {desc:'Social media pack', qty:1, price:3200, accountId:'acc_sales'},
+  ], true);
+  S.invoices.push(inv3);
+
+  // Bill 1 - received and paid
+  const bill1 = makeBillObj(s1.id, daysAgo(20), daysAgo(5), [
+    {desc:'Printer paper & toner', qty:1, price:1450, accountId:'acc_office'},
+  ], true);
+  S.bills.push(bill1);
+  issueBill(bill1.id, daysAgo(20));
+  recordBillPayment(bill1.id, billTotal(bill1), daysAgo(4), 'acc_bank');
+
+  // Bill 2 - received, unpaid (rent)
+  const bill2 = makeBillObj(s1.id, daysAgo(3), daysAgo(-4), [
+    {desc:'Studio rent — monthly', qty:1, price:6200, accountId:'acc_rent'},
+  ], false);
+  S.bills.push(bill2);
+  issueBill(bill2.id, daysAgo(3));
+
+  // A couple of misc bank entries
+  postJournal('Bank charges', daysAgo(15), [
+    {accountId:'acc_bankfees', debit:65, credit:0},
+    {accountId:'acc_bank', debit:0, credit:65},
+  ]);
+  postJournal('Software subscription — design tools', daysAgo(12), [
+    {accountId:'acc_software', debit:499, credit:0},
+    {accountId:'acc_bank', debit:0, credit:499},
+  ]);
+
+  S.seeded = true;
+}
+function daysAgo(n){ const d=new Date(); d.setDate(d.getDate()-n); return d.toISOString().slice(0,10); }
+
+/* ============================= JOURNAL / LEDGER ENGINE ============================= */
+function postJournal(description, date, lines){
+  const totalDebit = lines.reduce((s,l)=>s+(l.debit||0),0);
+  const totalCredit = lines.reduce((s,l)=>s+(l.credit||0),0);
+  const entry = {id:uid('je'), date, description, lines, ref:null};
+  S.journal.push(entry);
+  return entry;
+}
+function reverseJournalByRef(ref){
+  const toReverse = S.journal.filter(e=>e.ref===ref);
+  toReverse.forEach(e=>{
+    postJournal('Reversal: '+e.description, todayStr(), e.lines.map(l=>({accountId:l.accountId, debit:l.credit, credit:l.debit})));
+  });
+}
+function todayStr(){ return new Date().toISOString().slice(0,10); }
+
+function accountType(id){ const a=S.accounts.find(x=>x.id===id); return a?a.type:null; }
+function accountNormalIsDebit(type){ return type==='Asset'||type==='Expense'; }
+
+function getAccountBalance(accountId, asOfDate){
+  let debit=0, credit=0;
+  S.journal.forEach(e=>{
+    if(asOfDate && e.date>asOfDate) return;
+    e.lines.forEach(l=>{ if(l.accountId===accountId){ debit+=l.debit||0; credit+=l.credit||0; } });
+  });
+  const type = accountType(accountId);
+  return accountNormalIsDebit(type) ? (debit-credit) : (credit-debit);
+}
+function periodMovement(accountId, from, to){
+  let debit=0, credit=0;
+  S.journal.forEach(e=>{
+    if(from && e.date<from) return;
+    if(to && e.date>to) return;
+    e.lines.forEach(l=>{ if(l.accountId===accountId){ debit+=l.debit||0; credit+=l.credit||0; } });
+  });
+  const type = accountType(accountId);
+  return accountNormalIsDebit(type) ? (debit-credit) : (credit-debit);
+}
+
+/* ============================= INVOICES ============================= */
+function lineSubtotal(line){ return (Number(line.qty)||0) * (Number(line.price)||0); }
+function docSubtotal(doc){ return doc.lines.reduce((s,l)=>s+lineSubtotal(l),0); }
+function docTax(doc){ return doc.taxRate>0 ? docSubtotal(doc)*doc.taxRate/100 : 0; }
+function invoiceTotal(doc){ return docSubtotal(doc)+docTax(doc); }
+function billTotal(doc){ return docSubtotal(doc)+docTax(doc); }
+function docPaidAmount(doc){ return (doc.payments||[]).reduce((s,p)=>s+p.amount,0); }
+function docBalanceDue(doc){ return round2(invoiceTotal(doc)-docPaidAmount(doc)); }
+function round2(n){ return Math.round((n+Number.EPSILON)*100)/100; }
+
+function docStatus(doc){
+  if(doc.status==='draft') return 'draft';
+  if(doc.status==='void') return 'void';
+  const bal = round2(invoiceTotal(doc)-docPaidAmount(doc));
+  if(bal<=0.004) return 'paid';
+  if(docPaidAmount(doc)>0) return 'partial';
+  return 'open';
+}
+
+function makeInvoiceObj(contactId, date, dueDate, lines, useTax){
+  const num = 'INV-'+(S.settings.nextInvoiceNo++);
+  return {id:uid('inv'), number:num, contactId, date, dueDate, lines:lines.map(l=>({id:uid('li'),...l})), taxRate: useTax?S.settings.taxRate:0, status:'draft', payments:[], notes:''};
+}
+function makeBillObj(contactId, date, dueDate, lines, useTax){
+  const num = 'BILL-'+(S.settings.nextBillNo++);
+  return {id:uid('bill'), number:num, contactId, date, dueDate, lines:lines.map(l=>({id:uid('li'),...l})), taxRate: useTax?S.settings.taxRate:0, status:'draft', payments:[], notes:''};
+}
+
+function issueInvoice(invId, dateOverride){
+  const inv = S.invoices.find(i=>i.id===invId);
+  if(!inv || inv.status!=='draft') return;
+  const date = dateOverride||todayStr();
+  const lines = [{accountId:'acc_ar', debit:invoiceTotal(inv), credit:0}];
+  inv.lines.forEach(l=>{ lines.push({accountId:l.accountId, debit:0, credit:lineSubtotal(l)}); });
+  const tax = docTax(inv);
+  if(tax>0) lines.push({accountId:'acc_vatp', debit:0, credit:tax});
+  const entry = postJournal('Invoice '+inv.number+' issued to '+contactName(inv.contactId), date, lines);
+  entry.ref = 'inv-issue-'+inv.id;
+  inv.status='open'; inv.issueRef=entry.ref; inv.date=date;
+}
+function issueBill(billId, dateOverride){
+  const bill = S.bills.find(b=>b.id===billId);
+  if(!bill || bill.status!=='draft') return;
+  const date = dateOverride||todayStr();
+  const lines = [];
+  bill.lines.forEach(l=>{ lines.push({accountId:l.accountId, debit:lineSubtotal(l), credit:0}); });
+  const tax = docTax(bill);
+  if(tax>0) lines.push({accountId:'acc_vatr', debit:tax, credit:0});
+  lines.push({accountId:'acc_ap', debit:0, credit:billTotal(bill)});
+  const entry = postJournal('Bill '+bill.number+' received from '+contactName(bill.contactId), date, lines);
+  entry.ref = 'bill-issue-'+bill.id;
+  bill.status='open'; bill.issueRef=entry.ref; bill.date=date;
+}
+function recordInvoicePayment(invId, amount, date, bankAccountId){
+  const inv = S.invoices.find(i=>i.id===invId);
+  if(!inv) return;
+  amount = Math.min(amount, docBalanceDue(inv));
+  if(amount<=0) return;
+  const entry = postJournal('Payment received for '+inv.number, date, [
+    {accountId:bankAccountId, debit:amount, credit:0},
+    {accountId:'acc_ar', debit:0, credit:amount},
+  ]);
+  entry.ref = 'inv-pay-'+uid('p');
+  inv.payments.push({id:uid('pay'), date, amount, bankAccountId, journalRef:entry.ref});
+}
+function recordBillPayment(billId, amount, date, bankAccountId){
+  const bill = S.bills.find(b=>b.id===billId);
+  if(!bill) return;
+  amount = Math.min(amount, docBalanceDue(bill));
+  if(amount<=0) return;
+  const entry = postJournal('Payment made for '+bill.number, date, [
+    {accountId:'acc_ap', debit:amount, credit:0},
+    {accountId:bankAccountId, debit:0, credit:amount},
+  ]);
+  entry.ref = 'bill-pay-'+uid('p');
+  bill.payments.push({id:uid('pay'), date, amount, bankAccountId, journalRef:entry.ref});
+}
+function voidInvoice(invId){
+  const inv = S.invoices.find(i=>i.id===invId);
+  if(!inv) return;
+  (inv.payments||[]).forEach(p=>reverseJournalByRef(p.journalRef));
+  if(inv.issueRef) reverseJournalByRef(inv.issueRef);
+  inv.status='void'; inv.payments=[];
+}
+function voidBill(billId){
+  const bill = S.bills.find(b=>b.id===billId);
+  if(!bill) return;
+  (bill.payments||[]).forEach(p=>reverseJournalByRef(p.journalRef));
+  if(bill.issueRef) reverseJournalByRef(bill.issueRef);
+  bill.status='void'; bill.payments=[];
+}
+function contactName(id){ const c=S.contacts.find(x=>x.id===id); return c?c.name:'—'; }
+
+/* ============================= FORMAT HELPERS ============================= */
+function fmt(n){
+  n = Number(n)||0;
+  const neg = n < -0.001;
+  const abs = Math.abs(n);
+  const str = abs.toLocaleString('en-ZA',{minimumFractionDigits:2, maximumFractionDigits:2});
+  return (neg? '−':'') + S.settings.currency + str;
+}
+function fmtDate(d){
+  if(!d) return '—';
+  const dt = new Date(d+'T00:00:00');
+  return dt.toLocaleDateString('en-GB',{day:'2-digit', month:'short', year:'numeric'});
+}
+function fmtDateShort(d){
+  if(!d) return '—';
+  const dt = new Date(d+'T00:00:00');
+  return dt.toLocaleDateString('en-GB',{day:'2-digit', month:'short'});
+}
+
+/* ============================= UI SHELL ============================= */
+function renderCompanySwitcher(){
+  const el = document.getElementById('company-switcher');
+  if(!el) return;
+  el.innerHTML = `<button class="co-switch-btn" onclick="openCompanySwitcher()">
+    <span class="co-name">${S.settings.businessName}</span><span class="chev">⇅</span>
+  </button>`;
+}
+function renderNav(){
+  const nav = document.getElementById('nav');
+  nav.innerHTML = NAV.map(item=>{
+    if(item.sec) return `<div class="nav-section-label">${item.sec}</div>`;
+    return `<div class="nav-item ${VIEW===item.id?'active':''}" onclick="navigate('${item.id}')"><span class="ic">${item.ic}</span>${item.label}</div>`;
+  }).join('');
+}
+function navigate(view){
+  VIEW = view;
+  document.getElementById('sidebar').classList.remove('open');
+  render();
+}
+function setTopbar(title, sub, actionsHtml){
+  document.getElementById('page-title').textContent = title;
+  document.getElementById('page-sub').textContent = sub||'';
+  document.getElementById('topbar-actions').innerHTML = actionsHtml||'';
+}
+function showToast(msg){
+  const t = document.getElementById('toast');
+  t.textContent = msg;
+  t.classList.add('show');
+  clearTimeout(t._timer);
+  t._timer = setTimeout(()=>t.classList.remove('show'), 2200);
+}
+
+function render(){
+  renderCompanySwitcher();
+  renderNav();
+  const map = {
+    dashboard: renderDashboard,
+    sales: renderSales,
+    purchases: renderPurchases,
+    banking: renderBanking,
+    contacts: renderContacts,
+    accounts: renderAccounts,
+    reports: renderReports,
+    settings: renderSettings,
+  };
+  (map[VIEW]||renderDashboard)();
+  saveState();
+}
+
+/* ============================= DASHBOARD ============================= */
+function renderDashboard(){
+  setTopbar('Dashboard', S.settings.businessName, '');
+  const bank = getAccountBalance('acc_bank');
+  const ar = getAccountBalance('acc_ar');
+  const ap = getAccountBalance('acc_ap');
+  const monthStart = todayStr().slice(0,8)+'01';
+  const incomeMTD = S.accounts.filter(a=>a.type==='Income').reduce((s,a)=>s+periodMovement(a.id, monthStart, todayStr()),0);
+  const expenseMTD = S.accounts.filter(a=>a.type==='Expense').reduce((s,a)=>s+periodMovement(a.id, monthStart, todayStr()),0);
+
+  const totalDebits = S.journal.reduce((s,e)=>s+e.lines.reduce((a,l)=>a+(l.debit||0),0),0);
+  const totalCredits = S.journal.reduce((s,e)=>s+e.lines.reduce((a,l)=>a+(l.credit||0),0),0);
+  const balanced = Math.abs(totalDebits-totalCredits) < 0.01;
+
+  const recentInvoices = [...S.invoices].filter(i=>i.status!=='draft').sort((a,b)=>b.date.localeCompare(a.date)).slice(0,5);
+  const overdue = S.invoices.filter(i=>docStatus(i)!=='paid' && i.status==='open' && i.dueDate < todayStr());
+
+  document.getElementById('content').innerHTML = `
+    <div class="grid-4">
+      <div class="kpi"><div class="label">Bank Balance</div><div class="value num">${fmt(bank)}</div><div class="delta">Business Bank Account</div></div>
+      <div class="kpi"><div class="label">Owed to you</div><div class="value num">${fmt(ar)}</div><div class="delta">Accounts Receivable</div></div>
+      <div class="kpi"><div class="label">You owe</div><div class="value num">${fmt(ap)}</div><div class="delta">Accounts Payable</div></div>
+      <div class="kpi"><div class="label">Net profit (MTD)</div><div class="value num ${(incomeMTD-expenseMTD)>=0?'pos':'neg'}">${fmt(incomeMTD-expenseMTD)}</div><div class="delta">Income ${fmt(incomeMTD)} · Expenses ${fmt(expenseMTD)}</div></div>
+    </div>
+    <div class="grid-2">
+      <div class="card">
+        <div class="card-head"><h3>Recent sales activity</h3><span class="btn btn-ghost btn-sm" onclick="navigate('sales')">View all</span></div>
+        <div class="card-body" style="padding:0;">
+          ${recentInvoices.length? `<table><thead><tr><th>Invoice</th><th>Customer</th><th>Date</th><th class="amt">Amount</th><th>Status</th></tr></thead><tbody>
+            ${recentInvoices.map(i=>`<tr class="clickable" onclick="openInvoiceDetail('${i.id}')">
+              <td class="mono">${i.number}</td><td>${contactName(i.contactId)}</td><td>${fmtDateShort(i.date)}</td>
+              <td class="amt num">${fmt(invoiceTotal(i))}</td><td>${statusBadge(docStatus(i))}</td></tr>`).join('')}
+          </tbody></table>` : `<div class="empty"><p>No invoices issued yet.</p></div>`}
+        </div>
+      </div>
+      <div class="card">
+        <div class="card-head"><h3>Books integrity</h3></div>
+        <div class="card-body">
+          <div class="balance-check"><span class="dot" style="background:${balanced?'var(--accent)':'var(--red)'}"></span>
+            ${balanced? 'Books balanced ✓' : 'Out of balance!'}</div>
+          <div style="margin-top:14px; font-size:12.5px; color:var(--text-muted); line-height:1.7;">
+            Total debits <span class="num" style="color:var(--text);">${fmt(totalDebits)}</span><br>
+            Total credits <span class="num" style="color:var(--text);">${fmt(totalCredits)}</span>
+          </div>
+          <div class="section-title">Overdue invoices</div>
+          ${overdue.length? overdue.map(i=>`<div class="report-row"><span>${i.number} — ${contactName(i.contactId)}</span><span class="num neg">${fmt(docBalanceDue(i))}</span></div>`).join('')
+            : `<div style="font-size:12.5px; color:var(--text-muted);">Nothing overdue.</div>`}
+        </div>
+      </div>
+    </div>
+  `;
+}
+function statusBadge(s){
+  const map = {draft:'Draft', open:'Open', partial:'Partial', paid:'Paid', void:'Void'};
+  return `<span class="badge badge-${s}">${map[s]||s}</span>`;
+}
+
+/* ============================= SALES ============================= */
+let SALES_FILTER = 'all';
+function renderSales(){
+  setTopbar('Sales / Invoices', 'Create and track customer invoices',
+    `<button class="btn btn-primary" onclick="openInvoiceForm()">+ New Invoice</button>`);
+  const list = S.invoices.filter(i=> SALES_FILTER==='all' || docStatus(i)===SALES_FILTER)
+    .sort((a,b)=>b.date.localeCompare(a.date));
+  document.getElementById('content').innerHTML = `
+    <div class="toolbar">
+      <div class="filter-pills">
+        ${['all','draft','open','partial','paid','void'].map(f=>`<span class="pill ${SALES_FILTER===f?'active':''}" onclick="SALES_FILTER='${f}'; renderSales();">${f[0].toUpperCase()+f.slice(1)}</span>`).join('')}
+      </div>
+    </div>
+    <div class="card">
+      ${list.length? `<table><thead><tr><th>Number</th><th>Customer</th><th>Issued</th><th>Due</th><th class="amt">Total</th><th class="amt">Balance due</th><th>Status</th></tr></thead><tbody>
+        ${list.map(i=>`<tr class="clickable" onclick="openInvoiceDetail('${i.id}')">
+          <td class="mono">${i.number}</td><td>${contactName(i.contactId)}</td>
+          <td>${i.status==='draft'?'—':fmtDateShort(i.date)}</td><td>${fmtDateShort(i.dueDate)}</td>
+          <td class="amt num">${fmt(invoiceTotal(i))}</td>
+          <td class="amt num ${docBalanceDue(i)>0?'neg':''}">${docStatus(i)==='void'?'—':fmt(docBalanceDue(i))}</td>
+          <td>${statusBadge(docStatus(i))}</td></tr>`).join('')}
+      </tbody></table>` : emptyState('No invoices here', 'Create your first invoice to start billing customers.', "openInvoiceForm()", '+ New Invoice')}
+    </div>
+  `;
+}
+function emptyState(title, sub, onclick, btnLabel){
+  return `<div class="empty"><div class="big">◆</div><strong>${title}</strong><p>${sub}</p>${onclick?`<button class="btn btn-primary btn-sm" onclick="${onclick}">${btnLabel}</button>`:''}</div>`;
+}
+
+function openInvoiceForm(){
+  if(S.contacts.filter(c=>c.type==='customer').length===0){
+    showToast('Add a customer first');
+    openContactForm('customer');
+    return;
+  }
+  const customers = S.contacts.filter(c=>c.type==='customer');
+  const incomeAccounts = S.accounts.filter(a=>a.type==='Income');
+  const today = todayStr();
+  const due = new Date(); due.setDate(due.getDate()+14);
+  const dueStr = due.toISOString().slice(0,10);
+  const lineRow = (idx)=>`
+    <tr data-row="${idx}">
+      <td><input type="text" class="li-desc" placeholder="Description"></td>
+      <td style="width:64px;"><input type="number" class="li-qty" value="1" min="0" step="1"></td>
+      <td style="width:100px;"><input type="number" class="li-price" value="0" min="0" step="0.01"></td>
+      <td style="width:150px;"><select class="li-acct">${incomeAccounts.map(a=>`<option value="${a.id}">${a.code} ${a.name}</option>`).join('')}</select></td>
+      <td style="width:90px; text-align:right;" class="li-line-total num">${S.settings.currency}0.00</td>
+      <td style="width:30px;"><button class="icon-btn" onclick="this.closest('tr').remove(); recalcInvoiceForm();">✕</button></td>
+    </tr>`;
+  const body = `
+    <div class="field-row">
+      <div class="field"><label>Customer</label><select id="f-contact">${customers.map(c=>`<option value="${c.id}">${c.name}</option>`).join('')}</select></div>
+      <div class="field"><label>Invoice date</label><input type="date" id="f-date" value="${today}"></div>
+    </div>
+    <div class="field-row">
+      <div class="field"><label>Due date</label><input type="date" id="f-due" value="${dueStr}"></div>
+      <div class="field"><label>Apply ${S.settings.taxLabel} (${S.settings.taxRate}%)</label>
+        <select id="f-tax"><option value="1">Yes</option><option value="0">No</option></select></div>
+    </div>
+    <div class="section-title">Line items</div>
+    <table class="li-table" id="li-body-wrap">
+      <thead><tr><th>Description</th><th>Qty</th><th>Price</th><th>Income account</th><th class="amt">Total</th><th></th></tr></thead>
+      <tbody id="li-body">${lineRow(0)}</tbody>
+    </table>
+    <button class="btn btn-ghost btn-sm" style="margin-top:8px;" onclick="document.getElementById('li-body').insertAdjacentHTML('beforeend', document.getElementById('li-tmpl').innerHTML); recalcInvoiceForm();">+ Add line</button>
+    <template id="li-tmpl">${lineRow('x').replace(/data-row="x"/,'data-row="x"')}</template>
+    <div style="margin-top:18px; border-top:1px solid var(--border); padding-top:12px;">
+      <div class="report-row"><span>Subtotal</span><span class="num" id="sum-sub">${S.settings.currency}0.00</span></div>
+      <div class="report-row"><span>${S.settings.taxLabel}</span><span class="num" id="sum-tax">${S.settings.currency}0.00</span></div>
+      <div class="report-row total"><span>Total</span><span class="num" id="sum-total">${S.settings.currency}0.00</span></div>
+    </div>
+  `;
+  openModal('New Invoice', body, [
+    {label:'Save as draft', cls:'btn-ghost', onclick:`submitInvoiceForm(false)`},
+    {label:'Save & issue', cls:'btn-primary', onclick:`submitInvoiceForm(true)`},
+  ], true);
+  recalcInvoiceForm();
+}
+function recalcInvoiceForm(){
+  const rows = document.querySelectorAll('#li-body tr');
+  let sub = 0;
+  rows.forEach(r=>{
+    const qty = Number(r.querySelector('.li-qty').value)||0;
+    const price = Number(r.querySelector('.li-price').value)||0;
+    const t = qty*price;
+    sub += t;
+    r.querySelector('.li-line-total').textContent = fmt(t);
+  });
+  const taxOn = document.getElementById('f-tax') ? document.getElementById('f-tax').value==='1' : false;
+  const tax = taxOn ? sub*S.settings.taxRate/100 : 0;
+  if(document.getElementById('sum-sub')) document.getElementById('sum-sub').textContent = fmt(sub);
+  if(document.getElementById('sum-tax')) document.getElementById('sum-tax').textContent = fmt(tax);
+  if(document.getElementById('sum-total')) document.getElementById('sum-total').textContent = fmt(sub+tax);
+}
+function collectLines(descSel,qtySel,priceSel,acctSel){
+  const rows = document.querySelectorAll('#li-body tr');
+  const lines = [];
+  rows.forEach(r=>{
+    const desc = r.querySelector(descSel).value.trim();
+    const qty = Number(r.querySelector(qtySel).value)||0;
+    const price = Number(r.querySelector(priceSel).value)||0;
+    const accountId = r.querySelector(acctSel).value;
+    if(desc || qty || price) lines.push({desc: desc||'Item', qty, price, accountId});
+  });
+  return lines;
+}
+function submitInvoiceForm(issueNow){
+  const contactId = document.getElementById('f-contact').value;
+  const date = document.getElementById('f-date').value;
+  const due = document.getElementById('f-due').value;
+  const taxOn = document.getElementById('f-tax').value==='1';
+  const lines = collectLines('.li-desc','.li-qty','.li-price','.li-acct');
+  if(lines.length===0){ showToast('Add at least one line item'); return; }
+  const inv = makeInvoiceObj(contactId, date, due, lines, taxOn);
+  S.invoices.push(inv);
+  if(issueNow) issueInvoice(inv.id, date);
+  closeModal();
+  showToast(issueNow? 'Invoice issued' : 'Invoice saved as draft');
+  navigate('sales');
+}
+
+function openInvoiceDetail(id){
+  const inv = S.invoices.find(i=>i.id===id);
+  if(!inv) return;
+  const status = docStatus(inv);
+  const rows = inv.lines.map(l=>`<tr><td>${l.desc}</td><td class="amt num">${l.qty}</td><td class="amt num">${fmt(l.price)}</td><td class="amt num">${fmt(lineSubtotal(l))}</td></tr>`).join('');
+  const paymentsRows = (inv.payments||[]).map(p=>`<tr><td>${fmtDate(p.date)}</td><td>${S.accounts.find(a=>a.id===p.bankAccountId)?.name||''}</td><td class="amt num">${fmt(p.amount)}</td></tr>`).join('');
+  const body = `
+    <div style="display:flex; justify-content:space-between; margin-bottom:16px;">
+      <div><div style="font-size:12px; color:var(--text-muted);">Customer</div><strong>${contactName(inv.contactId)}</strong></div>
+      <div style="text-align:right;">${statusBadge(status)}<div style="font-size:12px; color:var(--text-muted); margin-top:6px;">Issued ${inv.status==='draft'?'—':fmtDate(inv.date)} · Due ${fmtDate(inv.dueDate)}</div></div>
+    </div>
+    <table><thead><tr><th>Description</th><th class="amt">Qty</th><th class="amt">Price</th><th class="amt">Total</th></tr></thead><tbody>${rows}</tbody></table>
+    <div style="margin-top:14px; padding-top:10px; border-top:1px solid var(--border);">
+      <div class="report-row"><span>Subtotal</span><span class="num">${fmt(docSubtotal(inv))}</span></div>
+      <div class="report-row"><span>${S.settings.taxLabel}</span><span class="num">${fmt(docTax(inv))}</span></div>
+      <div class="report-row total"><span>Total</span><span class="num">${fmt(invoiceTotal(inv))}</span></div>
+      ${status!=='draft' && status!=='void' ? `<div class="report-row"><span>Paid</span><span class="num pos">${fmt(docPaidAmount(inv))}</span></div>
+      <div class="report-row"><span>Balance due</span><span class="num ${docBalanceDue(inv)>0?'neg':''}">${fmt(docBalanceDue(inv))}</span></div>` : ''}
+    </div>
+    ${paymentsRows? `<div class="section-title">Payments</div><table><thead><tr><th>Date</th><th>Into</th><th class="amt">Amount</th></tr></thead><tbody>${paymentsRows}</tbody></table>`:''}
+  `;
+  const actions = [];
+  if(status==='draft'){
+    actions.push({label:'Delete draft', cls:'btn-danger', onclick:`deleteInvoice('${inv.id}')`});
+    actions.push({label:'Issue invoice', cls:'btn-primary', onclick:`issueInvoiceAction('${inv.id}')`});
+  } else if(status==='open' || status==='partial'){
+    actions.push({label:'Void', cls:'btn-danger', onclick:`voidInvoiceAction('${inv.id}')`});
+    actions.push({label:'Record payment', cls:'btn-primary', onclick:`openInvoicePaymentForm('${inv.id}')`});
+  } else if(status==='paid'){
+    actions.push({label:'Void', cls:'btn-danger', onclick:`voidInvoiceAction('${inv.id}')`});
+  }
+  openModal(inv.number, body, actions);
+}
+function issueInvoiceAction(id){ issueInvoice(id); closeModal(); showToast('Invoice issued'); navigate('sales'); }
+function voidInvoiceAction(id){ if(confirm('Void this invoice? This reverses its ledger entries.')){ voidInvoice(id); closeModal(); showToast('Invoice voided'); navigate('sales'); } }
+function deleteInvoice(id){ if(confirm('Delete this draft invoice?')){ S.invoices = S.invoices.filter(i=>i.id!==id); closeModal(); showToast('Draft deleted'); navigate('sales'); } }
+function openInvoicePaymentForm(id){
+  const inv = S.invoices.find(i=>i.id===id);
+  const bankAccounts = S.accounts.filter(a=>a.isBank);
+  const body = `
+    <div class="field"><label>Amount</label><input type="number" id="p-amount" value="${docBalanceDue(inv)}" min="0" step="0.01"></div>
+    <div class="field"><label>Date</label><input type="date" id="p-date" value="${todayStr()}"></div>
+    <div class="field"><label>Deposit into</label><select id="p-account">${bankAccounts.map(a=>`<option value="${a.id}">${a.name}</option>`).join('')}</select></div>
+  `;
+  openModal('Record payment — '+inv.number, body, [
+    {label:'Record payment', cls:'btn-primary', onclick:`submitInvoicePayment('${id}')`}
+  ]);
+}
+function submitInvoicePayment(id){
+  const amount = Number(document.getElementById('p-amount').value)||0;
+  const date = document.getElementById('p-date').value;
+  const account = document.getElementById('p-account').value;
+  if(amount<=0){ showToast('Enter a valid amount'); return; }
+  recordInvoicePayment(id, amount, date, account);
+  closeModal(); showToast('Payment recorded'); navigate('sales');
+}
+
+/* ============================= PURCHASES (mirrors sales) ============================= */
+let PURCH_FILTER = 'all';
+function renderPurchases(){
+  setTopbar('Purchases / Bills', 'Track bills and supplier payments',
+    `<button class="btn btn-primary" onclick="openBillForm()">+ New Bill</button>`);
+  const list = S.bills.filter(b=> PURCH_FILTER==='all' || docStatus(b)===PURCH_FILTER).sort((a,b)=>b.date.localeCompare(a.date));
+  document.getElementById('content').innerHTML = `
+    <div class="toolbar">
+      <div class="filter-pills">
+        ${['all','draft','open','partial','paid','void'].map(f=>`<span class="pill ${PURCH_FILTER===f?'active':''}" onclick="PURCH_FILTER='${f}'; renderPurchases();">${f[0].toUpperCase()+f.slice(1)}</span>`).join('')}
+      </div>
+    </div>
+    <div class="card">
+      ${list.length? `<table><thead><tr><th>Number</th><th>Supplier</th><th>Received</th><th>Due</th><th class="amt">Total</th><th class="amt">Balance due</th><th>Status</th></tr></thead><tbody>
+        ${list.map(b=>`<tr class="clickable" onclick="openBillDetail('${b.id}')">
+          <td class="mono">${b.number}</td><td>${contactName(b.contactId)}</td>
+          <td>${b.status==='draft'?'—':fmtDateShort(b.date)}</td><td>${fmtDateShort(b.dueDate)}</td>
+          <td class="amt num">${fmt(billTotal(b))}</td>
+          <td class="amt num ${docBalanceDue(b)>0?'neg':''}">${docStatus(b)==='void'?'—':fmt(docBalanceDue(b))}</td>
+          <td>${statusBadge(docStatus(b))}</td></tr>`).join('')}
+      </tbody></table>` : emptyState('No bills yet', 'Log a supplier bill to track what you owe.', "openBillForm()", '+ New Bill')}
+    </div>
+  `;
+}
+function openBillForm(){
+  if(S.contacts.filter(c=>c.type==='supplier').length===0){
+    showToast('Add a supplier first');
+    openContactForm('supplier');
+    return;
+  }
+  const suppliers = S.contacts.filter(c=>c.type==='supplier');
+  const expenseAccounts = S.accounts.filter(a=>a.type==='Expense');
+  const today = todayStr();
+  const due = new Date(); due.setDate(due.getDate()+30);
+  const dueStr = due.toISOString().slice(0,10);
+  const lineRow = ()=>`
+    <tr>
+      <td><input type="text" class="li-desc" placeholder="Description"></td>
+      <td style="width:64px;"><input type="number" class="li-qty" value="1" min="0" step="1"></td>
+      <td style="width:100px;"><input type="number" class="li-price" value="0" min="0" step="0.01"></td>
+      <td style="width:170px;"><select class="li-acct">${expenseAccounts.map(a=>`<option value="${a.id}">${a.code} ${a.name}</option>`).join('')}</select></td>
+      <td style="width:90px; text-align:right;" class="li-line-total num">${S.settings.currency}0.00</td>
+      <td style="width:30px;"><button class="icon-btn" onclick="this.closest('tr').remove(); recalcInvoiceForm();">✕</button></td>
+    </tr>`;
+  const body = `
+    <div class="field-row">
+      <div class="field"><label>Supplier</label><select id="f-contact">${suppliers.map(c=>`<option value="${c.id}">${c.name}</option>`).join('')}</select></div>
+      <div class="field"><label>Bill date</label><input type="date" id="f-date" value="${today}"></div>
+    </div>
+    <div class="field-row">
+      <div class="field"><label>Due date</label><input type="date" id="f-due" value="${dueStr}"></div>
+      <div class="field"><label>Apply ${S.settings.taxLabel} (${S.settings.taxRate}%)</label>
+        <select id="f-tax"><option value="0">No</option><option value="1">Yes</option></select></div>
+    </div>
+    <div class="section-title">Line items</div>
+    <table class="li-table" id="li-body-wrap">
+      <thead><tr><th>Description</th><th>Qty</th><th>Price</th><th>Expense account</th><th class="amt">Total</th><th></th></tr></thead>
+      <tbody id="li-body">${lineRow()}</tbody>
+    </table>
+    <button class="btn btn-ghost btn-sm" style="margin-top:8px;" onclick="document.getElementById('li-body').insertAdjacentHTML('beforeend', document.getElementById('li-tmpl').innerHTML); recalcInvoiceForm();">+ Add line</button>
+    <template id="li-tmpl">${lineRow()}</template>
+    <div style="margin-top:18px; border-top:1px solid var(--border); padding-top:12px;">
+      <div class="report-row"><span>Subtotal</span><span class="num" id="sum-sub">${S.settings.currency}0.00</span></div>
+      <div class="report-row"><span>${S.settings.taxLabel}</span><span class="num" id="sum-tax">${S.settings.currency}0.00</span></div>
+      <div class="report-row total"><span>Total</span><span class="num" id="sum-total">${S.settings.currency}0.00</span></div>
+    </div>
+  `;
+  openModal('New Bill', body, [
+    {label:'Save as draft', cls:'btn-ghost', onclick:`submitBillForm(false)`},
+    {label:'Save & receive', cls:'btn-primary', onclick:`submitBillForm(true)`},
+  ], true);
+  recalcInvoiceForm();
+}
+function submitBillForm(issueNow){
+  const contactId = document.getElementById('f-contact').value;
+  const date = document.getElementById('f-date').value;
+  const due = document.getElementById('f-due').value;
+  const taxOn = document.getElementById('f-tax').value==='1';
+  const lines = collectLines('.li-desc','.li-qty','.li-price','.li-acct');
+  if(lines.length===0){ showToast('Add at least one line item'); return; }
+  const bill = makeBillObj(contactId, date, due, lines, taxOn);
+  S.bills.push(bill);
+  if(issueNow) issueBill(bill.id, date);
+  closeModal();
+  showToast(issueNow? 'Bill received' : 'Bill saved as draft');
+  navigate('purchases');
+}
+function openBillDetail(id){
+  const bill = S.bills.find(b=>b.id===id);
+  if(!bill) return;
+  const status = docStatus(bill);
+  const rows = bill.lines.map(l=>`<tr><td>${l.desc}</td><td class="amt num">${l.qty}</td><td class="amt num">${fmt(l.price)}</td><td class="amt num">${fmt(lineSubtotal(l))}</td></tr>`).join('');
+  const paymentsRows = (bill.payments||[]).map(p=>`<tr><td>${fmtDate(p.date)}</td><td>${S.accounts.find(a=>a.id===p.bankAccountId)?.name||''}</td><td class="amt num">${fmt(p.amount)}</td></tr>`).join('');
+  const body = `
+    <div style="display:flex; justify-content:space-between; margin-bottom:16px;">
+      <div><div style="font-size:12px; color:var(--text-muted);">Supplier</div><strong>${contactName(bill.contactId)}</strong></div>
+      <div style="text-align:right;">${statusBadge(status)}<div style="font-size:12px; color:var(--text-muted); margin-top:6px;">Received ${bill.status==='draft'?'—':fmtDate(bill.date)} · Due ${fmtDate(bill.dueDate)}</div></div>
+    </div>
+    <table><thead><tr><th>Description</th><th class="amt">Qty</th><th class="amt">Price</th><th class="amt">Total</th></tr></thead><tbody>${rows}</tbody></table>
+    <div style="margin-top:14px; padding-top:10px; border-top:1px solid var(--border);">
+      <div class="report-row"><span>Subtotal</span><span class="num">${fmt(docSubtotal(bill))}</span></div>
+      <div class="report-row"><span>${S.settings.taxLabel}</span><span class="num">${fmt(docTax(bill))}</span></div>
+      <div class="report-row total"><span>Total</span><span class="num">${fmt(billTotal(bill))}</span></div>
+      ${status!=='draft' && status!=='void' ? `<div class="report-row"><span>Paid</span><span class="num pos">${fmt(docPaidAmount(bill))}</span></div>
+      <div class="report-row"><span>Balance due</span><span class="num ${docBalanceDue(bill)>0?'neg':''}">${fmt(docBalanceDue(bill))}</span></div>` : ''}
+    </div>
+    ${paymentsRows? `<div class="section-title">Payments</div><table><thead><tr><th>Date</th><th>From</th><th class="amt">Amount</th></tr></thead><tbody>${paymentsRows}</tbody></table>`:''}
+  `;
+  const actions = [];
+  if(status==='draft'){
+    actions.push({label:'Delete draft', cls:'btn-danger', onclick:`deleteBill('${bill.id}')`});
+    actions.push({label:'Receive bill', cls:'btn-primary', onclick:`issueBillAction('${bill.id}')`});
+  } else if(status==='open' || status==='partial'){
+    actions.push({label:'Void', cls:'btn-danger', onclick:`voidBillAction('${bill.id}')`});
+    actions.push({label:'Record payment', cls:'btn-primary', onclick:`openBillPaymentForm('${bill.id}')`});
+  } else if(status==='paid'){
+    actions.push({label:'Void', cls:'btn-danger', onclick:`voidBillAction('${bill.id}')`});
+  }
+  openModal(bill.number, body, actions);
+}
+function issueBillAction(id){ issueBill(id); closeModal(); showToast('Bill received into ledger'); navigate('purchases'); }
+function voidBillAction(id){ if(confirm('Void this bill? This reverses its ledger entries.')){ voidBill(id); closeModal(); showToast('Bill voided'); navigate('purchases'); } }
+function deleteBill(id){ if(confirm('Delete this draft bill?')){ S.bills = S.bills.filter(b=>b.id!==id); closeModal(); showToast('Draft deleted'); navigate('purchases'); } }
+function openBillPaymentForm(id){
+  const bill = S.bills.find(b=>b.id===id);
+  const bankAccounts = S.accounts.filter(a=>a.isBank);
+  const body = `
+    <div class="field"><label>Amount</label><input type="number" id="p-amount" value="${docBalanceDue(bill)}" min="0" step="0.01"></div>
+    <div class="field"><label>Date</label><input type="date" id="p-date" value="${todayStr()}"></div>
+    <div class="field"><label>Pay from</label><select id="p-account">${bankAccounts.map(a=>`<option value="${a.id}">${a.name}</option>`).join('')}</select></div>
+  `;
+  openModal('Record payment — '+bill.number, body, [
+    {label:'Record payment', cls:'btn-primary', onclick:`submitBillPayment('${id}')`}
+  ]);
+}
+function submitBillPayment(id){
+  const amount = Number(document.getElementById('p-amount').value)||0;
+  const date = document.getElementById('p-date').value;
+  const account = document.getElementById('p-account').value;
+  if(amount<=0){ showToast('Enter a valid amount'); return; }
+  recordBillPayment(id, amount, date, account);
+  closeModal(); showToast('Payment recorded'); navigate('purchases');
+}
+
+/* ============================= BANKING ============================= */
+function renderBanking(){
+  const bankAccounts = S.accounts.filter(a=>a.isBank);
+  setTopbar('Banking', 'View bank ledgers and log manual transactions',
+    `<button class="btn btn-ghost" onclick="openCsvImportForm()">⇪ Import CSV</button>
+     <button class="btn btn-primary" onclick="openBankTxnForm()">+ Add transaction</button>`);
+  let html = '';
+  bankAccounts.forEach(acc=>{
+    const entries = [];
+    S.journal.forEach(e=>{
+      e.lines.forEach(l=>{ if(l.accountId===acc.id) entries.push({date:e.date, desc:e.description, debit:l.debit||0, credit:l.credit||0, entryId:e.id}); });
+    });
+    entries.sort((a,b)=>a.date.localeCompare(b.date));
+    let running = 0;
+    const rows = entries.map(e=>{ running += e.debit - e.credit; return {...e, running}; });
+    html += `<div class="card" style="margin-bottom:18px;">
+      <div class="card-head"><h3>${acc.name}</h3><span class="num" style="font-weight:700;">${fmt(getAccountBalance(acc.id))}</span></div>
+      ${rows.length? `<table><thead><tr><th>Date</th><th>Description</th><th class="amt">Money in</th><th class="amt">Money out</th><th class="amt">Balance</th></tr></thead><tbody>
+        ${rows.slice().reverse().map(r=>`<tr><td>${fmtDateShort(r.date)}</td><td>${r.desc}</td>
+          <td class="amt num pos">${r.debit? fmt(r.debit):''}</td>
+          <td class="amt num neg">${r.credit? fmt(r.credit):''}</td>
+          <td class="amt num">${fmt(r.running)}</td></tr>`).join('')}
+      </tbody></table>` : `<div class="empty"><p>No transactions in this account yet.</p></div>`}
+    </div>`;
+  });
+  document.getElementById('content').innerHTML = html;
+}
+function openBankTxnForm(){
+  const bankAccounts = S.accounts.filter(a=>a.isBank);
+  const otherAccounts = S.accounts.filter(a=>!a.isBank);
+  const body = `
+    <div class="field"><label>Type</label><select id="t-dir"><option value="out">Money out (payment)</option><option value="in">Money in (deposit)</option></select></div>
+    <div class="field"><label>Bank account</label><select id="t-bank">${bankAccounts.map(a=>`<option value="${a.id}">${a.name}</option>`).join('')}</select></div>
+    <div class="field"><label>Category</label><select id="t-cat">${otherAccounts.map(a=>`<option value="${a.id}">${a.code} ${a.name}</option>`).join('')}</select></div>
+    <div class="field-row">
+      <div class="field"><label>Amount</label><input type="number" id="t-amount" min="0" step="0.01" value="0"></div>
+      <div class="field"><label>Date</label><input type="date" id="t-date" value="${todayStr()}"></div>
+    </div>
+    <div class="field"><label>Description</label><input type="text" id="t-desc" placeholder="e.g. Bank charges, owner drawings, interest received"></div>
+  `;
+  openModal('Add bank transaction', body, [
+    {label:'Add transaction', cls:'btn-primary', onclick:`submitBankTxn()`}
+  ]);
+}
+function submitBankTxn(){
+  const dir = document.getElementById('t-dir').value;
+  const bank = document.getElementById('t-bank').value;
+  const cat = document.getElementById('t-cat').value;
+  const amount = Number(document.getElementById('t-amount').value)||0;
+  const date = document.getElementById('t-date').value;
+  const desc = document.getElementById('t-desc').value.trim() || 'Bank transaction';
+  if(amount<=0){ showToast('Enter a valid amount'); return; }
+  if(dir==='out'){
+    postJournal(desc, date, [{accountId:cat, debit:amount, credit:0},{accountId:bank, debit:0, credit:amount}]);
+  }else{
+    postJournal(desc, date, [{accountId:bank, debit:amount, credit:0},{accountId:cat, debit:0, credit:amount}]);
+  }
+  closeModal(); showToast('Transaction added'); navigate('banking');
+}
+
+/* ============================= CSV IMPORT (bank transactions, bulk) ============================= */
+let CSV_IMPORT = null; // {headers, dataRows, bankAccountId, defaultCategoryId, mapping:{dateIdx,descIdx,amountIdx,debitIdx,creditIdx,mode}, parsedRows}
+
+function parseCSV(text){
+  const rows = []; let field='', row=[], inQuotes=false;
+  text = text.replace(/^\uFEFF/, ''); // strip BOM
+  for(let i=0;i<text.length;i++){
+    const ch = text[i];
+    if(inQuotes){
+      if(ch==='"'){ if(text[i+1]==='"'){ field+='"'; i++; } else { inQuotes=false; } }
+      else field+=ch;
+    } else {
+      if(ch==='"') inQuotes=true;
+      else if(ch===','){ row.push(field); field=''; }
+      else if(ch==='\n'){ row.push(field); rows.push(row); row=[]; field=''; }
+      else if(ch==='\r'){ /* skip, \n handles line break */ }
+      else field+=ch;
+    }
+  }
+  if(field.length || row.length){ row.push(field); rows.push(row); }
+  return rows.filter(r => r.some(c=>String(c).trim()!==''));
+}
+function guessColumn(headers, candidates){
+  const lower = headers.map(h=>String(h).toLowerCase().trim());
+  for(const cand of candidates){
+    const idx = lower.findIndex(h=>h===cand);
+    if(idx>-1) return idx;
+  }
+  for(const cand of candidates){
+    const idx = lower.findIndex(h=>h.includes(cand));
+    if(idx>-1) return idx;
+  }
+  return -1;
+}
+function parseDateFlexible(str){
+  if(!str) return null;
+  str = String(str).trim();
+  let m = str.match(/^(\d{4})-(\d{2})-(\d{2})/);
+  if(m) return `${m[1]}-${m[2]}-${m[3]}`;
+  m = str.match(/^(\d{1,2})\/(\d{1,2})\/(\d{2,4})$/);
+  if(m){
+    let [_, d, mo, y] = m;
+    if(y.length===2) y = (Number(y)<70?'20':'19')+y;
+    d=d.padStart(2,'0'); mo=mo.padStart(2,'0');
+    return `${y}-${mo}-${d}`;
+  }
+  const parsed = new Date(str);
+  if(!isNaN(parsed.getTime())) return parsed.toISOString().slice(0,10);
+  return null;
+}
+function openCsvImportForm(){
+  const bankAccounts = S.accounts.filter(a=>a.isBank);
+  const categoryAccounts = S.accounts.filter(a=>!a.isBank);
+  CSV_IMPORT = { bankAccountId: bankAccounts[0]?.id, defaultCategoryId: categoryAccounts[0]?.id };
+  const body = `
+    <div class="field-row">
+      <div class="field"><label>Import into</label><select id="csv-bank" onchange="CSV_IMPORT.bankAccountId=this.value">${bankAccounts.map(a=>`<option value="${a.id}">${a.name}</option>`).join('')}</select></div>
+      <div class="field"><label>Default category</label><select id="csv-defcat" onchange="changeDefaultCategory(this.value)">${categoryAccounts.map(a=>`<option value="${a.id}">${a.code} ${a.name}</option>`).join('')}</select></div>
+    </div>
+    <div class="field"><label>CSV file</label><input type="file" id="csv-file" accept=".csv,text/csv" onchange="handleCsvFile(event)"></div>
+    <div class="hint">Works with most bank/export CSVs — a Date, Description and Amount column (or separate Money in / Money out columns). Columns are auto-detected below; adjust if needed.</div>
+    <div id="csv-map-area"></div>
+  `;
+  openModal('Import bank transactions (CSV)', body, [
+    {label:'Import transactions', cls:'btn-primary', onclick:'confirmCsvImport()'}
+  ], true);
+}
+function handleCsvFile(event){
+  const file = event.target.files[0];
+  if(!file) return;
+  const reader = new FileReader();
+  reader.onload = (e)=>{
+    const rows = parseCSV(String(e.target.result));
+    if(rows.length<2){ showToast('Could not find any rows in that file'); return; }
+    CSV_IMPORT.headers = rows[0];
+    CSV_IMPORT.dataRows = rows.slice(1);
+    const h = CSV_IMPORT.headers;
+    CSV_IMPORT.mapping = {
+      dateIdx: guessColumn(h, ['date','transaction date','posted date','value date']),
+      descIdx: guessColumn(h, ['description','narrative','details','memo','payee','reference','transaction']),
+      amountIdx: guessColumn(h, ['amount','value','net amount']),
+      debitIdx: guessColumn(h, ['debit','money out','withdrawal','paid out','out']),
+      creditIdx: guessColumn(h, ['credit','money in','deposit','paid in','in']),
+      mode: 'signed',
+    };
+    if(CSV_IMPORT.mapping.amountIdx===-1 && (CSV_IMPORT.mapping.debitIdx>-1 || CSV_IMPORT.mapping.creditIdx>-1)){
+      CSV_IMPORT.mapping.mode = 'split';
+    }
+    if(CSV_IMPORT.mapping.dateIdx===-1) CSV_IMPORT.mapping.dateIdx = 0;
+    if(CSV_IMPORT.mapping.descIdx===-1) CSV_IMPORT.mapping.descIdx = Math.min(1, h.length-1);
+    if(CSV_IMPORT.mapping.amountIdx===-1 && CSV_IMPORT.mapping.mode==='signed') CSV_IMPORT.mapping.amountIdx = h.length-1;
+    renderCsvMapping();
+  };
+  reader.readAsText(file);
+}
+function colOptions(selectedIdx){
+  return CSV_IMPORT.headers.map((h,i)=>`<option value="${i}" ${i===selectedIdx?'selected':''}>${h||'(column '+(i+1)+')'}</option>`).join('');
+}
+function renderCsvMapping(){
+  const map = CSV_IMPORT.mapping;
+  const area = document.getElementById('csv-map-area');
+  area.innerHTML = `
+    <div class="section-title">Column mapping — ${CSV_IMPORT.dataRows.length} rows found</div>
+    <div class="field-row3">
+      <div class="field"><label>Date column</label><select id="map-date" onchange="CSV_IMPORT.mapping.dateIdx=Number(this.value); updateCsvPreview();">${colOptions(map.dateIdx)}</select></div>
+      <div class="field"><label>Description column</label><select id="map-desc" onchange="CSV_IMPORT.mapping.descIdx=Number(this.value); updateCsvPreview();">${colOptions(map.descIdx)}</select></div>
+      <div class="field"><label>Amount format</label><select id="map-mode" onchange="CSV_IMPORT.mapping.mode=this.value; renderCsvMapping();">
+        <option value="signed" ${map.mode==='signed'?'selected':''}>Single signed amount</option>
+        <option value="split" ${map.mode==='split'?'selected':''}>Separate money in / out</option>
+      </select></div>
+    </div>
+    ${map.mode==='signed' ? `
+      <div class="field" style="max-width:260px;"><label>Amount column</label><select id="map-amount" onchange="CSV_IMPORT.mapping.amountIdx=Number(this.value); updateCsvPreview();">${colOptions(map.amountIdx)}</select></div>
+      <div class="hint">Positive = money in, negative = money out.</div>
+    ` : `
+      <div class="field-row">
+        <div class="field"><label>Money in column</label><select id="map-credit" onchange="CSV_IMPORT.mapping.creditIdx=Number(this.value); updateCsvPreview();">${colOptions(map.creditIdx)}</select></div>
+        <div class="field"><label>Money out column</label><select id="map-debit" onchange="CSV_IMPORT.mapping.debitIdx=Number(this.value); updateCsvPreview();">${colOptions(map.debitIdx)}</select></div>
+      </div>
+    `}
+    <div id="csv-preview-wrap"></div>
+  `;
+  updateCsvPreview();
+}
+function computeCsvParsedRows(){
+  const map = CSV_IMPORT.mapping;
+  const defCat = CSV_IMPORT.defaultCategoryId;
+  const prev = CSV_IMPORT.parsedRows || [];
+  CSV_IMPORT.parsedRows = CSV_IMPORT.dataRows.map((row, i)=>{
+    const date = parseDateFlexible(row[map.dateIdx]);
+    const desc = (row[map.descIdx]||'').trim() || 'Imported transaction';
+    let amount;
+    if(map.mode==='signed'){
+      amount = parseFloat(String(row[map.amountIdx]||'0').replace(/[, ]/g,'')) || 0;
+    } else {
+      const cr = parseFloat(String(row[map.creditIdx]||'0').replace(/[, ]/g,'')) || 0;
+      const dr = parseFloat(String(row[map.debitIdx]||'0').replace(/[, ]/g,'')) || 0;
+      amount = cr - dr;
+    }
+    const existing = prev[i];
+    return {
+      idx:i, date, desc, amount,
+      categoryId: existing ? existing.categoryId : defCat,
+      include: existing ? existing.include : (!!date && amount!==0),
+    };
+  });
+}
+function changeDefaultCategory(id){
+  CSV_IMPORT.defaultCategoryId = id;
+  if(CSV_IMPORT.parsedRows) CSV_IMPORT.parsedRows.forEach(r=>r.categoryId=id);
+  updateCsvPreview();
+}
+function updateCsvPreview(){
+  computeCsvParsedRows();
+  const categoryAccounts = S.accounts.filter(a=>!a.isBank);
+  const rows = CSV_IMPORT.parsedRows;
+  const wrap = document.getElementById('csv-preview-wrap');
+  if(!wrap) return;
+  const totalIn = rows.filter(r=>r.include && r.amount>0).reduce((s,r)=>s+r.amount,0);
+  const totalOut = rows.filter(r=>r.include && r.amount<0).reduce((s,r)=>s+Math.abs(r.amount),0);
+  const includedCount = rows.filter(r=>r.include).length;
+  wrap.innerHTML = `
+    <div class="section-title">Preview — ${includedCount} of ${rows.length} selected · in ${fmt(totalIn)} · out ${fmt(totalOut)}</div>
+    <div style="max-height:280px; overflow:auto; border:1px solid var(--border); border-radius:6px;">
+    <table><thead><tr><th style="width:30px;"></th><th>Date</th><th>Description</th><th class="amt">Amount</th><th style="width:190px;">Category</th></tr></thead><tbody>
+      ${rows.map(r=>`<tr style="${r.date?'':'opacity:.5;'}">
+        <td><input type="checkbox" ${r.include?'checked':''} ${r.date?'':'disabled'} onchange="CSV_IMPORT.parsedRows[${r.idx}].include=this.checked; updateCsvSummary();"></td>
+        <td>${r.date? fmtDateShort(r.date) : '<span class="neg">invalid date</span>'}</td>
+        <td>${escapeHtml(r.desc)}</td>
+        <td class="amt num ${r.amount>=0?'pos':'neg'}">${fmt(r.amount)}</td>
+        <td><select onchange="CSV_IMPORT.parsedRows[${r.idx}].categoryId=this.value">${categoryAccounts.map(a=>`<option value="${a.id}" ${a.id===r.categoryId?'selected':''}>${a.code} ${a.name}</option>`).join('')}</select></td>
+      </tr>`).join('')}
+    </tbody></table>
+    </div>
+  `;
+}
+function updateCsvSummary(){
+  const rows = CSV_IMPORT.parsedRows;
+  const totalIn = rows.filter(r=>r.include && r.amount>0).reduce((s,r)=>s+r.amount,0);
+  const totalOut = rows.filter(r=>r.include && r.amount<0).reduce((s,r)=>s+Math.abs(r.amount),0);
+  const includedCount = rows.filter(r=>r.include).length;
+  const title = document.querySelector('#csv-preview-wrap .section-title');
+  if(title) title.textContent = `Preview — ${includedCount} of ${rows.length} selected · in ${fmt(totalIn)} · out ${fmt(totalOut)}`;
+}
+function escapeHtml(s){ return String(s).replace(/[&<>"]/g, c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c])); }
+function confirmCsvImport(){
+  if(!CSV_IMPORT || !CSV_IMPORT.parsedRows || !CSV_IMPORT.parsedRows.length){ showToast('Choose a CSV file first'); return; }
+  const bank = CSV_IMPORT.bankAccountId;
+  const rows = CSV_IMPORT.parsedRows.filter(r=>r.include && r.date && r.amount!==0);
+  if(!rows.length){ showToast('No transactions selected to import'); return; }
+  rows.forEach(r=>{
+    if(r.amount>0){
+      postJournal(r.desc, r.date, [{accountId:bank, debit:r.amount, credit:0},{accountId:r.categoryId, debit:0, credit:r.amount}]);
+    } else {
+      postJournal(r.desc, r.date, [{accountId:r.categoryId, debit:Math.abs(r.amount), credit:0},{accountId:bank, debit:0, credit:Math.abs(r.amount)}]);
+    }
+  });
+  const count = rows.length;
+  CSV_IMPORT = null;
+  closeModal(); showToast(`Imported ${count} transaction${count===1?'':'s'}`); navigate('banking');
+}
+
+/* ============================= CONTACTS ============================= */
+function renderContacts(){
+  setTopbar('Contacts', 'Customers and suppliers', `<button class="btn btn-primary" onclick="openContactForm()">+ New Contact</button>`);
+  const list = [...S.contacts].sort((a,b)=>a.name.localeCompare(b.name));
+  document.getElementById('content').innerHTML = `
+    <div class="card">
+      ${list.length? `<table><thead><tr><th>Name</th><th>Type</th><th>Email</th><th>Phone</th><th></th></tr></thead><tbody>
+        ${list.map(c=>`<tr>
+          <td><strong>${c.name}</strong></td>
+          <td><span class="contact-tag tag-${c.type}">${c.type}</span></td>
+          <td>${c.email||'—'}</td><td>${c.phone||'—'}</td>
+          <td style="text-align:right;"><button class="icon-btn" onclick="openContactForm(null,'${c.id}')">Edit</button></td>
+        </tr>`).join('')}
+      </tbody></table>` : emptyState('No contacts yet', 'Add a customer or supplier to get started.', "openContactForm()", '+ New Contact')}
+    </div>
+  `;
+}
+function openContactForm(presetType, editId){
+  const editing = editId ? S.contacts.find(c=>c.id===editId) : null;
+  const body = `
+    <div class="field"><label>Name</label><input type="text" id="c-name" value="${editing?editing.name:''}" placeholder="Company or person name"></div>
+    <div class="field"><label>Type</label><select id="c-type">
+      <option value="customer" ${((editing&&editing.type==='customer')||presetType==='customer')?'selected':''}>Customer</option>
+      <option value="supplier" ${((editing&&editing.type==='supplier')||presetType==='supplier')?'selected':''}>Supplier</option>
+    </select></div>
+    <div class="field-row">
+      <div class="field"><label>Email</label><input type="email" id="c-email" value="${editing?editing.email||'':''}"></div>
+      <div class="field"><label>Phone</label><input type="text" id="c-phone" value="${editing?editing.phone||'':''}"></div>
+    </div>
+  `;
+  const actions = editing
+    ? [{label:'Delete', cls:'btn-danger', onclick:`deleteContact('${editing.id}')`}, {label:'Save changes', cls:'btn-primary', onclick:`submitContactForm('${editing.id}')`}]
+    : [{label:'Save contact', cls:'btn-primary', onclick:`submitContactForm()`}];
+  openModal(editing?'Edit contact':'New contact', body, actions);
+}
+function submitContactForm(editId){
+  const name = document.getElementById('c-name').value.trim();
+  const type = document.getElementById('c-type').value;
+  const email = document.getElementById('c-email').value.trim();
+  const phone = document.getElementById('c-phone').value.trim();
+  if(!name){ showToast('Enter a name'); return; }
+  if(editId){
+    const c = S.contacts.find(x=>x.id===editId);
+    Object.assign(c, {name,type,email,phone});
+  }else{
+    S.contacts.push({id:uid('ct'), name, type, email, phone});
+  }
+  closeModal(); showToast('Contact saved'); navigate('contacts');
+}
+function deleteContact(id){
+  const used = S.invoices.some(i=>i.contactId===id) || S.bills.some(b=>b.contactId===id);
+  if(used){ showToast('Cannot delete — contact has invoices or bills'); return; }
+  if(confirm('Delete this contact?')){ S.contacts = S.contacts.filter(c=>c.id!==id); closeModal(); showToast('Contact deleted'); navigate('contacts'); }
+}
+
+/* ============================= CHART OF ACCOUNTS ============================= */
+function renderAccounts(){
+  setTopbar('Chart of Accounts', 'Every account used to categorise money in and out', `<button class="btn btn-primary" onclick="openAccountForm()">+ New Account</button>`);
+  const types = ['Asset','Liability','Equity','Income','Expense'];
+  let html = '';
+  types.forEach(t=>{
+    const accs = S.accounts.filter(a=>a.type===t).sort((a,b)=>a.code.localeCompare(b.code));
+    if(!accs.length) return;
+    html += `<div class="section-title">${t}s</div><div class="card" style="margin-bottom:16px;">
+      <table><thead><tr><th style="width:70px;">Code</th><th>Name</th><th class="amt">Balance</th><th></th></tr></thead><tbody>
+      ${accs.map(a=>`<tr><td class="mono">${a.code}</td><td>${a.name}${a.isBank?' <span class="badge badge-open">Bank</span>':''}</td>
+        <td class="amt num">${fmt(getAccountBalance(a.id))}</td>
+        <td style="text-align:right;">${a.system?'':`<button class="icon-btn" onclick="deleteAccount('${a.id}')">Delete</button>`}</td></tr>`).join('')}
+      </tbody></table></div>`;
+  });
+  document.getElementById('content').innerHTML = html;
+}
+function openAccountForm(){
+  const body = `
+    <div class="field-row">
+      <div class="field"><label>Code</label><input type="text" id="a-code" placeholder="e.g. 6060"></div>
+      <div class="field"><label>Type</label><select id="a-type"><option>Asset</option><option>Liability</option><option>Equity</option><option>Income</option><option>Expense</option></select></div>
+    </div>
+    <div class="field"><label>Account name</label><input type="text" id="a-name" placeholder="e.g. Marketing"></div>
+    <div class="field"><label><input type="checkbox" id="a-isbank" style="width:auto; display:inline-block; margin-right:6px;"> This is a bank account</label></div>
+  `;
+  openModal('New account', body, [{label:'Create account', cls:'btn-primary', onclick:'submitAccountForm()'}]);
+}
+function submitAccountForm(){
+  const code = document.getElementById('a-code').value.trim();
+  const type = document.getElementById('a-type').value;
+  const name = document.getElementById('a-name').value.trim();
+  const isBank = document.getElementById('a-isbank').checked;
+  if(!code || !name){ showToast('Enter a code and name'); return; }
+  if(S.accounts.some(a=>a.code===code)){ showToast('That code is already used'); return; }
+  S.accounts.push({id:uid('acc'), code, name, type, isBank});
+  closeModal(); showToast('Account created'); navigate('accounts');
+}
+function deleteAccount(id){
+  const used = S.journal.some(e=>e.lines.some(l=>l.accountId===id));
+  if(used){ showToast('Cannot delete — account has transactions'); return; }
+  if(confirm('Delete this account?')){ S.accounts = S.accounts.filter(a=>a.id!==id); showToast('Account deleted'); navigate('accounts'); }
+}
+
+/* ============================= REPORTS ============================= */
+let REPORT_TAB = 'pl';
+function renderReports(){
+  setTopbar('Reports', 'Profit & loss, balance sheet, and trial balance', '');
+  const monthStart = todayStr().slice(0,8)+'01';
+  const yearStart = todayStr().slice(0,4)+'-01-01';
+  const from = window._rFrom || yearStart;
+  const to = window._rTo || todayStr();
+  window._rFrom = from; window._rTo = to;
+
+  document.getElementById('content').innerHTML = `
+    <div class="tabs">
+      <div class="tab ${REPORT_TAB==='pl'?'active':''}" onclick="REPORT_TAB='pl'; renderReports();">Profit &amp; Loss</div>
+      <div class="tab ${REPORT_TAB==='bs'?'active':''}" onclick="REPORT_TAB='bs'; renderReports();">Balance Sheet</div>
+      <div class="tab ${REPORT_TAB==='tb'?'active':''}" onclick="REPORT_TAB='tb'; renderReports();">Trial Balance</div>
+    </div>
+    <div id="report-body"></div>
+  `;
+  if(REPORT_TAB==='pl') renderPL(from, to);
+  else if(REPORT_TAB==='bs') renderBS(to);
+  else renderTB(to);
+}
+function dateRangeControls(from,to,fn){
+  return `<div class="card-head" style="gap:10px;"><h3>Period</h3>
+    <div style="display:flex; gap:8px; align-items:center;">
+      <input type="date" value="${from}" style="width:150px;" onchange="window._rFrom=this.value; ${fn}">
+      <span style="color:var(--text-muted);">to</span>
+      <input type="date" value="${to}" style="width:150px;" onchange="window._rTo=this.value; ${fn}">
+    </div></div>`;
+}
+function renderPL(from,to){
+  const income = S.accounts.filter(a=>a.type==='Income');
+  const expense = S.accounts.filter(a=>a.type==='Expense');
+  const incTotal = income.reduce((s,a)=>s+periodMovement(a.id,from,to),0);
+  const expTotal = expense.reduce((s,a)=>s+periodMovement(a.id,from,to),0);
+  document.getElementById('report-body').innerHTML = `<div class="card">
+    ${dateRangeControls(from,to,"renderReports()")}
+    <div class="card-body">
+      <div class="section-title">Income</div>
+      ${income.map(a=>`<div class="report-row indent"><span>${a.name}</span><span class="num">${fmt(periodMovement(a.id,from,to))}</span></div>`).join('')}
+      <div class="report-row total"><span>Total income</span><span class="num">${fmt(incTotal)}</span></div>
+      <div class="section-title">Expenses</div>
+      ${expense.map(a=>`<div class="report-row indent"><span>${a.name}</span><span class="num">${fmt(periodMovement(a.id,from,to))}</span></div>`).join('')}
+      <div class="report-row total"><span>Total expenses</span><span class="num">${fmt(expTotal)}</span></div>
+      <div class="report-row total" style="font-size:15px;"><span>Net profit</span><span class="num ${(incTotal-expTotal)>=0?'pos':'neg'}">${fmt(incTotal-expTotal)}</span></div>
+    </div>
+  </div>`;
+}
+function renderBS(asOf){
+  const assets = S.accounts.filter(a=>a.type==='Asset');
+  const liabilities = S.accounts.filter(a=>a.type==='Liability');
+  const equity = S.accounts.filter(a=>a.type==='Equity');
+  const assetsTotal = assets.reduce((s,a)=>s+getAccountBalance(a.id,asOf),0);
+  const liabTotal = liabilities.reduce((s,a)=>s+getAccountBalance(a.id,asOf),0);
+  const equityTotal = equity.reduce((s,a)=>s+getAccountBalance(a.id,asOf),0);
+  const netProfitToDate = S.accounts.filter(a=>a.type==='Income').reduce((s,a)=>s+getAccountBalance(a.id,asOf),0)
+    - S.accounts.filter(a=>a.type==='Expense').reduce((s,a)=>s+getAccountBalance(a.id,asOf),0);
+  const totalEquity = equityTotal + netProfitToDate;
+  document.getElementById('content').querySelector('#report-body');
+  document.getElementById('report-body').innerHTML = `<div class="card">
+    <div class="card-head"><h3>As of</h3><input type="date" value="${asOf}" style="width:150px;" onchange="window._rTo=this.value; renderReports();"></div>
+    <div class="card-body">
+      <div class="section-title">Assets</div>
+      ${assets.map(a=>`<div class="report-row indent"><span>${a.name}</span><span class="num">${fmt(getAccountBalance(a.id,asOf))}</span></div>`).join('')}
+      <div class="report-row total"><span>Total assets</span><span class="num">${fmt(assetsTotal)}</span></div>
+      <div class="section-title">Liabilities</div>
+      ${liabilities.map(a=>`<div class="report-row indent"><span>${a.name}</span><span class="num">${fmt(getAccountBalance(a.id,asOf))}</span></div>`).join('')}
+      <div class="report-row total"><span>Total liabilities</span><span class="num">${fmt(liabTotal)}</span></div>
+      <div class="section-title">Equity</div>
+      ${equity.map(a=>`<div class="report-row indent"><span>${a.name}</span><span class="num">${fmt(getAccountBalance(a.id,asOf))}</span></div>`).join('')}
+      <div class="report-row indent"><span>Retained earnings (net profit to date)</span><span class="num">${fmt(netProfitToDate)}</span></div>
+      <div class="report-row total"><span>Total equity</span><span class="num">${fmt(totalEquity)}</span></div>
+      <div class="report-row total" style="font-size:15px;"><span>Liabilities + Equity</span><span class="num">${fmt(liabTotal+totalEquity)}</span></div>
+      <div class="balance-check" style="margin-top:14px;"><span class="dot" style="background:${Math.abs(assetsTotal-(liabTotal+totalEquity))<0.01?'var(--accent)':'var(--red)'}"></span>
+        ${Math.abs(assetsTotal-(liabTotal+totalEquity))<0.01? 'Balanced ✓' : 'Out of balance'}</div>
+    </div>
+  </div>`;
+}
+function renderTB(asOf){
+  const rows = S.accounts.map(a=>{
+    const bal = getAccountBalance(a.id, asOf);
+    const isDebitNormal = accountNormalIsDebit(a.type);
+    const debit = (isDebitNormal && bal>=0) || (!isDebitNormal && bal<0) ? Math.abs(bal) : 0;
+    const credit = (!isDebitNormal && bal>=0) || (isDebitNormal && bal<0) ? Math.abs(bal) : 0;
+    return {a, debit, credit};
+  }).filter(r=>Math.abs(r.debit)>0.001 || Math.abs(r.credit)>0.001);
+  const totalD = rows.reduce((s,r)=>s+r.debit,0);
+  const totalC = rows.reduce((s,r)=>s+r.credit,0);
+  document.getElementById('report-body').innerHTML = `<div class="card">
+    <div class="card-head"><h3>As of</h3><input type="date" value="${asOf}" style="width:150px;" onchange="window._rTo=this.value; renderReports();"></div>
+    <table><thead><tr><th>Code</th><th>Account</th><th class="amt">Debit</th><th class="amt">Credit</th></tr></thead><tbody>
+      ${rows.map(r=>`<tr><td class="mono">${r.a.code}</td><td>${r.a.name}</td><td class="amt num">${r.debit?fmt(r.debit):''}</td><td class="amt num">${r.credit?fmt(r.credit):''}</td></tr>`).join('')}
+      <tr class="li-total-row"><td></td><td>Total</td><td class="amt num">${fmt(totalD)}</td><td class="amt num">${fmt(totalC)}</td></tr>
+    </tbody></table>
+  </div>`;
+}
+
+/* ============================= SETTINGS ============================= */
+function renderSettings(){
+  setTopbar('Settings', 'Business details and preferences', '');
+  document.getElementById('content').innerHTML = `
+    <div class="grid-2">
+      <div class="card"><div class="card-head"><h3>Business</h3></div><div class="card-body">
+        <div class="field"><label>Business name</label><input type="text" id="s-name" value="${S.settings.businessName}"></div>
+        <div class="field-row">
+          <div class="field"><label>Currency symbol</label><input type="text" id="s-currency" value="${S.settings.currency}"></div>
+          <div class="field"><label>Tax label</label><input type="text" id="s-taxlabel" value="${S.settings.taxLabel}"></div>
+        </div>
+        <div class="field"><label>Default tax rate (%)</label><input type="number" id="s-taxrate" value="${S.settings.taxRate}" step="0.1"></div>
+        <button class="btn btn-primary" onclick="saveSettings()">Save settings</button>
+      </div></div>
+      <div class="card"><div class="card-head"><h3>Data</h3></div><div class="card-body">
+        <p style="font-size:12.5px; color:var(--text-muted); margin-top:0;">Your books are stored privately in this app's persistent storage. Resetting will erase all accounts, invoices, bills and journal entries for <strong>${S.settings.businessName}</strong> only, and reload sample data.</p>
+        <button class="btn btn-danger" onclick="resetData()">Reset this company to sample data</button>
+      </div></div>
+    </div>
+    <div class="section-title">Companies</div>
+    <div class="card"><div class="card-body">
+      <p style="font-size:12.5px; color:var(--text-muted); margin-top:0;">Each company keeps its own separate accounts, contacts, invoices, bills and journal. Switch between them any time from the sidebar.</p>
+      ${companyList().map(c=>`
+        <div style="display:flex; align-items:center; justify-content:space-between; padding:9px 0; border-bottom:1px solid var(--border);">
+          <div style="display:flex; align-items:center; gap:9px;">
+            <span style="width:9px;height:9px;border-radius:50%;background:${c.id===WORKSPACE.activeId?'var(--accent)':'var(--border-strong)'};display:inline-block;"></span>
+            <strong style="font-size:13.5px;">${c.name}</strong>
+            ${c.id===WORKSPACE.activeId?'<span class="badge badge-open">Active</span>':''}
+          </div>
+          <div style="display:flex; gap:6px;">
+            ${c.id!==WORKSPACE.activeId?`<button class="btn btn-ghost btn-sm" onclick="switchCompany('${c.id}')">Switch to</button>`:''}
+            ${companyList().length>1?`<button class="btn btn-danger btn-sm" onclick="deleteCompanyAction('${c.id}')">Delete</button>`:''}
+          </div>
+        </div>`).join('')}
+      <button class="btn btn-primary btn-sm" style="margin-top:14px;" onclick="openNewCompanyForm()">+ Add company</button>
+    </div></div>
+  `;
+}
+function saveSettings(){
+  S.settings.businessName = document.getElementById('s-name').value.trim() || 'My Business';
+  S.settings.currency = document.getElementById('s-currency').value.trim() || 'R';
+  S.settings.taxLabel = document.getElementById('s-taxlabel').value.trim() || 'Tax';
+  S.settings.taxRate = Number(document.getElementById('s-taxrate').value)||0;
+  showToast('Settings saved'); saveState(true); render();
+}
+async function resetData(){
+  if(!confirm('This will erase all current data for this company and reload sample data. Continue?')) return;
+  const co = defaultData();
+  WORKSPACE.companies[WORKSPACE.activeId] = co;
+  S = co;
+  seedDemoData();
+  await saveState(true);
+  showToast('Sample data reloaded');
+  navigate('dashboard');
+}
+
+/* ============================= MODAL ============================= */
+function openModal(title, bodyHtml, actions, wide){
+  const root = document.getElementById('modal-root');
+  root.innerHTML = `
+    <div class="overlay" onclick="if(event.target===this) closeModal()">
+      <div class="modal ${wide?'wide':''}">
+        <div class="modal-head"><h3>${title}</h3><button class="x-close" onclick="closeModal()">✕</button></div>
+        <div class="modal-body">${bodyHtml}</div>
+        <div class="modal-foot">
+          <button class="btn btn-ghost" onclick="closeModal()">Cancel</button>
+          ${(actions||[]).map(a=>`<button class="btn ${a.cls}" onclick="${a.onclick}">${a.label}</button>`).join('')}
+        </div>
+      </div>
+    </div>`;
+}
+function closeModal(){ document.getElementById('modal-root').innerHTML=''; }
+
+/* ============================= INIT ============================= */
+async function init(){
+  await loadState();
+  render();
+  document.getElementById('modal-root').addEventListener('input', (e)=>{
+    if(e.target.closest('#li-body-wrap') || e.target.id==='f-tax'){ recalcInvoiceForm(); }
+  });
+}
+init();
+</script>
+</body>
+</html>
