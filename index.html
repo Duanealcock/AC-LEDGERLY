@@ -62,6 +62,18 @@
   .nav-item.active{background:rgba(201,162,39,.16); color:var(--text-inverse); border-left:2px solid var(--gold);}
   .nav-item .ic{width:16px; text-align:center; opacity:.85; font-size:13px;}
   .nav-section-label{font-size:10px; text-transform:uppercase; letter-spacing:1.3px; color:rgba(237,243,238,.35); padding:14px 12px 6px;}
+  .nav-parent{ user-select:none; }
+  .nav-parent.parent-active{ color:var(--text-inverse); }
+  .nav-parent.parent-active .ic{ color:var(--gold); opacity:1; }
+  .nav-chev{ font-size:10px; opacity:.6; transition:transform .12s; }
+  .nav-children{ margin:2px 0 4px; }
+  .nav-subitem{
+    padding:7px 12px 7px 38px; margin-bottom:1px; border-radius:6px; cursor:pointer;
+    font-size:12.8px; font-weight:500; color:rgba(237,243,238,.62); border-left:2px solid transparent;
+    transition:background .12s;
+  }
+  .nav-subitem:hover{ background:rgba(237,243,238,.06); color:var(--text-inverse); }
+  .nav-subitem.active{ background:rgba(201,162,39,.16); color:var(--text-inverse); border-left:2px solid var(--gold); }
   .sidebar-foot{padding:14px 20px; border-top:1px solid rgba(237,243,238,.12); font-size:11px; color:rgba(237,243,238,.4);}
   .co-switch-btn{
     width:100%; display:flex; align-items:center; justify-content:space-between; gap:8px;
@@ -168,6 +180,17 @@
   .tabs{display:flex; gap:4px; margin-bottom:16px; border-bottom:1px solid var(--border);}
   .tab{padding:9px 14px; font-size:13px; font-weight:600; color:var(--text-muted); cursor:pointer; border-bottom:2px solid transparent; margin-bottom:-1px;}
   .tab.active{color:var(--accent-dark); border-bottom:2px solid var(--accent);}
+
+  /* Document sub-menu tiles (customer/supplier transactions) */
+  .doc-submenu{ display:grid; grid-template-columns:repeat(3,1fr); gap:12px; margin-bottom:18px; }
+  .doc-tile{ display:flex; align-items:center; gap:12px; text-align:left; background:var(--surface); border:1px solid var(--border); border-radius:10px; padding:14px 16px; cursor:pointer; font-family:inherit; box-shadow:var(--shadow); transition:border-color .12s, transform .06s; }
+  .doc-tile:hover{ border-color:var(--accent); transform:translateY(-1px); }
+  .doc-tile-ic{ font-size:20px; width:34px; height:34px; flex:0 0 34px; display:flex; align-items:center; justify-content:center; background:var(--surface-2); border-radius:8px; }
+  .doc-tile-body{ display:flex; flex-direction:column; gap:2px; flex:1; min-width:0; }
+  .doc-tile-body strong{ font-size:13.5px; color:var(--text); }
+  .doc-tile-body span{ font-size:11.5px; color:var(--text-muted); }
+  .doc-tile-count{ font-family:'IBM Plex Mono',monospace; font-size:13px; font-weight:600; color:var(--accent-dark); background:var(--surface-2); border-radius:20px; padding:2px 10px; }
+  @media (max-width: 880px){ .doc-submenu{ grid-template-columns:1fr; } }
 
   .balance-check{display:flex; align-items:center; gap:8px; font-size:12.5px; padding:8px 12px; border-radius:6px; background:var(--surface-2); border:1px solid var(--border); width:fit-content;}
   .balance-check .dot{width:8px; height:8px; border-radius:50%; background:var(--accent);}
@@ -336,6 +359,17 @@ let SAVE_TIMER = null;
 const NAV = [
   {sec:'Overview'},
   {id:'dashboard', label:'Dashboard', ic:'◆'},
+  {sec:'Directory'},
+  {group:'customers', label:'Customers', ic:'●', children:[
+    {id:'cust-add', label:'Add a Customer'},
+    {id:'cust-transactions', label:'Transactions'},
+    {id:'cust-reports', label:'Reports'},
+  ]},
+  {group:'suppliers', label:'Suppliers', ic:'◐', children:[
+    {id:'supp-add', label:'Add a Supplier'},
+    {id:'supp-transactions', label:'Transactions'},
+    {id:'supp-reports', label:'Reports'},
+  ]},
   {sec:'Money'},
   {id:'sales', label:'Sales / Invoices', ic:'↗'},
   {id:'purchases', label:'Purchases / Bills', ic:'↙'},
@@ -343,18 +377,29 @@ const NAV = [
   {id:'journal', label:'Journal Entries', ic:'✎'},
   {id:'cashbook', label:'Cashbook', ic:'▥'},
   {sec:'Records'},
-  {id:'contacts', label:'Contacts', ic:'●'},
+  {id:'contacts', label:'All Contacts', ic:'☰'},
   {id:'accounts', label:'Chart of Accounts', ic:'≡'},
   {sec:'Insights'},
   {id:'reports', label:'Reports', ic:'▦'},
   {id:'settings', label:'Settings', ic:'⚙'},
 ];
+// which nav view belongs to which expandable group, so the group auto-opens
+const NAV_GROUP_OF = {};
+NAV.forEach(item=>{ if(item.group){ item.children.forEach(ch=>{ NAV_GROUP_OF[ch.id] = item.group; }); } });
+// document-register views reached from the Transactions sub-menu belong to their group too,
+// so the sidebar keeps the right section open and the Transactions child highlighted
+['quotes','credit-notes'].forEach(v=>{ NAV_GROUP_OF[v]='customers'; });
+['supp-quotes','supp-credit-notes'].forEach(v=>{ NAV_GROUP_OF[v]='suppliers'; });
+// map these register views back to the "Transactions" child for active highlighting
+const NAV_CHILD_ALIAS = { 'quotes':'cust-transactions', 'credit-notes':'cust-transactions', 'supp-quotes':'supp-transactions', 'supp-credit-notes':'supp-transactions' };
+let NAV_OPEN_GROUPS = {}; // group -> bool
 
 function uid(p){ return p+'_'+Date.now().toString(36)+Math.random().toString(36).slice(2,7); }
 
 function defaultData(){
   return {
     settings:{ businessName:'My Business', currency:'R', taxLabel:'VAT', taxRate:15, nextInvoiceNo:1001, nextBillNo:2001,
+      nextQuoteNo:3001, nextSuppQuoteNo:3501, nextCreditNoteNo:4001, nextSuppCreditNoteNo:4501,
       businessVatNo:'', businessAddress:'', bankName:'', bankBranch:'', bankAccountNumber:'',
       invoiceLogoDataUrl:'', invoiceFooterNote:'' },
     accounts:[
@@ -379,6 +424,10 @@ function defaultData(){
     contacts:[],
     invoices:[],
     bills:[],
+    quotes:[],
+    suppQuotes:[],
+    creditNotes:[],
+    suppCreditNotes:[],
     journal:[],
     reconciliations:[],
     bankFeeds:{},
@@ -421,6 +470,18 @@ function newCompanyRecord(name){
   co.settings.businessName = name || 'New Company';
   return co;
 }
+function migrateCompanyShape(co){
+  if(!co) return;
+  co.quotes = co.quotes || [];
+  co.suppQuotes = co.suppQuotes || [];
+  co.creditNotes = co.creditNotes || [];
+  co.suppCreditNotes = co.suppCreditNotes || [];
+  const s = co.settings || (co.settings={});
+  if(s.nextQuoteNo==null) s.nextQuoteNo = 3001;
+  if(s.nextSuppQuoteNo==null) s.nextSuppQuoteNo = 3501;
+  if(s.nextCreditNoteNo==null) s.nextCreditNoteNo = 4001;
+  if(s.nextSuppCreditNoteNo==null) s.nextSuppCreditNoteNo = 4501;
+}
 async function loadState(){
   try{
     const res = await storageGet(STORAGE_KEY);
@@ -428,6 +489,8 @@ async function loadState(){
       WORKSPACE = JSON.parse(res.value);
       if(!WORKSPACE.users) WORKSPACE.users = [];
       if(WORKSPACE.authEnabled === undefined) WORKSPACE.authEnabled = WORKSPACE.users.length>0;
+      // migrate any older company records missing the newer document collections
+      Object.values(WORKSPACE.companies||{}).forEach(migrateCompanyShape);
       S = WORKSPACE.companies[WORKSPACE.activeId];
       if(S){ LAST_SAVED_AT = new Date(); return; }
     }
@@ -980,6 +1043,114 @@ function voidBill(billId){
 }
 function contactName(id){ const c=S.contacts.find(x=>x.id===id); return c?c.name:'—'; }
 
+/* ============================= QUOTES (non-posting until converted) ============================= */
+// Customer quotes (sales) and supplier quotes (purchase) share this shape.
+function makeQuoteObj(kind, contactId, date, expiryDate, lines, useTax){
+  const isCust = kind==='customer';
+  const num = (isCust? 'QUO-'+(S.settings.nextQuoteNo++) : 'PQ-'+(S.settings.nextSuppQuoteNo++));
+  return {id:uid('quo'), kind, number:num, contactId, date, dueDate:expiryDate,
+    lines:lines.map(l=>({id:uid('li'),...l})), taxRate: useTax?S.settings.taxRate:0,
+    status:'draft', payments:[], notes:'', convertedToId:null};
+}
+function quoteCollection(kind){ return kind==='customer' ? S.quotes : S.suppQuotes; }
+function markQuoteSent(quoteId, kind){
+  const q = quoteCollection(kind).find(x=>x.id===quoteId);
+  if(!q || q.status!=='draft') return;
+  q.status='open'; // "sent / awaiting acceptance"
+}
+function convertQuoteToDoc(quoteId, kind){
+  const coll = quoteCollection(kind);
+  const q = coll.find(x=>x.id===quoteId);
+  if(!q || q.convertedToId) return null;
+  const useTax = (q.taxRate||0) > 0;
+  const plainLines = q.lines.map(l=>({desc:l.desc, qty:l.qty, price:l.price, accountId:l.accountId}));
+  let newDoc;
+  if(kind==='customer'){
+    const due = new Date(); due.setDate(due.getDate()+14);
+    newDoc = makeInvoiceObj(q.contactId, todayStr(), due.toISOString().slice(0,10), plainLines, useTax);
+    S.invoices.push(newDoc);
+    issueInvoice(newDoc.id, todayStr());
+  } else {
+    const due = new Date(); due.setDate(due.getDate()+30);
+    newDoc = makeBillObj(q.contactId, todayStr(), due.toISOString().slice(0,10), plainLines, useTax);
+    S.bills.push(newDoc);
+    issueBill(newDoc.id, todayStr());
+  }
+  q.status='converted'; q.convertedToId=newDoc.id;
+  return newDoc;
+}
+
+/* ============================= CREDIT NOTES (post real ledger reversals) ============================= */
+// Customer credit note reduces what a customer owes (reverses income + AR + output VAT).
+// Supplier credit note reduces what you owe a supplier (reverses expense + AP + input VAT).
+function makeCreditNoteObj(kind, contactId, date, lines, useTax, appliesToId){
+  const isCust = kind==='customer';
+  const num = (isCust? 'CN-'+(S.settings.nextCreditNoteNo++) : 'SCN-'+(S.settings.nextSuppCreditNoteNo++));
+  return {id:uid('cn'), kind, number:num, contactId, date, dueDate:date,
+    lines:lines.map(l=>({id:uid('li'),...l})), taxRate: useTax?S.settings.taxRate:0,
+    status:'draft', payments:[], notes:'', appliesToId:appliesToId||null};
+}
+function creditNoteCollection(kind){ return kind==='customer' ? S.creditNotes : S.suppCreditNotes; }
+function issueCreditNote(cnId, kind, dateOverride){
+  const coll = creditNoteCollection(kind);
+  const cn = coll.find(x=>x.id===cnId);
+  if(!cn || cn.status!=='draft') return;
+  const date = dateOverride||todayStr();
+  const tax = docTax(cn);
+  const lines = [];
+  if(kind==='customer'){
+    // reverse of an invoice: debit income (reduce), debit output VAT, credit AR
+    cn.lines.forEach(l=>{ lines.push({accountId:l.accountId, debit:lineSubtotal(l), credit:0}); });
+    if(tax>0) lines.push({accountId:'acc_vatp', debit:tax, credit:0});
+    lines.push({accountId:'acc_ar', debit:0, credit:invoiceTotal(cn)});
+  } else {
+    // reverse of a bill: debit AP, credit expense (reduce), credit input VAT
+    lines.push({accountId:'acc_ap', debit:billTotal(cn), credit:0});
+    cn.lines.forEach(l=>{ lines.push({accountId:l.accountId, debit:0, credit:lineSubtotal(l)}); });
+    if(tax>0) lines.push({accountId:'acc_vatr', debit:0, credit:tax});
+  }
+  const who = contactName(cn.contactId);
+  const entry = postJournal('Credit note '+cn.number+(kind==='customer'?' to ':' from ')+who, date, lines);
+  entry.ref = 'cn-issue-'+cn.id;
+  cn.status='open'; cn.issueRef=entry.ref; cn.date=date;
+
+  // If applied to a specific open invoice/bill, allocate the credit against its balance
+  if(cn.appliesToId){
+    const targetColl = kind==='customer' ? S.invoices : S.bills;
+    const target = targetColl.find(d=>d.id===cn.appliesToId);
+    if(target){
+      const alloc = Math.min(creditNoteTotal(cn), docBalanceDue(target));
+      if(alloc>0){
+        // record as a non-cash "payment" that clears part of the balance, offset within AR/AP already handled above,
+        // so this is a memo allocation: reduce the target's balance via a payment entry that nets AR/AP to itself.
+        const clrEntry = postJournal('Credit note '+cn.number+' applied to '+target.number, date,
+          kind==='customer'
+            ? [{accountId:'acc_ar', debit:alloc, credit:0},{accountId:'acc_ar', debit:0, credit:alloc}]
+            : [{accountId:'acc_ap', debit:alloc, credit:0},{accountId:'acc_ap', debit:0, credit:alloc}]);
+        clrEntry.ref = 'cn-apply-'+uid('a');
+        target.payments = target.payments||[];
+        target.payments.push({id:uid('pay'), date, amount:alloc, bankAccountId:null, journalRef:clrEntry.ref, creditNoteId:cn.id, memo:'Credit note '+cn.number});
+      }
+    }
+  }
+}
+function creditNoteTotal(cn){ return invoiceTotal(cn); } // same subtotal+tax math
+function voidCreditNote(cnId, kind){
+  const cn = creditNoteCollection(kind).find(x=>x.id===cnId);
+  if(!cn) return;
+  // reverse any allocation payments recorded against target docs
+  const targetColl = kind==='customer' ? S.invoices : S.bills;
+  if(cn.appliesToId){
+    const target = targetColl.find(d=>d.id===cn.appliesToId);
+    if(target && target.payments){
+      target.payments.filter(p=>p.creditNoteId===cn.id).forEach(p=>reverseJournalByRef(p.journalRef));
+      target.payments = target.payments.filter(p=>p.creditNoteId!==cn.id);
+    }
+  }
+  if(cn.issueRef) reverseJournalByRef(cn.issueRef);
+  cn.status='void';
+}
+
 /* ============================= FORMAT HELPERS ============================= */
 function fmt(n){
   n = Number(n)||0;
@@ -1009,13 +1180,35 @@ function renderCompanySwitcher(){
 }
 function renderNav(){
   const nav = document.getElementById('nav');
+  // keep the group of the current view open
+  const activeGroup = NAV_GROUP_OF[VIEW];
+  if(activeGroup) NAV_OPEN_GROUPS[activeGroup] = true;
   nav.innerHTML = NAV.map(item=>{
     if(item.sec) return `<div class="nav-section-label">${item.sec}</div>`;
+    if(item.group){
+      const open = !!NAV_OPEN_GROUPS[item.group];
+      const parentActive = NAV_GROUP_OF[VIEW]===item.group;
+      const childrenHtml = item.children.map(ch=>
+        `<div class="nav-subitem ${(VIEW===ch.id || NAV_CHILD_ALIAS[VIEW]===ch.id)?'active':''}" onclick="navigate('${ch.id}')">${ch.label}</div>`
+      ).join('');
+      return `<div class="nav-group ${open?'open':''}">
+        <div class="nav-item nav-parent ${parentActive?'parent-active':''}" onclick="toggleNavGroup('${item.group}')">
+          <span class="ic">${item.ic}</span><span style="flex:1;">${item.label}</span><span class="nav-chev">${open?'▾':'▸'}</span>
+        </div>
+        <div class="nav-children" style="${open?'':'display:none;'}">${childrenHtml}</div>
+      </div>`;
+    }
     return `<div class="nav-item ${VIEW===item.id?'active':''}" onclick="navigate('${item.id}')"><span class="ic">${item.ic}</span>${item.label}</div>`;
   }).join('');
 }
+function toggleNavGroup(group){
+  NAV_OPEN_GROUPS[group] = !NAV_OPEN_GROUPS[group];
+  renderNav();
+}
 function navigate(view){
   VIEW = view;
+  const g = NAV_GROUP_OF[view];
+  if(g) NAV_OPEN_GROUPS[g] = true;
   document.getElementById('sidebar').classList.remove('open');
   render();
 }
@@ -1049,6 +1242,16 @@ function render(){
     'invoice-print': renderInvoicePrintPage,
     'reconcile': renderReconcilePage,
     'feed-review': renderFeedReviewPage,
+    'cust-add': ()=>renderContactDirectory('customer','add'),
+    'cust-transactions': ()=>renderContactDirectory('customer','transactions'),
+    'cust-reports': ()=>renderContactDirectory('customer','reports'),
+    'supp-add': ()=>renderContactDirectory('supplier','add'),
+    'supp-transactions': ()=>renderContactDirectory('supplier','transactions'),
+    'supp-reports': ()=>renderContactDirectory('supplier','reports'),
+    'quotes': ()=>renderQuotes('customer'),
+    'supp-quotes': ()=>renderQuotes('supplier'),
+    'credit-notes': ()=>renderCreditNotes('customer'),
+    'supp-credit-notes': ()=>renderCreditNotes('supplier'),
   };
   (map[VIEW]||renderDashboard)();
   saveState();
@@ -1520,6 +1723,288 @@ function submitBillPayment(id){
   if(amount<=0){ showToast('Enter a valid amount'); return; }
   recordBillPayment(id, amount, date, account);
   closeModal(); showToast('Payment recorded'); navigate('purchases');
+}
+
+/* ============================= QUOTES UI ============================= */
+let QUOTE_FILTER = 'all';
+function renderQuotes(kind){
+  const isCust = kind==='customer';
+  const title = isCust ? 'Customer Quotes' : 'Supplier Quotes';
+  const sub = isCust ? 'Draft quotes for customers and convert accepted ones to invoices' : 'Request-for-quote records; convert accepted ones to bills';
+  const view = isCust ? 'quotes' : 'supp-quotes';
+  const coll = quoteCollection(kind);
+  setTopbar(title, sub, `<button class="btn btn-primary" onclick="openQuoteForm('${kind}')">+ New Quote</button>`);
+  const list = coll.filter(q=> QUOTE_FILTER==='all' || quoteDisplayStatus(q)===QUOTE_FILTER).sort((a,b)=>(b.date||'').localeCompare(a.date||''));
+  document.getElementById('content').innerHTML = `
+    <div class="toolbar"><div class="filter-pills">
+      ${['all','draft','sent','converted','void'].map(f=>`<span class="pill ${QUOTE_FILTER===f?'active':''}" onclick="QUOTE_FILTER='${f}'; navigate('${view}');">${f[0].toUpperCase()+f.slice(1)}</span>`).join('')}
+    </div></div>
+    <div class="card">
+      ${list.length? `<table><thead><tr><th>Number</th><th>${isCust?'Customer':'Supplier'}</th><th>Date</th><th>Valid until</th><th class="amt">Total</th><th>Status</th></tr></thead><tbody>
+        ${list.map(q=>`<tr class="clickable" onclick="openQuoteDetail('${q.id}','${kind}')">
+          <td class="mono">${q.number}</td><td>${escapeHtml(contactName(q.contactId))}</td>
+          <td>${fmtDateShort(q.date)}</td><td>${fmtDateShort(q.dueDate)}</td>
+          <td class="amt num">${fmt(invoiceTotal(q))}</td>
+          <td>${quoteStatusBadge(q)}</td></tr>`).join('')}
+      </tbody></table>` : emptyState('No quotes yet', `Create a quote to send ${isCust?'a customer':'to record a supplier offer'}.`, `openQuoteForm('${kind}')`, '+ New Quote')}
+    </div>`;
+}
+function quoteDisplayStatus(q){
+  if(q.status==='converted') return 'converted';
+  if(q.status==='void') return 'void';
+  if(q.status==='open') return 'sent';
+  return 'draft';
+}
+function quoteStatusBadge(q){
+  const s = quoteDisplayStatus(q);
+  const map = {draft:'Draft', sent:'Sent', converted:'Converted', void:'Void'};
+  const cls = {draft:'draft', sent:'open', converted:'paid', void:'void'}[s];
+  return `<span class="badge badge-${cls}">${map[s]}</span>`;
+}
+function openQuoteForm(kind){
+  const isCust = kind==='customer';
+  const type = isCust ? 'customer' : 'supplier';
+  if(S.contacts.filter(c=>c.type===type).length===0){
+    showToast(`Add a ${type} first`); openContactForm(type); return;
+  }
+  const contacts = S.contacts.filter(c=>c.type===type);
+  const accts = S.accounts.filter(a=> isCust ? a.type==='Income' : a.type==='Expense');
+  const today = todayStr();
+  const valid = new Date(); valid.setDate(valid.getDate()+30);
+  const validStr = valid.toISOString().slice(0,10);
+  const lineRow = ()=>`
+    <tr>
+      <td><input type="text" class="li-desc" placeholder="Description"></td>
+      <td style="width:64px;"><input type="number" class="li-qty" value="1" min="0" step="1"></td>
+      <td style="width:100px;"><input type="number" class="li-price" value="0" min="0" step="0.01"></td>
+      <td style="width:160px;"><select class="li-acct">${accts.map(a=>`<option value="${a.id}">${a.code} ${a.name}</option>`).join('')}</select></td>
+      <td style="width:90px; text-align:right;" class="li-line-total num">${S.settings.currency}0.00</td>
+      <td style="width:30px;"><button class="icon-btn" onclick="this.closest('tr').remove(); recalcInvoiceForm();">✕</button></td>
+    </tr>`;
+  const body = `
+    <div class="field-row">
+      <div class="field"><label>${isCust?'Customer':'Supplier'}</label><select id="f-contact">${contacts.map(c=>`<option value="${c.id}">${c.name}</option>`).join('')}</select></div>
+      <div class="field"><label>Quote date</label><input type="date" id="f-date" value="${today}"></div>
+    </div>
+    <div class="field-row">
+      <div class="field"><label>Valid until</label><input type="date" id="f-due" value="${validStr}"></div>
+      <div class="field"><label>Apply ${S.settings.taxLabel} (${S.settings.taxRate}%)</label>
+        <select id="f-tax"><option value="1">Yes</option><option value="0">No</option></select></div>
+    </div>
+    <div class="section-title">Line items</div>
+    <table class="li-table" id="li-body-wrap">
+      <thead><tr><th>Description</th><th>Qty</th><th>Price</th><th>${isCust?'Income':'Expense'} account</th><th class="amt">Total</th><th></th></tr></thead>
+      <tbody id="li-body">${lineRow()}</tbody>
+    </table>
+    <button class="btn btn-ghost btn-sm" style="margin-top:8px;" onclick="document.getElementById('li-body').insertAdjacentHTML('beforeend', document.getElementById('li-tmpl').innerHTML); recalcInvoiceForm();">+ Add line</button>
+    <template id="li-tmpl">${lineRow()}</template>
+    <div style="margin-top:18px; border-top:1px solid var(--border); padding-top:12px;">
+      <div class="report-row"><span>Subtotal</span><span class="num" id="sum-sub">${S.settings.currency}0.00</span></div>
+      <div class="report-row"><span>${S.settings.taxLabel}</span><span class="num" id="sum-tax">${S.settings.currency}0.00</span></div>
+      <div class="report-row total"><span>Total</span><span class="num" id="sum-total">${S.settings.currency}0.00</span></div>
+    </div>`;
+  openModal('New Quote', body, [
+    {label:'Save as draft', cls:'btn-ghost', onclick:`submitQuoteForm('${kind}',false)`},
+    {label:'Save & mark sent', cls:'btn-primary', onclick:`submitQuoteForm('${kind}',true)`},
+  ], true);
+  recalcInvoiceForm();
+}
+function submitQuoteForm(kind, markSent){
+  const contactId = document.getElementById('f-contact').value;
+  const date = document.getElementById('f-date').value;
+  const due = document.getElementById('f-due').value;
+  const taxOn = document.getElementById('f-tax').value==='1';
+  const lines = collectLines('.li-desc','.li-qty','.li-price','.li-acct');
+  if(lines.length===0){ showToast('Add at least one line item'); return; }
+  const q = makeQuoteObj(kind, contactId, date, due, lines, taxOn);
+  if(markSent) q.status='open';
+  quoteCollection(kind).push(q);
+  closeModal();
+  showToast(markSent? 'Quote saved & marked sent' : 'Quote saved as draft');
+  navigate(kind==='customer'?'quotes':'supp-quotes');
+}
+function openQuoteDetail(id, kind){
+  const q = quoteCollection(kind).find(x=>x.id===id);
+  if(!q) return;
+  const isCust = kind==='customer';
+  const rows = q.lines.map(l=>`<tr><td>${escapeHtml(l.desc)}</td><td class="amt num">${l.qty}</td><td class="amt num">${fmt(l.price)}</td><td class="amt num">${fmt(lineSubtotal(l))}</td></tr>`).join('');
+  const convertedDoc = q.convertedToId ? (isCust? S.invoices : S.bills).find(d=>d.id===q.convertedToId) : null;
+  const body = `
+    <div style="display:flex; justify-content:space-between; margin-bottom:14px;">
+      <div><div style="font-size:12px; color:var(--text-muted);">${isCust?'Customer':'Supplier'}</div><strong>${escapeHtml(contactName(q.contactId))}</strong></div>
+      <div style="text-align:right;">${quoteStatusBadge(q)}<div style="font-size:12px; color:var(--text-muted); margin-top:6px;">${fmtDate(q.date)} · valid until ${fmtDate(q.dueDate)}</div></div>
+    </div>
+    <table><thead><tr><th>Description</th><th class="amt">Qty</th><th class="amt">Price</th><th class="amt">Total</th></tr></thead><tbody>${rows}</tbody></table>
+    <div style="margin-top:14px; padding-top:10px; border-top:1px solid var(--border);">
+      <div class="report-row"><span>Subtotal</span><span class="num">${fmt(docSubtotal(q))}</span></div>
+      <div class="report-row"><span>${S.settings.taxLabel}</span><span class="num">${fmt(docTax(q))}</span></div>
+      <div class="report-row total"><span>Total</span><span class="num">${fmt(invoiceTotal(q))}</span></div>
+    </div>
+    ${convertedDoc? `<div class="hint" style="margin-top:12px;">Converted to <strong>${convertedDoc.number}</strong>.</div>`:''}`;
+  const actions = [];
+  const st = quoteDisplayStatus(q);
+  if(st==='draft'){
+    actions.push({label:'Delete', cls:'btn-danger', onclick:`deleteQuote('${q.id}','${kind}')`});
+    actions.push({label:'Mark as sent', cls:'btn-ghost', onclick:`markQuoteSentAction('${q.id}','${kind}')`});
+    actions.push({label:`Convert to ${isCust?'invoice':'bill'}`, cls:'btn-primary', onclick:`convertQuoteAction('${q.id}','${kind}')`});
+  } else if(st==='sent'){
+    actions.push({label:'Void', cls:'btn-danger', onclick:`voidQuoteAction('${q.id}','${kind}')`});
+    actions.push({label:`Convert to ${isCust?'invoice':'bill'}`, cls:'btn-primary', onclick:`convertQuoteAction('${q.id}','${kind}')`});
+  } else if(st==='converted' && convertedDoc){
+    actions.push({label:`Open ${isCust?'invoice':'bill'}`, cls:'btn-primary', onclick:`closeModal(); ${isCust?`openInvoiceDetail('${convertedDoc.id}')`:`openBillDetail('${convertedDoc.id}')`}`});
+  }
+  openModal(q.number, body, actions);
+}
+function markQuoteSentAction(id, kind){ markQuoteSent(id, kind); closeModal(); showToast('Quote marked as sent'); navigate(kind==='customer'?'quotes':'supp-quotes'); }
+function deleteQuote(id, kind){
+  if(!confirm('Delete this draft quote?')) return;
+  if(kind==='customer') S.quotes = S.quotes.filter(q=>q.id!==id);
+  else S.suppQuotes = S.suppQuotes.filter(q=>q.id!==id);
+  closeModal(); showToast('Quote deleted'); navigate(kind==='customer'?'quotes':'supp-quotes');
+}
+function voidQuoteAction(id, kind){
+  const q = quoteCollection(kind).find(x=>x.id===id);
+  if(q){ q.status='void'; }
+  closeModal(); showToast('Quote voided'); navigate(kind==='customer'?'quotes':'supp-quotes');
+}
+function convertQuoteAction(id, kind){
+  const isCust = kind==='customer';
+  if(!confirm(`Convert this quote to ${isCust?'an invoice':'a bill'}? This issues the ${isCust?'invoice':'bill'} and posts it to the ledger.`)) return;
+  const doc = convertQuoteToDoc(id, kind);
+  closeModal();
+  if(doc){ showToast(`Converted to ${doc.number}`); navigate(isCust?'sales':'purchases'); }
+  else { showToast('Could not convert'); navigate(isCust?'quotes':'supp-quotes'); }
+}
+
+/* ============================= CREDIT NOTES UI ============================= */
+let CN_FILTER = 'all';
+function renderCreditNotes(kind){
+  const isCust = kind==='customer';
+  const title = isCust ? 'Customer Credit Notes' : 'Supplier Credit Notes';
+  const sub = isCust ? 'Reduce what a customer owes you' : 'Reduce what you owe a supplier';
+  const view = isCust ? 'credit-notes' : 'supp-credit-notes';
+  const coll = creditNoteCollection(kind);
+  setTopbar(title, sub, `<button class="btn btn-primary" onclick="openCreditNoteForm('${kind}')">+ New Credit Note</button>`);
+  const list = coll.filter(cn=> CN_FILTER==='all' || docStatus(cn)===CN_FILTER).sort((a,b)=>(b.date||'').localeCompare(a.date||''));
+  document.getElementById('content').innerHTML = `
+    <div class="toolbar"><div class="filter-pills">
+      ${['all','draft','open','void'].map(f=>`<span class="pill ${CN_FILTER===f?'active':''}" onclick="CN_FILTER='${f}'; navigate('${view}');">${f==='open'?'Issued':f[0].toUpperCase()+f.slice(1)}</span>`).join('')}
+    </div></div>
+    <div class="card">
+      ${list.length? `<table><thead><tr><th>Number</th><th>${isCust?'Customer':'Supplier'}</th><th>Date</th><th>Applied to</th><th class="amt">Total</th><th>Status</th></tr></thead><tbody>
+        ${list.map(cn=>{
+          const target = cn.appliesToId ? (isCust?S.invoices:S.bills).find(d=>d.id===cn.appliesToId) : null;
+          return `<tr class="clickable" onclick="openCreditNoteDetail('${cn.id}','${kind}')">
+            <td class="mono">${cn.number}</td><td>${escapeHtml(contactName(cn.contactId))}</td>
+            <td>${cn.status==='draft'?'—':fmtDateShort(cn.date)}</td><td>${target? target.number : '—'}</td>
+            <td class="amt num">${fmt(creditNoteTotal(cn))}</td>
+            <td>${statusBadge(docStatus(cn)==='paid'?'open':docStatus(cn))}</td></tr>`;
+        }).join('')}
+      </tbody></table>` : emptyState('No credit notes yet', `Issue a credit note to reduce ${isCust?'a customer’s':'a supplier’s'} balance.`, `openCreditNoteForm('${kind}')`, '+ New Credit Note')}
+    </div>`;
+}
+function openCreditNoteForm(kind, prefillContactId, prefillTargetId){
+  const isCust = kind==='customer';
+  const type = isCust ? 'customer' : 'supplier';
+  if(S.contacts.filter(c=>c.type===type).length===0){
+    showToast(`Add a ${type} first`); openContactForm(type); return;
+  }
+  const contacts = S.contacts.filter(c=>c.type===type);
+  const accts = S.accounts.filter(a=> isCust ? a.type==='Income' : a.type==='Expense');
+  const today = todayStr();
+  const openDocs = (isCust?S.invoices:S.bills).filter(d=>['open','partial'].includes(docStatus(d)));
+  const lineRow = ()=>`
+    <tr>
+      <td><input type="text" class="li-desc" placeholder="Description"></td>
+      <td style="width:64px;"><input type="number" class="li-qty" value="1" min="0" step="1"></td>
+      <td style="width:100px;"><input type="number" class="li-price" value="0" min="0" step="0.01"></td>
+      <td style="width:160px;"><select class="li-acct">${accts.map(a=>`<option value="${a.id}">${a.code} ${a.name}</option>`).join('')}</select></td>
+      <td style="width:90px; text-align:right;" class="li-line-total num">${S.settings.currency}0.00</td>
+      <td style="width:30px;"><button class="icon-btn" onclick="this.closest('tr').remove(); recalcInvoiceForm();">✕</button></td>
+    </tr>`;
+  const body = `
+    <div class="field-row">
+      <div class="field"><label>${isCust?'Customer':'Supplier'}</label><select id="f-contact">${contacts.map(c=>`<option value="${c.id}" ${c.id===prefillContactId?'selected':''}>${c.name}</option>`).join('')}</select></div>
+      <div class="field"><label>Date</label><input type="date" id="f-date" value="${today}"></div>
+    </div>
+    <div class="field-row">
+      <div class="field"><label>Apply to ${isCust?'invoice':'bill'} (optional)</label>
+        <select id="f-applyto"><option value="">Standalone credit (no allocation)</option>
+          ${openDocs.map(d=>`<option value="${d.id}" ${d.id===prefillTargetId?'selected':''}>${d.number} — ${contactName(d.contactId)} (${fmt(docBalanceDue(d))} due)</option>`).join('')}
+        </select></div>
+      <div class="field"><label>Apply ${S.settings.taxLabel} (${S.settings.taxRate}%)</label>
+        <select id="f-tax"><option value="1">Yes</option><option value="0">No</option></select></div>
+    </div>
+    <div class="section-title">Line items</div>
+    <table class="li-table" id="li-body-wrap">
+      <thead><tr><th>Description</th><th>Qty</th><th>Price</th><th>${isCust?'Income':'Expense'} account</th><th class="amt">Total</th><th></th></tr></thead>
+      <tbody id="li-body">${lineRow()}</tbody>
+    </table>
+    <button class="btn btn-ghost btn-sm" style="margin-top:8px;" onclick="document.getElementById('li-body').insertAdjacentHTML('beforeend', document.getElementById('li-tmpl').innerHTML); recalcInvoiceForm();">+ Add line</button>
+    <template id="li-tmpl">${lineRow()}</template>
+    <div style="margin-top:18px; border-top:1px solid var(--border); padding-top:12px;">
+      <div class="report-row"><span>Subtotal</span><span class="num" id="sum-sub">${S.settings.currency}0.00</span></div>
+      <div class="report-row"><span>${S.settings.taxLabel}</span><span class="num" id="sum-tax">${S.settings.currency}0.00</span></div>
+      <div class="report-row total"><span>Total credit</span><span class="num" id="sum-total">${S.settings.currency}0.00</span></div>
+    </div>`;
+  openModal('New Credit Note', body, [
+    {label:'Save as draft', cls:'btn-ghost', onclick:`submitCreditNoteForm('${kind}',false)`},
+    {label:'Save & issue', cls:'btn-primary', onclick:`submitCreditNoteForm('${kind}',true)`},
+  ], true);
+  recalcInvoiceForm();
+}
+function submitCreditNoteForm(kind, issueNow){
+  const contactId = document.getElementById('f-contact').value;
+  const date = document.getElementById('f-date').value;
+  const taxOn = document.getElementById('f-tax').value==='1';
+  const applyTo = document.getElementById('f-applyto').value || null;
+  const lines = collectLines('.li-desc','.li-qty','.li-price','.li-acct');
+  if(lines.length===0){ showToast('Add at least one line item'); return; }
+  const cn = makeCreditNoteObj(kind, contactId, date, lines, taxOn, applyTo);
+  creditNoteCollection(kind).push(cn);
+  if(issueNow) issueCreditNote(cn.id, kind, date);
+  closeModal();
+  showToast(issueNow? 'Credit note issued' : 'Credit note saved as draft');
+  navigate(kind==='customer'?'credit-notes':'supp-credit-notes');
+}
+function openCreditNoteDetail(id, kind){
+  const cn = creditNoteCollection(kind).find(x=>x.id===id);
+  if(!cn) return;
+  const isCust = kind==='customer';
+  const status = docStatus(cn);
+  const target = cn.appliesToId ? (isCust?S.invoices:S.bills).find(d=>d.id===cn.appliesToId) : null;
+  const rows = cn.lines.map(l=>`<tr><td>${escapeHtml(l.desc)}</td><td class="amt num">${l.qty}</td><td class="amt num">${fmt(l.price)}</td><td class="amt num">${fmt(lineSubtotal(l))}</td></tr>`).join('');
+  const body = `
+    <div style="display:flex; justify-content:space-between; margin-bottom:14px;">
+      <div><div style="font-size:12px; color:var(--text-muted);">${isCust?'Customer':'Supplier'}</div><strong>${escapeHtml(contactName(cn.contactId))}</strong></div>
+      <div style="text-align:right;">${statusBadge(status==='paid'?'open':status)}<div style="font-size:12px; color:var(--text-muted); margin-top:6px;">${cn.status==='draft'?'Draft':fmtDate(cn.date)}</div></div>
+    </div>
+    <table><thead><tr><th>Description</th><th class="amt">Qty</th><th class="amt">Price</th><th class="amt">Total</th></tr></thead><tbody>${rows}</tbody></table>
+    <div style="margin-top:14px; padding-top:10px; border-top:1px solid var(--border);">
+      <div class="report-row"><span>Subtotal</span><span class="num">${fmt(docSubtotal(cn))}</span></div>
+      <div class="report-row"><span>${S.settings.taxLabel}</span><span class="num">${fmt(docTax(cn))}</span></div>
+      <div class="report-row total"><span>Total credit</span><span class="num">${fmt(creditNoteTotal(cn))}</span></div>
+    </div>
+    ${target? `<div class="hint" style="margin-top:12px;">Applied to <strong>${target.number}</strong> — reduced its balance by up to the credit total.</div>` : (status!=='draft'? `<div class="hint" style="margin-top:12px;">Standalone credit sitting on the ${isCust?'customer':'supplier'} account.</div>`:'')}`;
+  const actions = [];
+  if(status==='draft'){
+    actions.push({label:'Delete', cls:'btn-danger', onclick:`deleteCreditNote('${cn.id}','${kind}')`});
+    actions.push({label:'Issue credit note', cls:'btn-primary', onclick:`issueCreditNoteAction('${cn.id}','${kind}')`});
+  } else if(status!=='void'){
+    actions.push({label:'Void', cls:'btn-danger', onclick:`voidCreditNoteAction('${cn.id}','${kind}')`});
+  }
+  openModal(cn.number, body, actions);
+}
+function issueCreditNoteAction(id, kind){ issueCreditNote(id, kind); closeModal(); showToast('Credit note issued'); navigate(kind==='customer'?'credit-notes':'supp-credit-notes'); }
+function deleteCreditNote(id, kind){
+  if(!confirm('Delete this draft credit note?')) return;
+  if(kind==='customer') S.creditNotes = S.creditNotes.filter(c=>c.id!==id);
+  else S.suppCreditNotes = S.suppCreditNotes.filter(c=>c.id!==id);
+  closeModal(); showToast('Credit note deleted'); navigate(kind==='customer'?'credit-notes':'supp-credit-notes');
+}
+function voidCreditNoteAction(id, kind){
+  if(!confirm('Void this credit note? This reverses its ledger entries.')) return;
+  voidCreditNote(id, kind); closeModal(); showToast('Credit note voided'); navigate(kind==='customer'?'credit-notes':'supp-credit-notes');
 }
 
 /* ============================= BANKING ============================= */
@@ -2462,6 +2947,128 @@ function renderCashbook(){
 }
 
 /* ============================= CONTACTS ============================= */
+/* Directory pages: Customers / Suppliers with Add · Transactions · Reports tabs */
+function renderContactDirectory(kind, tab){
+  const isCust = kind==='customer';
+  const label = isCust ? 'Customers' : 'Suppliers';
+  const singular = isCust ? 'Customer' : 'Supplier';
+  const docLabel = isCust ? 'Invoices' : 'Bills';
+  const list = S.contacts.filter(c=>c.type===kind).sort((a,b)=>a.name.localeCompare(b.name));
+  const docs = isCust ? S.invoices : S.bills;
+  const totalOf = isCust ? invoiceTotal : billTotal;
+
+  // sub-tab bar shared across the three views
+  const tabDefs = [
+    {id:'add', label:'Add a '+singular, view: isCust?'cust-add':'supp-add'},
+    {id:'transactions', label:'Transactions', view: isCust?'cust-transactions':'supp-transactions'},
+    {id:'reports', label:'Reports', view: isCust?'cust-reports':'supp-reports'},
+  ];
+  const subtitle = isCust ? 'Manage customers, their invoices and statements' : 'Manage suppliers, their bills and statements';
+  const topAction = `<button class="btn btn-primary" onclick="openContactForm('${kind}')">+ New ${singular}</button>`;
+  setTopbar(label, subtitle, topAction);
+
+  const tabsHtml = `<div class="tabs">${tabDefs.map(t=>
+    `<div class="tab ${tab===t.id?'active':''}" onclick="navigate('${t.view}')">${t.label}</div>`).join('')}</div>`;
+
+  let bodyHtml = '';
+
+  if(tab==='add'){
+    // list of contacts + inline add button; "add" opens the existing modal form pre-set to this kind
+    bodyHtml = `
+      <div class="card">
+        <div class="card-head"><h3>${label}</h3><button class="btn btn-primary btn-sm" onclick="openContactForm('${kind}')">+ Add a ${singular}</button></div>
+        ${list.length? `<table><thead><tr><th>Name</th><th>Email</th><th>Phone</th><th>VAT No.</th><th></th></tr></thead><tbody>
+          ${list.map(c=>`<tr>
+            <td><strong>${escapeHtml(c.name)}</strong></td>
+            <td>${escapeHtml(c.email||'—')}</td><td>${escapeHtml(c.phone||'—')}</td><td>${escapeHtml(c.vatNo||'—')}</td>
+            <td style="text-align:right;"><button class="icon-btn" onclick="openContactForm(null,'${c.id}')">Edit</button></td>
+          </tr>`).join('')}
+        </tbody></table>` : emptyState(`No ${label.toLowerCase()} yet`, `Add your first ${singular.toLowerCase()} to get started.`, `openContactForm('${kind}')`, `+ Add a ${singular}`)}
+      </div>`;
+  }
+
+  else if(tab==='transactions'){
+    const rows = docs.filter(d=>docStatus(d)!=='void').sort((a,b)=>(b.date||'').localeCompare(a.date||''));
+    const taxInvoiceView = isCust ? 'sales' : 'purchases';
+    const quotesView = isCust ? 'quotes' : 'supp-quotes';
+    const cnView = isCust ? 'credit-notes' : 'supp-credit-notes';
+    const invLabel = isCust ? 'Customer Tax Invoices' : 'Supplier Tax Invoices';
+    // sub-menu of document types — each routes to its dedicated register
+    const submenu = `
+      <div class="doc-submenu">
+        <button class="doc-tile" onclick="navigate('${taxInvoiceView}')">
+          <span class="doc-tile-ic">🧾</span>
+          <span class="doc-tile-body"><strong>${invLabel}</strong><span>${isCust?'Raise & track invoices':'Enter & track supplier bills'}</span></span>
+          <span class="doc-tile-count">${docs.filter(d=>docStatus(d)!=='void').length}</span>
+        </button>
+        <button class="doc-tile" onclick="navigate('${quotesView}')">
+          <span class="doc-tile-ic">📄</span>
+          <span class="doc-tile-body"><strong>${isCust?'Customer Quotes':'Supplier Quotes'}</strong><span>${isCust?'Quote, then convert to invoice':'Record RFQs, convert to bills'}</span></span>
+          <span class="doc-tile-count">${quoteCollection(kind).filter(q=>q.status!=='void').length}</span>
+        </button>
+        <button class="doc-tile" onclick="navigate('${cnView}')">
+          <span class="doc-tile-ic">↩︎</span>
+          <span class="doc-tile-body"><strong>${isCust?'Customer Credit Notes':'Supplier Credit Notes'}</strong><span>${isCust?'Credit a customer’s account':'Credit against a supplier'}</span></span>
+          <span class="doc-tile-count">${creditNoteCollection(kind).filter(c=>docStatus(c)!=='void').length}</span>
+        </button>
+      </div>`;
+    bodyHtml = submenu + `
+      <div class="card">
+        <div class="card-head"><h3>Recent ${docLabel.toLowerCase()} — all ${label.toLowerCase()}</h3>
+          <button class="btn btn-ghost btn-sm" onclick="navigate('${taxInvoiceView}')">Open ${isCust?'Sales':'Purchases'}</button></div>
+        ${rows.length? `<table><thead><tr><th>${isCust?'Invoice':'Bill'}</th><th>${singular}</th><th>Date</th><th>Due</th><th class="amt">Total</th><th class="amt">Balance</th><th>Status</th></tr></thead><tbody>
+          ${rows.map(d=>`<tr class="clickable" onclick="${isCust?`openInvoiceDetail('${d.id}')`:`openBillDetail('${d.id}')`}">
+            <td class="mono">${d.number}</td><td>${escapeHtml(contactName(d.contactId))}</td>
+            <td>${d.status==='draft'?'—':fmtDateShort(d.date)}</td><td>${fmtDateShort(d.dueDate)}</td>
+            <td class="amt num">${fmt(totalOf(d))}</td>
+            <td class="amt num ${docBalanceDue(d)>0?'neg':''}">${fmt(docBalanceDue(d))}</td>
+            <td>${statusBadge(docStatus(d))}</td>
+          </tr>`).join('')}
+        </tbody></table>` : emptyState(`No ${docLabel.toLowerCase()} yet`, `${docLabel} you raise for ${label.toLowerCase()} will appear here.`, null)}
+      </div>`;
+  }
+
+  else if(tab==='reports'){
+    // Balances-per-contact aging-style summary
+    const rowsData = list.map(c=>{
+      const cdocs = docs.filter(d=>d.contactId===c.id && docStatus(d)!=='void' && d.status!=='draft');
+      const total = cdocs.reduce((s,d)=>s+totalOf(d),0);
+      const paid = cdocs.reduce((s,d)=>s+docPaidAmount(d),0);
+      const due = cdocs.reduce((s,d)=>s+docBalanceDue(d),0);
+      const overdue = cdocs.filter(d=>docBalanceDue(d)>0 && d.dueDate && d.dueDate < todayStr()).reduce((s,d)=>s+docBalanceDue(d),0);
+      return {c, count:cdocs.length, total, paid, due, overdue};
+    }).filter(r=>r.count>0);
+    const grand = rowsData.reduce((a,r)=>({total:a.total+r.total, paid:a.paid+r.paid, due:a.due+r.due, overdue:a.overdue+r.overdue}), {total:0,paid:0,due:0,overdue:0});
+    const owedLabel = isCust ? 'Total owed to you' : 'Total you owe';
+    bodyHtml = `
+      <div class="grid-4" style="margin-bottom:18px;">
+        <div class="kpi"><div class="label">${label}</div><div class="value num">${list.length}</div><div class="delta">${rowsData.length} with activity</div></div>
+        <div class="kpi"><div class="label">${docLabel} total</div><div class="value num">${fmt(grand.total)}</div></div>
+        <div class="kpi"><div class="label">${owedLabel}</div><div class="value num ${grand.due>0?'neg':''}">${fmt(grand.due)}</div></div>
+        <div class="kpi"><div class="label">Overdue</div><div class="value num ${grand.overdue>0?'neg':''}">${fmt(grand.overdue)}</div></div>
+      </div>
+      <div class="card">
+        <div class="card-head"><h3>${label} balances</h3></div>
+        ${rowsData.length? `<table><thead><tr><th>${singular}</th><th class="amt">${docLabel}</th><th class="amt">Total</th><th class="amt">Paid</th><th class="amt">Balance</th><th class="amt">Overdue</th></tr></thead><tbody>
+          ${rowsData.sort((a,b)=>b.due-a.due).map(r=>`<tr>
+            <td><strong>${escapeHtml(r.c.name)}</strong></td>
+            <td class="amt num">${r.count}</td>
+            <td class="amt num">${fmt(r.total)}</td>
+            <td class="amt num pos">${fmt(r.paid)}</td>
+            <td class="amt num ${r.due>0?'neg':''}">${fmt(r.due)}</td>
+            <td class="amt num ${r.overdue>0?'neg':''}">${r.overdue>0?fmt(r.overdue):'—'}</td>
+          </tr>`).join('')}
+          <tr class="li-total-row"><td>Total</td><td class="amt num">${rowsData.reduce((s,r)=>s+r.count,0)}</td>
+            <td class="amt num">${fmt(grand.total)}</td><td class="amt num pos">${fmt(grand.paid)}</td>
+            <td class="amt num ${grand.due>0?'neg':''}">${fmt(grand.due)}</td>
+            <td class="amt num ${grand.overdue>0?'neg':''}">${fmt(grand.overdue)}</td></tr>
+        </tbody></table>` : emptyState('No activity yet', `Once you raise ${docLabel.toLowerCase()}, a balance summary per ${singular.toLowerCase()} shows here.`, null)}
+      </div>`;
+  }
+
+  document.getElementById('content').innerHTML = tabsHtml + bodyHtml;
+}
+
 function renderContacts(){
   setTopbar('Contacts', 'Customers and suppliers', `<button class="btn btn-primary" onclick="openContactForm()">+ New Contact</button>`);
   const list = [...S.contacts].sort((a,b)=>a.name.localeCompare(b.name));
@@ -2514,12 +3121,22 @@ function submitContactForm(editId){
   }else{
     S.contacts.push({id:uid('ct'), name, type, email, phone, vatNo, address});
   }
-  closeModal(); showToast('Contact saved'); navigate('contacts');
+  closeModal(); showToast('Contact saved'); navigate(contactReturnView(type));
+}
+function contactReturnView(type){
+  // if we're already on a directory page, stay in its section; otherwise go to all-contacts
+  const dirViews = ['cust-add','cust-transactions','cust-reports','supp-add','supp-transactions','supp-reports'];
+  if(dirViews.includes(VIEW)) return VIEW;
+  if(type==='customer') return 'cust-add';
+  if(type==='supplier') return 'supp-add';
+  return 'contacts';
 }
 function deleteContact(id){
   const used = S.invoices.some(i=>i.contactId===id) || S.bills.some(b=>b.contactId===id);
   if(used){ showToast('Cannot delete — contact has invoices or bills'); return; }
-  if(confirm('Delete this contact?')){ S.contacts = S.contacts.filter(c=>c.id!==id); closeModal(); showToast('Contact deleted'); navigate('contacts'); }
+  const c = S.contacts.find(x=>x.id===id);
+  const type = c ? c.type : null;
+  if(confirm('Delete this contact?')){ S.contacts = S.contacts.filter(c=>c.id!==id); closeModal(); showToast('Contact deleted'); navigate(contactReturnView(type)); }
 }
 
 /* ============================= CHART OF ACCOUNTS ============================= */
