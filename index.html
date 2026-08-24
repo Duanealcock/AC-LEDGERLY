@@ -192,6 +192,23 @@
   .doc-tile-count{ font-family:'IBM Plex Mono',monospace; font-size:13px; font-weight:600; color:var(--accent-dark); background:var(--surface-2); border-radius:20px; padding:2px 10px; }
   @media (max-width: 880px){ .doc-submenu{ grid-template-columns:1fr; } }
 
+  /* Report sub-menu pills */
+  .report-submenu{ display:flex; gap:8px; flex-wrap:wrap; margin-bottom:18px; }
+  .report-pill{ padding:8px 14px; border-radius:20px; font-size:12.5px; font-weight:600; border:1px solid var(--border-strong); cursor:pointer; color:var(--text-muted); background:#fff; font-family:inherit; }
+  .report-pill:hover{ border-color:var(--accent); color:var(--text); }
+  .report-pill.active{ background:var(--ink); color:#fff; border-color:var(--ink); }
+  .statement-card table thead th{ background:transparent; }
+
+  /* Printable statement document */
+  .statement-doc{ background:#fff; padding:40px 44px; max-width:780px; margin:0 auto 20px; color:#181818; border:1px solid var(--border); border-radius:8px; }
+  .statement-page-break{ page-break-after:always; height:0; }
+  .statement-actions{ display:flex; align-items:center; gap:8px; max-width:780px; margin:0 auto 6px; padding:8px 10px; background:var(--surface-2); border:1px solid var(--border); border-radius:8px; }
+  .statement-actions-name{ font-weight:600; font-size:13px; }
+  @media print{
+    #sidebar, #topbar, .toolbar, .report-submenu, .no-print { display:none !important; }
+    .statement-doc{ border:none; box-shadow:none; max-width:100%; padding:0; margin:0; }
+  }
+
   .balance-check{display:flex; align-items:center; gap:8px; font-size:12.5px; padding:8px 12px; border-radius:6px; background:var(--surface-2); border:1px solid var(--border); width:fit-content;}
   .balance-check .dot{width:8px; height:8px; border-radius:50%; background:var(--accent);}
 
@@ -1252,6 +1269,7 @@ function render(){
     'supp-quotes': ()=>renderQuotes('supplier'),
     'credit-notes': ()=>renderCreditNotes('customer'),
     'supp-credit-notes': ()=>renderCreditNotes('supplier'),
+    'statement-print': renderStatementPrintPage,
   };
   (map[VIEW]||renderDashboard)();
   saveState();
@@ -2948,6 +2966,61 @@ function renderCashbook(){
 
 /* ============================= CONTACTS ============================= */
 /* Directory pages: Customers / Suppliers with Add · Transactions · Reports tabs */
+/* ============================= CONTACT REPORTS ENGINE ============================= */
+// which sub-report is showing under Reports, and (for statements) which contact
+let CONTACT_REPORT_VIEW = 'balances'; // 'balances' | 'aging' | 'statement' | 'statement-run'
+let CONTACT_REPORT_ID = null;         // selected contact for single statement
+
+function daysBetween(a, b){ return Math.round((new Date(b+'T00:00:00') - new Date(a+'T00:00:00'))/86400000); }
+
+// Aging buckets for a set of docs as of a date: current / 30 / 60 / 90+
+function agingForDocs(cdocs, asOf){
+  const b = {current:0, d30:0, d60:0, d90:0, total:0};
+  cdocs.forEach(d=>{
+    const bal = docBalanceDue(d);
+    if(bal<=0) return;
+    const overdueDays = d.dueDate ? daysBetween(d.dueDate, asOf) : 0;
+    if(overdueDays<=0) b.current+=bal;
+    else if(overdueDays<=30) b.d30+=bal;
+    else if(overdueDays<=60) b.d60+=bal;
+    else b.d90+=bal;
+    b.total+=bal;
+  });
+  return b;
+}
+
+// Build a running statement of documents + payments for one contact, chronologically.
+function buildStatement(contact, kind, fromDate, toDate){
+  const isCust = kind==='customer';
+  const docs = (isCust ? S.invoices : S.bills).filter(d=>d.contactId===contact.id && d.status!=='draft' && docStatus(d)!=='void');
+  const cns = (isCust ? S.creditNotes : S.suppCreditNotes).filter(c=>c.contactId===contact.id && c.status!=='draft' && docStatus(c)!=='void');
+  const totalOf = isCust ? invoiceTotal : billTotal;
+  const events = [];
+  docs.forEach(d=>{
+    events.push({date:d.date, ref:d.number, type:isCust?'Invoice':'Bill', charge:totalOf(d), credit:0, sort:d.date+'-1'});
+    (d.payments||[]).forEach(p=>{
+      const isCreditAlloc = !!p.creditNoteId;
+      events.push({date:p.date, ref:p.memo|| (isCust?'Receipt':'Payment'), type:isCreditAlloc?'Credit applied':(isCust?'Payment received':'Payment made'), charge:0, credit:p.amount, sort:p.date+'-2'});
+    });
+  });
+  cns.forEach(c=>{
+    // standalone credit notes (not allocated) show as a credit line
+    if(!c.appliesToId){
+      events.push({date:c.date, ref:c.number, type:'Credit note', charge:0, credit:creditNoteTotal(c), sort:c.date+'-1'});
+    }
+  });
+  events.sort((a,b)=> a.date.localeCompare(b.date) || a.sort.localeCompare(b.sort));
+  let running=0, openingBalance=0;
+  const rows=[];
+  events.forEach(e=>{
+    const inRange = (!fromDate || e.date>=fromDate) && (!toDate || e.date<=toDate);
+    running += e.charge - e.credit;
+    if(fromDate && e.date < fromDate){ openingBalance = running; return; }
+    if(inRange) rows.push({...e, balance:running});
+  });
+  return {rows, openingBalance, closingBalance:running};
+}
+
 function renderContactDirectory(kind, tab){
   const isCust = kind==='customer';
   const label = isCust ? 'Customers' : 'Suppliers';
@@ -2956,7 +3029,6 @@ function renderContactDirectory(kind, tab){
   const list = S.contacts.filter(c=>c.type===kind).sort((a,b)=>a.name.localeCompare(b.name));
   const docs = isCust ? S.invoices : S.bills;
   const totalOf = isCust ? invoiceTotal : billTotal;
-
   // sub-tab bar shared across the three views
   const tabDefs = [
     {id:'add', label:'Add a '+singular, view: isCust?'cust-add':'supp-add'},
@@ -3029,7 +3101,31 @@ function renderContactDirectory(kind, tab){
   }
 
   else if(tab==='reports'){
-    // Balances-per-contact aging-style summary
+    bodyHtml = renderContactReports(kind, list, docs, totalOf, isCust, label, singular, docLabel);
+  }
+
+  document.getElementById('content').innerHTML = tabsHtml + bodyHtml;
+}
+
+function contactReportsSubmenu(kind, active){
+  const defs = [
+    {id:'balances', label:'Balances'},
+    {id:'aging', label:'Balances — days outstanding'},
+    {id:'statement', label:'Customer statement'},
+    {id:'statement-run', label:'Statement run'},
+  ];
+  if(kind==='supplier'){ defs[2].label='Supplier statement'; }
+  return `<div class="report-submenu">${defs.map(d=>
+    `<button class="report-pill ${active===d.id?'active':''}" onclick="CONTACT_REPORT_VIEW='${d.id}'; navigate('${kind==='customer'?'cust-reports':'supp-reports'}')">${d.label}</button>`
+  ).join('')}</div>`;
+}
+
+function renderContactReports(kind, list, docs, totalOf, isCust, label, singular, docLabel){
+  const view = CONTACT_REPORT_VIEW || 'balances';
+  const submenu = contactReportsSubmenu(kind, view);
+
+  // ---- BALANCES (original summary) ----
+  if(view==='balances'){
     const rowsData = list.map(c=>{
       const cdocs = docs.filter(d=>d.contactId===c.id && docStatus(d)!=='void' && d.status!=='draft');
       const total = cdocs.reduce((s,d)=>s+totalOf(d),0);
@@ -3040,7 +3136,7 @@ function renderContactDirectory(kind, tab){
     }).filter(r=>r.count>0);
     const grand = rowsData.reduce((a,r)=>({total:a.total+r.total, paid:a.paid+r.paid, due:a.due+r.due, overdue:a.overdue+r.overdue}), {total:0,paid:0,due:0,overdue:0});
     const owedLabel = isCust ? 'Total owed to you' : 'Total you owe';
-    bodyHtml = `
+    return submenu + `
       <div class="grid-4" style="margin-bottom:18px;">
         <div class="kpi"><div class="label">${label}</div><div class="value num">${list.length}</div><div class="delta">${rowsData.length} with activity</div></div>
         <div class="kpi"><div class="label">${docLabel} total</div><div class="value num">${fmt(grand.total)}</div></div>
@@ -3050,7 +3146,7 @@ function renderContactDirectory(kind, tab){
       <div class="card">
         <div class="card-head"><h3>${label} balances</h3></div>
         ${rowsData.length? `<table><thead><tr><th>${singular}</th><th class="amt">${docLabel}</th><th class="amt">Total</th><th class="amt">Paid</th><th class="amt">Balance</th><th class="amt">Overdue</th></tr></thead><tbody>
-          ${rowsData.sort((a,b)=>b.due-a.due).map(r=>`<tr>
+          ${rowsData.sort((a,b)=>b.due-a.due).map(r=>`<tr class="clickable" onclick="openContactStatement('${r.c.id}','${kind}')">
             <td><strong>${escapeHtml(r.c.name)}</strong></td>
             <td class="amt num">${r.count}</td>
             <td class="amt num">${fmt(r.total)}</td>
@@ -3063,10 +3159,346 @@ function renderContactDirectory(kind, tab){
             <td class="amt num ${grand.due>0?'neg':''}">${fmt(grand.due)}</td>
             <td class="amt num ${grand.overdue>0?'neg':''}">${fmt(grand.overdue)}</td></tr>
         </tbody></table>` : emptyState('No activity yet', `Once you raise ${docLabel.toLowerCase()}, a balance summary per ${singular.toLowerCase()} shows here.`, null)}
-      </div>`;
+      </div>
+      <div class="hint" style="margin-top:10px;">Tip: click any ${singular.toLowerCase()} row to open their statement.</div>`;
   }
 
-  document.getElementById('content').innerHTML = tabsHtml + bodyHtml;
+  // ---- AGING: balances — days outstanding ----
+  if(view==='aging'){
+    const asOf = todayStr();
+    const rowsData = list.map(c=>{
+      const cdocs = docs.filter(d=>d.contactId===c.id && docStatus(d)!=='void' && d.status!=='draft' && docBalanceDue(d)>0);
+      const a = agingForDocs(cdocs, asOf);
+      return {c, a};
+    }).filter(r=>r.a.total>0.004);
+    const g = rowsData.reduce((acc,r)=>({current:acc.current+r.a.current, d30:acc.d30+r.a.d30, d60:acc.d60+r.a.d60, d90:acc.d90+r.a.d90, total:acc.total+r.a.total}), {current:0,d30:0,d60:0,d90:0,total:0});
+    return submenu + `
+      <div class="grid-4" style="margin-bottom:18px;">
+        <div class="kpi"><div class="label">Current</div><div class="value num">${fmt(g.current)}</div><div class="delta">Not yet due</div></div>
+        <div class="kpi"><div class="label">1–30 days</div><div class="value num ${g.d30>0?'neg':''}">${fmt(g.d30)}</div></div>
+        <div class="kpi"><div class="label">31–60 days</div><div class="value num ${g.d60>0?'neg':''}">${fmt(g.d60)}</div></div>
+        <div class="kpi"><div class="label">61–90+ days</div><div class="value num ${g.d90>0?'neg':''}">${fmt(g.d90)}</div></div>
+      </div>
+      <div class="card">
+        <div class="card-head"><h3>${label} — days outstanding (as of ${fmtDate(asOf)})</h3>
+          <button class="btn btn-ghost btn-sm" onclick="window.print()">🖶 Print</button></div>
+        ${rowsData.length? `<table><thead><tr><th>${singular}</th><th class="amt">Current</th><th class="amt">1–30</th><th class="amt">31–60</th><th class="amt">61–90+</th><th class="amt">Total due</th></tr></thead><tbody>
+          ${rowsData.sort((a,b)=>b.a.total-a.a.total).map(r=>`<tr class="clickable" onclick="openContactStatement('${r.c.id}','${kind}')">
+            <td><strong>${escapeHtml(r.c.name)}</strong></td>
+            <td class="amt num">${r.a.current?fmt(r.a.current):'—'}</td>
+            <td class="amt num ${r.a.d30>0?'neg':''}">${r.a.d30?fmt(r.a.d30):'—'}</td>
+            <td class="amt num ${r.a.d60>0?'neg':''}">${r.a.d60?fmt(r.a.d60):'—'}</td>
+            <td class="amt num ${r.a.d90>0?'neg':''}">${r.a.d90?fmt(r.a.d90):'—'}</td>
+            <td class="amt num"><strong>${fmt(r.a.total)}</strong></td>
+          </tr>`).join('')}
+          <tr class="li-total-row"><td>Total</td>
+            <td class="amt num">${fmt(g.current)}</td><td class="amt num">${fmt(g.d30)}</td>
+            <td class="amt num">${fmt(g.d60)}</td><td class="amt num">${fmt(g.d90)}</td>
+            <td class="amt num">${fmt(g.total)}</td></tr>
+        </tbody></table>` : emptyState('Nothing outstanding', `No ${isCust?'customers owe you':'balances owed to suppliers'} right now.`, null)}
+      </div>
+      <div class="hint" style="margin-top:10px;">Buckets are based on each ${docLabel.slice(0,-1).toLowerCase()}'s due date. Click a row to open the statement.</div>`;
+  }
+
+  // ---- SINGLE STATEMENT ----
+  if(view==='statement'){
+    const withActivity = list.filter(c=> (docs.some(d=>d.contactId===c.id && d.status!=='draft' && docStatus(d)!=='void')) );
+    if(!CONTACT_REPORT_ID && withActivity.length) CONTACT_REPORT_ID = withActivity[0].id;
+    const contact = list.find(c=>c.id===CONTACT_REPORT_ID);
+    const picker = `<div class="card" style="margin-bottom:14px;"><div class="card-body" style="display:flex; gap:10px; align-items:center; flex-wrap:wrap;">
+        <label style="margin:0;">${singular}</label>
+        <select style="max-width:280px;" onchange="CONTACT_REPORT_ID=this.value; navigate('${kind==='customer'?'cust-reports':'supp-reports'}')">
+          ${list.map(c=>`<option value="${c.id}" ${c.id===CONTACT_REPORT_ID?'selected':''}>${escapeHtml(c.name)}</option>`).join('')}
+        </select>
+        ${contact? `<span style="flex:1;"></span>
+          <button class="btn btn-ghost btn-sm" onclick="copyStatementText('${contact.id}','${kind}')">⧉ Copy text</button>
+          <button class="btn btn-ghost btn-sm" onclick="downloadStatementHtml('${contact.id}','${kind}')">⬇ Download</button>
+          ${contact.email? `<button class="btn btn-ghost btn-sm" onclick="emailStatement('${contact.id}','${kind}')">✉ Email</button>`:''}
+          <button class="btn btn-ghost btn-sm" onclick="printStatement('${contact.id}','${kind}')">🖶 Print / PDF</button>`:''}
+      </div></div>`;
+    if(!contact) return submenu + picker + emptyState('No '+label.toLowerCase(), `Add a ${singular.toLowerCase()} to produce a statement.`, null);
+    return submenu + picker + statementCardHtml(contact, kind);
+  }
+
+  // ---- STATEMENT RUN (all with a balance) ----
+  if(view==='statement-run'){
+    const asOf = todayStr();
+    const withBalance = list.filter(c=> docs.some(d=>d.contactId===c.id && d.status!=='draft' && docStatus(d)!=='void' && docBalanceDue(d)>0));
+    const totalDue = withBalance.reduce((s,c)=> s + docs.filter(d=>d.contactId===c.id).reduce((t,d)=>t+docBalanceDue(d),0), 0);
+    return submenu + `
+      <div class="card" style="margin-bottom:14px;"><div class="card-body" style="display:flex; align-items:center; justify-content:space-between; flex-wrap:wrap; gap:10px;">
+        <div><strong>${withBalance.length}</strong> ${label.toLowerCase()} with an outstanding balance · total <strong class="num">${fmt(totalDue)}</strong></div>
+        <button class="btn btn-primary btn-sm" onclick="printStatementRun('${kind}')">🖶 Print all statements</button>
+      </div></div>
+      ${withBalance.length? withBalance.map(c=>statementCardHtml(c, kind, true)).join('') :
+        emptyState('Nothing to send', `No ${label.toLowerCase()} currently have an outstanding balance.`, null)}`;
+  }
+
+  return submenu;
+}
+
+// A single statement rendered as a card (used in single view, run, and print)
+function statementCardHtml(contact, kind, compact){
+  const isCust = kind==='customer';
+  const st = buildStatement(contact, kind, null, null);
+  const openDocs = (isCust?S.invoices:S.bills).filter(d=>d.contactId===contact.id && d.status!=='draft' && docStatus(d)!=='void' && docBalanceDue(d)>0);
+  const aging = agingForDocs(openDocs, todayStr());
+  const rows = st.rows;
+  return `
+    <div class="card statement-card" style="margin-bottom:16px;">
+      <div class="card-head">
+        <div><h3>${escapeHtml(contact.name)}</h3>
+          <div style="font-size:11.5px; color:var(--text-muted); margin-top:2px;">Statement as of ${fmtDate(todayStr())}${contact.email? ' · '+escapeHtml(contact.email):''}</div></div>
+        <div style="text-align:right;"><div style="font-size:11px; color:var(--text-muted);">Balance ${isCust?'owing to you':'you owe'}</div>
+          <div class="num" style="font-size:18px; font-weight:700; ${st.closingBalance>0?'color:var(--red);':''}">${fmt(st.closingBalance)}</div></div>
+      </div>
+      <div class="card-body" style="padding-top:12px; padding-bottom:6px;">
+        ${rows.length? `<table><thead><tr><th>Date</th><th>Type</th><th>Reference</th><th class="amt">Charge</th><th class="amt">Credit</th><th class="amt">Balance</th></tr></thead><tbody>
+          ${rows.map(e=>`<tr>
+            <td>${fmtDateShort(e.date)}</td><td>${e.type}</td><td class="mono">${escapeHtml(e.ref)}</td>
+            <td class="amt num">${e.charge?fmt(e.charge):''}</td>
+            <td class="amt num pos">${e.credit?fmt(e.credit):''}</td>
+            <td class="amt num">${fmt(e.balance)}</td></tr>`).join('')}
+        </tbody></table>` : `<p style="color:var(--text-muted); font-size:13px; padding:8px 0;">No transactions.</p>`}
+      </div>
+      <div class="card-body" style="border-top:1px solid var(--border); padding-top:10px;">
+        <div style="display:flex; gap:18px; flex-wrap:wrap; font-size:12px;">
+          <span style="color:var(--text-muted);">Current <strong class="num" style="color:var(--text);">${fmt(aging.current)}</strong></span>
+          <span style="color:var(--text-muted);">1–30 <strong class="num" style="color:var(--text);">${fmt(aging.d30)}</strong></span>
+          <span style="color:var(--text-muted);">31–60 <strong class="num" style="color:var(--text);">${fmt(aging.d60)}</strong></span>
+          <span style="color:var(--text-muted);">61–90+ <strong class="num" style="color:var(--text);">${fmt(aging.d90)}</strong></span>
+          <span style="color:var(--text-muted); margin-left:auto;">Total due <strong class="num" style="color:var(--text);">${fmt(aging.total)}</strong></span>
+        </div>
+      </div>
+    </div>`;
+}
+
+function openContactStatement(contactId, kind){
+  CONTACT_REPORT_VIEW = 'statement';
+  CONTACT_REPORT_ID = contactId;
+  navigate(kind==='customer'?'cust-reports':'supp-reports');
+}
+
+/* ---- Statement printing (portrait, uses business header) ---- */
+let STATEMENT_PRINT = null; // {kind, contactIds:[]}
+function printStatement(contactId, kind){
+  STATEMENT_PRINT = {kind, contactIds:[contactId]};
+  VIEW='statement-print'; render();
+}
+function printStatementRun(kind){
+  const isCust = kind==='customer';
+  const docs = isCust?S.invoices:S.bills;
+  const list = S.contacts.filter(c=>c.type===kind);
+  const withBalance = list.filter(c=> docs.some(d=>d.contactId===c.id && d.status!=='draft' && docStatus(d)!=='void' && docBalanceDue(d)>0));
+  if(!withBalance.length){ showToast('No statements to print'); return; }
+  STATEMENT_PRINT = {kind, contactIds:withBalance.map(c=>c.id)};
+  VIEW='statement-print'; render();
+}
+function renderStatementPrintPage(){
+  if(!STATEMENT_PRINT){ navigate('cust-reports'); return; }
+  const {kind, contactIds} = STATEMENT_PRINT;
+  const isCust = kind==='customer';
+  const biz = S.settings;
+  setTopbar('Statements', `${contactIds.length} statement${contactIds.length===1?'':'s'}`, `
+    <button class="btn btn-ghost" onclick="navigate('${kind==='customer'?'cust-reports':'supp-reports'}')">← Back</button>
+    ${contactIds.length>1? `<button class="btn btn-ghost" onclick="downloadAllStatementsHtml('${kind}')">⬇ Download all (HTML)</button>`:''}
+    <button class="btn btn-primary" onclick="window.print()">🖶 Print / Save as PDF</button>
+  `);
+  const pages = contactIds.map(cid=>{
+    const contact = S.contacts.find(c=>c.id===cid);
+    if(!contact) return '';
+    const perStatementBar = `
+      <div class="statement-actions no-print">
+        <span class="statement-actions-name">${escapeHtml(contact.name)}</span>
+        <span style="flex:1;"></span>
+        <button class="btn btn-ghost btn-sm" onclick="copyStatementText('${contact.id}','${kind}')">⧉ Copy text</button>
+        <button class="btn btn-ghost btn-sm" onclick="downloadStatementHtml('${contact.id}','${kind}')">⬇ Download</button>
+        ${contact.email? `<button class="btn btn-ghost btn-sm" onclick="emailStatement('${contact.id}','${kind}')">✉ Email</button>`
+          : `<button class="btn btn-ghost btn-sm" onclick="showToast('No email on file — add one on the ${isCust?'customer':'supplier'} record')">✉ Email</button>`}
+      </div>`;
+    return perStatementBar + statementDocHtml(contact, kind);
+  }).join('<div class="statement-page-break"></div>');
+  document.getElementById('content').innerHTML = pages;
+}
+
+// The printable statement document markup for one contact (shared by screen + export).
+function statementDocHtml(contact, kind){
+  const isCust = kind==='customer';
+  const biz = S.settings;
+  const st = buildStatement(contact, kind, null, null);
+  const openDocs = (isCust?S.invoices:S.bills).filter(d=>d.contactId===contact.id && d.status!=='draft' && docStatus(d)!=='void' && docBalanceDue(d)>0);
+  const aging = agingForDocs(openDocs, todayStr());
+  const bizAddr = (biz.businessAddress||'').split('\n').map(l=>l.trim()).filter(Boolean);
+  const custAddr = (contact.address||'').split('\n').map(l=>l.trim()).filter(Boolean);
+  return `<div class="statement-doc">
+      <div style="display:flex; justify-content:space-between; align-items:flex-start;">
+        <div>
+          ${biz.invoiceLogoDataUrl? `<img class="doc-logo" src="${biz.invoiceLogoDataUrl}" alt="Logo">`:''}
+          <div style="font-weight:700; font-size:15px;">${escapeHtml(biz.businessName||'')}</div>
+          ${bizAddr.map(l=>`<div style="font-size:11px; color:#444;">${escapeHtml(l)}</div>`).join('')}
+          ${biz.businessVatNo?`<div style="font-size:11px; color:#444;">VAT: ${escapeHtml(biz.businessVatNo)}</div>`:''}
+        </div>
+        <div style="text-align:right;">
+          <div class="doc-title">STATEMENT</div>
+          <div style="font-size:11.5px; color:#555; margin-top:6px;">Date: <strong>${fmtDate(todayStr())}</strong></div>
+        </div>
+      </div>
+      <div style="margin:22px 0 16px; padding-top:14px; border-top:1px solid #ddd;">
+        <div class="doc-label">To</div>
+        <div style="font-weight:700; font-size:14px; margin-top:3px;">${escapeHtml(contact.name)}</div>
+        ${custAddr.map(l=>`<div style="font-size:11px; color:#444;">${escapeHtml(l)}</div>`).join('')}
+        ${contact.vatNo?`<div style="font-size:11px; color:#444;">VAT: ${escapeHtml(contact.vatNo)}</div>`:''}
+      </div>
+      <table class="doc-items"><thead><tr><th>Date</th><th>Type</th><th>Reference</th><th class="r">Charge</th><th class="r">Credit</th><th class="r">Balance</th></tr></thead>
+        <tbody>${st.rows.map(e=>`<tr><td>${fmtDateShort(e.date)}</td><td>${e.type}</td><td>${escapeHtml(e.ref)}</td>
+          <td class="r">${e.charge?fmt(e.charge):''}</td><td class="r">${e.credit?fmt(e.credit):''}</td><td class="r">${fmt(e.balance)}</td></tr>`).join('')}</tbody>
+      </table>
+      <div style="display:flex; justify-content:space-between; margin-top:22px; align-items:flex-start; gap:20px;">
+        <div style="font-size:11px; color:#555;">
+          <div style="font-weight:700; margin-bottom:5px; text-transform:uppercase; letter-spacing:.5px; font-size:9.5px; color:#999;">Ageing</div>
+          <table style="border-collapse:collapse; font-size:11px;">
+            <tr><td style="padding:2px 14px 2px 0; color:#666;">Current</td><td class="r num">${fmt(aging.current)}</td></tr>
+            <tr><td style="padding:2px 14px 2px 0; color:#666;">1–30 days</td><td class="r num">${fmt(aging.d30)}</td></tr>
+            <tr><td style="padding:2px 14px 2px 0; color:#666;">31–60 days</td><td class="r num">${fmt(aging.d60)}</td></tr>
+            <tr><td style="padding:2px 14px 2px 0; color:#666;">61–90+ days</td><td class="r num">${fmt(aging.d90)}</td></tr>
+          </table>
+        </div>
+        <div style="width:240px;">
+          <div class="doc-balance"><div class="lbl">Balance ${isCust?'Due':'Owed'}</div><div class="amt num">${fmt(st.closingBalance)}</div></div>
+        </div>
+      </div>
+      ${biz.bankName? `<div style="margin-top:22px; font-size:11px; color:#444; border-top:1px solid #eee; padding-top:10px;">
+        Please make payment to: ${escapeHtml(biz.bankName)}${biz.bankBranch? ' · Branch '+escapeHtml(biz.bankBranch):''}${biz.bankAccountNumber? ' · Acc '+escapeHtml(biz.bankAccountNumber):''}</div>`:''}
+      ${biz.invoiceFooterNote? `<div style="margin-top:12px; font-size:11px; color:#555; white-space:pre-line;">${escapeHtml(biz.invoiceFooterNote)}</div>`:''}
+    </div>`;
+}
+
+/* ---- Per-statement export helpers ---- */
+function statementPlainText(contact, kind){
+  const isCust = kind==='customer';
+  const biz = S.settings;
+  const st = buildStatement(contact, kind, null, null);
+  const openDocs = (isCust?S.invoices:S.bills).filter(d=>d.contactId===contact.id && d.status!=='draft' && docStatus(d)!=='void' && docBalanceDue(d)>0);
+  const aging = agingForDocs(openDocs, todayStr());
+  const cur = biz.currency||'R';
+  const money = n => cur + (Number(n)||0).toLocaleString('en-ZA',{minimumFractionDigits:2, maximumFractionDigits:2});
+  const pad = (s,n)=> String(s).padEnd(n).slice(0,n);
+  const padL = (s,n)=> String(s).padStart(n);
+  const lines = [];
+  lines.push(`STATEMENT — ${biz.businessName||''}`);
+  lines.push(`Date: ${fmtDate(todayStr())}`);
+  if(biz.businessVatNo) lines.push(`VAT: ${biz.businessVatNo}`);
+  lines.push('');
+  lines.push(`To: ${contact.name}`);
+  if(contact.email) lines.push(contact.email);
+  lines.push('');
+  lines.push(`${pad('Date',12)}${pad('Type',18)}${pad('Reference',14)}${padL('Charge',12)}${padL('Credit',12)}${padL('Balance',12)}`);
+  lines.push('-'.repeat(80));
+  st.rows.forEach(e=>{
+    lines.push(`${pad(fmtDateShort(e.date),12)}${pad(e.type,18)}${pad(e.ref,14)}${padL(e.charge?money(e.charge):'',12)}${padL(e.credit?money(e.credit):'',12)}${padL(money(e.balance),12)}`);
+  });
+  lines.push('-'.repeat(80));
+  lines.push('');
+  lines.push(`Ageing:  Current ${money(aging.current)}  | 1-30 ${money(aging.d30)}  | 31-60 ${money(aging.d60)}  | 61-90+ ${money(aging.d90)}`);
+  lines.push(`Balance ${isCust?'Due':'Owed'}: ${money(st.closingBalance)}`);
+  if(biz.bankName) lines.push(`\nPayment to: ${biz.bankName}${biz.bankBranch? ' · Branch '+biz.bankBranch:''}${biz.bankAccountNumber? ' · Acc '+biz.bankAccountNumber:''}`);
+  if(biz.invoiceFooterNote) lines.push('\n'+biz.invoiceFooterNote);
+  return lines.join('\n');
+}
+function copyStatementText(contactId, kind){
+  const contact = S.contacts.find(c=>c.id===contactId);
+  if(!contact) return;
+  const text = statementPlainText(contact, kind);
+  const done = ()=>showToast('Statement text copied — paste it into an email');
+  if(navigator.clipboard && navigator.clipboard.writeText){
+    navigator.clipboard.writeText(text).then(done).catch(()=>fallbackCopy(text, done));
+  } else { fallbackCopy(text, done); }
+}
+function fallbackCopy(text, done){
+  const ta = document.createElement('textarea');
+  ta.value = text; ta.style.position='fixed'; ta.style.opacity='0';
+  document.body.appendChild(ta); ta.focus(); ta.select();
+  try{ document.execCommand('copy'); done && done(); }
+  catch(e){ showToast('Could not copy automatically'); }
+  document.body.removeChild(ta);
+}
+function statementStandaloneHtml(contact, kind){
+  // a self-contained printable HTML file (good as an email attachment or to "print to PDF")
+  const inner = statementDocHtml(contact, kind);
+  return `<!DOCTYPE html><html><head><meta charset="UTF-8"><title>Statement — ${escapeHtml(contact.name)}</title>
+<style>
+  body{ font-family: Arial, Helvetica, sans-serif; color:#181818; margin:0; padding:24px; background:#fff; }
+  .statement-doc{ max-width:760px; margin:0 auto; }
+  .doc-title{ font-size:19px; font-weight:700; letter-spacing:1px; }
+  .doc-label{ font-size:9.5px; color:#999; text-transform:uppercase; letter-spacing:1px; font-weight:700; }
+  .doc-logo{ max-width:200px; max-height:70px; object-fit:contain; margin-bottom:8px; display:block; }
+  table.doc-items{ width:100%; border-collapse:collapse; margin-top:8px; }
+  table.doc-items th{ text-align:left; font-size:10px; text-transform:uppercase; color:#888; border-bottom:1px solid #ccc; padding:7px 5px; }
+  table.doc-items td{ padding:8px 5px; font-size:12.5px; border-bottom:1px solid #eee; }
+  table.doc-items .r{ text-align:right; }
+  .num{ font-variant-numeric: tabular-nums; }
+  .doc-balance .lbl{ font-size:9.5px; color:#999; text-transform:uppercase; letter-spacing:1px; font-weight:700; }
+  .doc-balance .amt{ font-size:22px; font-weight:700; text-align:right; }
+</style></head><body>${inner}</body></html>`;
+}
+function downloadStatementHtml(contactId, kind){
+  const contact = S.contacts.find(c=>c.id===contactId);
+  if(!contact) return;
+  const safe = (contact.name||'statement').toLowerCase().replace(/[^a-z0-9]+/g,'-').replace(/(^-|-$)/g,'');
+  const blob = new Blob([statementStandaloneHtml(contact, kind)], {type:'text/html'});
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a'); a.href=url; a.download=`statement-${safe}-${todayStr()}.html`;
+  document.body.appendChild(a); a.click(); document.body.removeChild(a);
+  setTimeout(()=>URL.revokeObjectURL(url), 1000);
+  showToast('Statement downloaded — open it and print to PDF, or attach to an email');
+}
+function downloadAllStatementsHtml(kind){
+  if(!STATEMENT_PRINT) return;
+  const docsHtml = STATEMENT_PRINT.contactIds.map(cid=>{
+    const c = S.contacts.find(x=>x.id===cid);
+    return c ? `<div style="page-break-after:always;">${statementDocHtml(c, kind)}</div>` : '';
+  }).join('');
+  const full = `<!DOCTYPE html><html><head><meta charset="UTF-8"><title>Statements ${todayStr()}</title>
+<style>body{font-family:Arial,Helvetica,sans-serif;color:#181818;margin:0;padding:24px;}
+.statement-doc{max-width:760px;margin:0 auto 30px;} .doc-title{font-size:19px;font-weight:700;letter-spacing:1px;}
+.doc-label{font-size:9.5px;color:#999;text-transform:uppercase;letter-spacing:1px;font-weight:700;}
+.doc-logo{max-width:200px;max-height:70px;object-fit:contain;margin-bottom:8px;display:block;}
+table.doc-items{width:100%;border-collapse:collapse;margin-top:8px;} table.doc-items th{text-align:left;font-size:10px;text-transform:uppercase;color:#888;border-bottom:1px solid #ccc;padding:7px 5px;}
+table.doc-items td{padding:8px 5px;font-size:12.5px;border-bottom:1px solid #eee;} table.doc-items .r{text-align:right;}
+.num{font-variant-numeric:tabular-nums;} .doc-balance .lbl{font-size:9.5px;color:#999;text-transform:uppercase;letter-spacing:1px;font-weight:700;} .doc-balance .amt{font-size:22px;font-weight:700;text-align:right;}
+</style></head><body>${docsHtml}</body></html>`;
+  const blob = new Blob([full], {type:'text/html'});
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a'); a.href=url; a.download=`statements-${kind}-${todayStr()}.html`;
+  document.body.appendChild(a); a.click(); document.body.removeChild(a);
+  setTimeout(()=>URL.revokeObjectURL(url), 1000);
+  showToast('All statements downloaded in one file');
+}
+function emailStatement(contactId, kind){
+  const contact = S.contacts.find(c=>c.id===contactId);
+  if(!contact || !contact.email){ showToast('No email on file for this contact'); return; }
+  const isCust = kind==='customer';
+  const st = buildStatement(contact, kind, null, null);
+  const biz = S.settings;
+  const subject = `Statement from ${biz.businessName||'us'} — ${fmtDate(todayStr())}`;
+  const cur = biz.currency||'R';
+  const bal = cur + (st.closingBalance||0).toLocaleString('en-ZA',{minimumFractionDigits:2, maximumFractionDigits:2});
+  const bodyLines = [
+    `Dear ${contact.name},`, '',
+    `Please find your statement of account as of ${fmtDate(todayStr())} below.`,
+    `Balance ${isCust?'due':'owed'}: ${bal}`, '',
+    statementPlainText(contact, kind), '',
+    `Kind regards,`, biz.businessName||''
+  ];
+  const mailto = `mailto:${encodeURIComponent(contact.email)}?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(bodyLines.join('\n'))}`;
+  // mailto has length limits; if very long, copy text and open a blank compose instead
+  if(mailto.length > 1900){
+    copyStatementText(contactId, kind);
+    window.location.href = `mailto:${encodeURIComponent(contact.email)}?subject=${encodeURIComponent(subject)}`;
+    showToast('Statement copied to clipboard — paste it into the email that just opened');
+  } else {
+    window.location.href = mailto;
+  }
 }
 
 function renderContacts(){
