@@ -203,7 +203,19 @@
     #menu-toggle{display:inline-flex !important;}
   }
 
-  /* Printable invoice document */
+  /* Cashbook grid */
+  .cashbook-table{ width:100%; border-collapse:collapse; min-width:1080px; }
+  .cashbook-table thead th{ text-align:left; font-size:10px; text-transform:uppercase; letter-spacing:.6px; color:var(--text-muted); padding:8px 6px; border-bottom:1px solid var(--border); font-weight:700; background:var(--surface-2); white-space:nowrap; }
+  .cashbook-table tbody td{ padding:5px 6px; border-bottom:1px solid var(--border); vertical-align:top; }
+  .cashbook-table input, .cashbook-table select{ font-size:12.5px; padding:6px 7px; width:100%; }
+  .cashbook-table input[type=number]{ text-align:right; }
+  .cashbook-table select{ color:var(--text); }
+  .cashbook-table .cb-actions{ display:flex; gap:4px; padding-top:8px; }
+  .cb-add-btn, .cb-del-btn{ width:24px; height:24px; border-radius:50%; border:none; cursor:pointer; color:#fff; font-size:12px; font-weight:700; display:inline-flex; align-items:center; justify-content:center; line-height:1; }
+  .cb-add-btn{ background:var(--accent); }
+  .cb-add-btn:hover{ background:var(--accent-dark); }
+  .cb-del-btn{ background:var(--red); }
+  .cb-del-btn:hover{ filter:brightness(0.9); }
   .invoice-doc{ background:#fff; padding:44px 50px; max-width:900px; margin:0 auto; color:#181818; border:1px solid var(--border); border-radius:8px; }
   .invoice-doc .doc-title{ text-align:right; font-size:19px; letter-spacing:1.2px; margin:0 0 8px; font-weight:700; }
   .invoice-doc .doc-meta table{ margin-left:auto; border-collapse:collapse; }
@@ -280,6 +292,7 @@ const NAV = [
   {id:'purchases', label:'Purchases / Bills', ic:'↙'},
   {id:'banking', label:'Banking', ic:'▤'},
   {id:'journal', label:'Journal Entries', ic:'✎'},
+  {id:'cashbook', label:'Cashbook', ic:'▥'},
   {sec:'Records'},
   {id:'contacts', label:'Contacts', ic:'●'},
   {id:'accounts', label:'Chart of Accounts', ic:'≡'},
@@ -310,6 +323,8 @@ function defaultData(){
       {id:'acc_software', code:'6030', name:'Software & Subscriptions', type:'Expense'},
       {id:'acc_travel', code:'6040', name:'Travel', type:'Expense'},
       {id:'acc_bankfees', code:'6050', name:'Bank Charges', type:'Expense'},
+      {id:'acc_unalloc_inc', code:'4900', name:'Unallocated Income', type:'Income', system:true},
+      {id:'acc_unalloc_exp', code:'6900', name:'Unallocated Expense', type:'Expense', system:true},
     ],
     contacts:[],
     invoices:[],
@@ -318,6 +333,7 @@ function defaultData(){
     reconciliations:[],
     bankFeeds:{},
     feedInbox:[],
+    cashbookDrafts:[],
     seeded:false,
   };
 }
@@ -813,6 +829,7 @@ function render(){
     purchases: renderPurchases,
     banking: renderBanking,
     journal: renderJournal,
+    cashbook: renderCashbook,
     contacts: renderContacts,
     accounts: renderAccounts,
     reports: renderReports,
@@ -2048,6 +2065,184 @@ function reverseJournalEntry(id){
   if(!e) return;
   reverseJournalByRef(e.ref);
   closeModal(); showToast('Reversing entry posted'); navigate('journal');
+}
+
+/* ============================= CASHBOOK (quick-capture grid) ============================= */
+let CASHBOOK_ACCOUNT = null;
+function blankCashbookRow(accountId){
+  return { id:uid('cb'), accountId, date:todayStr(), payee:'', description:'', type:'account',
+    accountSelection:null, contactSelection:null, matchDocId:null, reference:'',
+    vatRate:0, spent:0, received:0 };
+}
+function insertCashbookRow(){
+  if(!CASHBOOK_ACCOUNT){ showToast('Add a bank account first'); return; }
+  S.cashbookDrafts = S.cashbookDrafts || [];
+  S.cashbookDrafts.push(blankCashbookRow(CASHBOOK_ACCOUNT));
+  saveState(true);
+  renderCashbook();
+}
+function updateCashbookField(id, field, value){
+  const row = (S.cashbookDrafts||[]).find(r=>r.id===id);
+  if(!row) return;
+  row[field] = value;
+  saveState();
+}
+function setCashbookAmount(id, field, value, inputEl){
+  const row = (S.cashbookDrafts||[]).find(r=>r.id===id);
+  if(!row) return;
+  const v = Number(value)||0;
+  row[field] = v;
+  const otherField = field==='spent' ? 'received' : 'spent';
+  if(v>0 && row[otherField]>0){
+    row[otherField] = 0;
+    const tr = inputEl.closest('tr');
+    const otherInput = tr && tr.querySelector(field==='spent' ? '.cb-received' : '.cb-spent');
+    if(otherInput) otherInput.value = '';
+    // Selection cell depends on in/out direction for account-type rows — refresh it
+    if(row.type==='account'){ renderCashbook(); return; }
+  }
+  saveState();
+}
+function deleteCashbookRow(id){
+  S.cashbookDrafts = (S.cashbookDrafts||[]).filter(r=>r.id!==id);
+  saveState(true);
+  renderCashbook();
+}
+function postCashbookRow(row){
+  const gross = row.spent>0 ? row.spent : row.received;
+  const isIn = row.received>0;
+  if(!row.date) return {ok:false, msg:'Enter a date'};
+  if(!gross || gross<=0) return {ok:false, msg:'Enter a Spent or Received amount'};
+  const desc = (row.description||row.payee||'Cashbook entry') + (row.reference? ' — '+row.reference : '');
+
+  if(row.type==='contact'){
+    if(!row.matchDocId) return {ok:false, msg:'Select an invoice or bill to allocate this to'};
+    if(isIn) recordInvoicePayment(row.matchDocId, gross, row.date, row.accountId);
+    else recordBillPayment(row.matchDocId, gross, row.date, row.accountId);
+    return {ok:true};
+  }
+  const catId = row.accountSelection || (isIn ? 'acc_unalloc_inc' : 'acc_unalloc_exp');
+  const useVat = row.vatRate>0;
+  const net = useVat ? round2(gross/(1+row.vatRate/100)) : gross;
+  const tax = round2(gross-net);
+  const lines = [];
+  if(isIn){
+    lines.push({accountId:row.accountId, debit:gross, credit:0});
+    lines.push({accountId:catId, debit:0, credit:net});
+    if(tax>0) lines.push({accountId:'acc_vatp', debit:0, credit:tax});
+  } else {
+    lines.push({accountId:catId, debit:net, credit:0});
+    if(tax>0) lines.push({accountId:'acc_vatr', debit:tax, credit:0});
+    lines.push({accountId:row.accountId, debit:0, credit:gross});
+  }
+  postJournal(desc, row.date, lines);
+  return {ok:true};
+}
+function commitCashbookRow(id){
+  const row = (S.cashbookDrafts||[]).find(r=>r.id===id);
+  if(!row) return;
+  const result = postCashbookRow(row);
+  if(!result.ok){ showToast(result.msg); return; }
+  S.cashbookDrafts = S.cashbookDrafts.filter(r=>r.id!==id);
+  showToast('Transaction added to the books');
+  saveState(true);
+  renderCashbook();
+}
+function addAllCashbookRows(){
+  const rows = (S.cashbookDrafts||[]).filter(r=>r.accountId===CASHBOOK_ACCOUNT);
+  if(!rows.length){ showToast('No rows to add'); return; }
+  const succeededIds = [];
+  let skipped = 0;
+  rows.forEach(row=>{
+    const result = postCashbookRow(row);
+    if(result.ok) succeededIds.push(row.id); else skipped++;
+  });
+  S.cashbookDrafts = S.cashbookDrafts.filter(r=>!succeededIds.includes(r.id));
+  showToast(`${succeededIds.length} added${skipped? `, ${skipped} skipped (missing info)`:''}`);
+  saveState(true);
+  renderCashbook();
+}
+function cashbookSelectionCell(r){
+  if(r.type==='contact'){
+    const isIn = r.received>0;
+    const contacts = S.contacts.filter(c=>c.type===(isIn?'customer':'supplier'));
+    const openDocs = isIn
+      ? S.invoices.filter(i=>i.contactId===r.contactSelection && ['open','partial'].includes(docStatus(i)))
+      : S.bills.filter(b=>b.contactId===r.contactSelection && ['open','partial'].includes(docStatus(b)));
+    return `
+      <select onchange="updateCashbookField('${r.id}','contactSelection',this.value); updateCashbookField('${r.id}','matchDocId',null); renderCashbook();" style="margin-bottom:4px;">
+        <option value="">Select ${isIn?'customer':'supplier'}…</option>
+        ${contacts.map(c=>`<option value="${c.id}" ${c.id===r.contactSelection?'selected':''}>${escapeHtml(c.name)}</option>`).join('')}
+      </select>
+      ${r.contactSelection? `<select onchange="updateCashbookField('${r.id}','matchDocId',this.value)">
+        <option value="">Select ${isIn?'invoice':'bill'}…</option>
+        ${openDocs.map(d=>`<option value="${d.id}" ${d.id===r.matchDocId?'selected':''}>${d.number} (${fmt(docBalanceDue(d))} due)</option>`).join('')}
+      </select>` : (r.contactSelection!==null && contacts.length===0 ? `<div class="hint" style="margin:0;">No ${isIn?'customers':'suppliers'} yet</div>` : '')}
+    `;
+  }
+  const isIn = r.received>0;
+  const value = r.accountSelection;
+  const defaultLabel = isIn ? 'Unallocated Income' : 'Unallocated Expense';
+  return `<select onchange="updateCashbookField('${r.id}','accountSelection',this.value)" style="${!value?'color:var(--gold); font-weight:600;':''}">
+    <option value="" ${!value?'selected':''}>${defaultLabel}</option>
+    ${accountOptionsHtml(value)}
+  </select>`;
+}
+function cashbookRowHtml(r){
+  return `<tr data-id="${r.id}">
+    <td><input type="date" value="${r.date}" onchange="updateCashbookField('${r.id}','date',this.value)"></td>
+    <td><input type="text" value="${escapeHtml(r.payee)}" placeholder="Payee" onchange="updateCashbookField('${r.id}','payee',this.value)"></td>
+    <td><input type="text" value="${escapeHtml(r.description)}" placeholder="Description" onchange="updateCashbookField('${r.id}','description',this.value)"></td>
+    <td><select onchange="updateCashbookField('${r.id}','type',this.value); renderCashbook();">
+      <option value="account" ${r.type==='account'?'selected':''}>Account</option>
+      <option value="contact" ${r.type==='contact'?'selected':''}>Contact</option>
+    </select></td>
+    <td>${cashbookSelectionCell(r)}</td>
+    <td><input type="text" value="${escapeHtml(r.reference)}" placeholder="Reference" onchange="updateCashbookField('${r.id}','reference',this.value)"></td>
+    <td><select onchange="updateCashbookField('${r.id}','vatRate', Number(this.value))">
+      <option value="0" ${r.vatRate===0?'selected':''}>No VAT</option>
+      <option value="${S.settings.taxRate}" ${r.vatRate>0?'selected':''}>${S.settings.taxLabel} (${S.settings.taxRate}%)</option>
+    </select></td>
+    <td><input type="number" class="num cb-spent" min="0" step="0.01" value="${r.spent||''}" placeholder="0.00" onchange="setCashbookAmount('${r.id}','spent',this.value,this)"></td>
+    <td><input type="number" class="num cb-received" min="0" step="0.01" value="${r.received||''}" placeholder="0.00" onchange="setCashbookAmount('${r.id}','received',this.value,this)"></td>
+    <td class="cb-actions">
+      <button class="cb-add-btn" onclick="commitCashbookRow('${r.id}')" title="Add to books">✓</button>
+      <button class="cb-del-btn" onclick="deleteCashbookRow('${r.id}')" title="Delete row">✕</button>
+    </td>
+  </tr>`;
+}
+function renderCashbook(){
+  const bankAccounts = S.accounts.filter(a=>a.isBank);
+  if(!bankAccounts.length){
+    setTopbar('Cashbook', 'Quick-capture and process bank transactions row by row', '');
+    document.getElementById('content').innerHTML = emptyState('No bank accounts yet', 'Add a bank account in Chart of Accounts first.', null);
+    return;
+  }
+  if(!CASHBOOK_ACCOUNT || !bankAccounts.find(a=>a.id===CASHBOOK_ACCOUNT)) CASHBOOK_ACCOUNT = bankAccounts[0].id;
+  setTopbar('Cashbook', 'Quick-capture and process bank transactions row by row', `
+    <button class="btn btn-ghost" onclick="insertCashbookRow()">+ Insert row</button>
+    <button class="btn btn-primary" onclick="addAllCashbookRows()">✓ Add all valid rows</button>
+  `);
+  const rows = (S.cashbookDrafts||[]).filter(r=>r.accountId===CASHBOOK_ACCOUNT);
+  let html = `<div class="card" style="margin-bottom:14px;"><div class="card-body" style="display:flex; align-items:center; gap:10px; padding:12px 18px;">
+      <label style="margin:0;">Bank account</label>
+      <select style="max-width:280px;" onchange="CASHBOOK_ACCOUNT=this.value; renderCashbook();">
+        ${bankAccounts.map(a=>`<option value="${a.id}" ${a.id===CASHBOOK_ACCOUNT?'selected':''}>${a.name}</option>`).join('')}
+      </select>
+    </div></div>`;
+  html += `<div class="card">`;
+  if(rows.length){
+    html += `<div style="overflow-x:auto;"><table class="cashbook-table"><thead><tr>
+      <th>Date</th><th>Payee</th><th>Description</th><th>Type</th>
+      <th>Selection</th><th>Reference</th><th>VAT</th>
+      <th class="amt">Spent</th><th class="amt">Received</th><th></th>
+    </tr></thead><tbody>${rows.map(cashbookRowHtml).join('')}</tbody></table></div>`;
+  } else {
+    html += emptyState('No rows to process', 'Insert a row to start capturing transactions directly into the cashbook.', 'insertCashbookRow()', '+ Insert row');
+  }
+  html += `</div>
+  <div class="hint" style="margin-top:12px;">Rows marked <strong style="color:var(--gold);">Unallocated Income / Unallocated Expense</strong> post to a holding account so your bank balance stays accurate — recode them properly any time from the Journal Entries or Chart of Accounts. Set Type to "Contact" to allocate a transaction straight to an open invoice or bill instead.</div>`;
+  document.getElementById('content').innerHTML = html;
 }
 
 /* ============================= CONTACTS ============================= */
