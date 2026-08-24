@@ -253,11 +253,22 @@
   .cashbook-table input[type=number]{ text-align:right; }
   .cashbook-table select{ color:var(--text); }
   .cashbook-table .cb-actions{ display:flex; gap:4px; padding-top:8px; }
-  .cb-add-btn, .cb-del-btn{ width:24px; height:24px; border-radius:50%; border:none; cursor:pointer; color:#fff; font-size:12px; font-weight:700; display:inline-flex; align-items:center; justify-content:center; line-height:1; }
+  .cb-add-btn, .cb-del-btn{ width:24px; height:24px; border-radius:50%; border:none; cursor:pointer; color:#fff; font-size:16px; font-weight:700; display:inline-flex; align-items:center; justify-content:center; line-height:1; }
   .cb-add-btn{ background:var(--money-pos); }
   .cb-add-btn:hover{ background:#155943; }
   .cb-del-btn{ background:var(--red); }
   .cb-del-btn:hover{ filter:brightness(0.9); }
+  .cb-undo-btn{ padding:4px 10px; border-radius:6px; border:1px solid var(--border-strong); background:#fff; color:var(--text-muted); cursor:pointer; font-size:11.5px; font-weight:600; font-family:inherit; white-space:nowrap; }
+  .cb-undo-btn:hover{ border-color:var(--red); color:var(--red); }
+  .cb-page-btn{ min-width:30px; padding:5px 9px; border-radius:6px; border:1px solid var(--border-strong); background:#fff; color:var(--text); cursor:pointer; font-size:12.5px; font-weight:600; font-family:inherit; }
+  .cb-page-btn:hover:not(:disabled){ border-color:var(--accent); }
+  .cb-page-btn.active{ background:var(--ink); color:#fff; border-color:var(--ink); }
+  .link-btn{ color:var(--accent-dark); cursor:pointer; font-weight:600; text-decoration:none; }
+  .link-btn:hover{ text-decoration:underline; }
+  .cb-lock{ font-size:14px; opacity:.75; cursor:not-allowed; }
+  .cb-locked-row{ background:var(--surface-2); color:var(--text-muted); }
+  .cb-locked-row td{ font-style:normal; }
+  .cb-page-btn:disabled{ opacity:.4; cursor:default; }
   .invoice-doc{ background:#fff; padding:44px 46px; max-width:780px; margin:0 auto; color:#181818; border:1px solid var(--border); border-radius:8px; }
   .invoice-doc .doc-logo{ max-width:220px; max-height:80px; object-fit:contain; margin-bottom:8px; display:block; }
   .invoice-doc .doc-title{ text-align:right; font-size:19px; letter-spacing:1.2px; margin:0 0 8px; font-weight:700; }
@@ -400,7 +411,12 @@ const NAV = [
   {id:'contacts', label:'All Contacts', ic:'☰'},
   {id:'accounts', label:'Chart of Accounts', ic:'≡'},
   {sec:'Insights'},
-  {id:'reports', label:'Reports', ic:'▦'},
+  {group:'reports', label:'Reports', ic:'▦', children:[
+    {id:'rep-tb', label:'Trial Balance'},
+    {id:'rep-pl', label:'Profit & Loss'},
+    {id:'rep-bs', label:'Balance Sheet'},
+    {id:'rep-vat', label:'VAT'},
+  ]},
   {id:'settings', label:'Settings', ic:'⚙'},
 ];
 // which nav view belongs to which expandable group, so the group auto-opens
@@ -410,6 +426,7 @@ NAV.forEach(item=>{ if(item.group){ item.children.forEach(ch=>{ NAV_GROUP_OF[ch.
 // so the sidebar keeps the right section open and the Transactions child highlighted
 ['quotes','credit-notes'].forEach(v=>{ NAV_GROUP_OF[v]='customers'; });
 ['supp-quotes','supp-credit-notes'].forEach(v=>{ NAV_GROUP_OF[v]='suppliers'; });
+// the reports group's children are handled directly as nav ids (rep-tb etc.)
 // map these register views back to the "Transactions" child for active highlighting
 const NAV_CHILD_ALIAS = { 'quotes':'cust-transactions', 'credit-notes':'cust-transactions', 'supp-quotes':'supp-transactions', 'supp-credit-notes':'supp-transactions' };
 let NAV_OPEN_GROUPS = {}; // group -> bool
@@ -453,6 +470,8 @@ function defaultData(){
     bankFeeds:{},
     feedInbox:[],
     cashbookDrafts:[],
+    cashbookReviewed:[],
+    vatPeriods:[],
     seeded:false,
   };
 }
@@ -496,6 +515,9 @@ function migrateCompanyShape(co){
   co.suppQuotes = co.suppQuotes || [];
   co.creditNotes = co.creditNotes || [];
   co.suppCreditNotes = co.suppCreditNotes || [];
+  co.cashbookDrafts = co.cashbookDrafts || [];
+  co.cashbookReviewed = co.cashbookReviewed || [];
+  co.vatPeriods = co.vatPeriods || [];
   const s = co.settings || (co.settings={});
   if(s.nextQuoteNo==null) s.nextQuoteNo = 3001;
   if(s.nextSuppQuoteNo==null) s.nextSuppQuoteNo = 3501;
@@ -969,6 +991,14 @@ function periodMovement(accountId, from, to){
   const type = accountType(accountId);
   return accountNormalIsDebit(type) ? (debit-credit) : (credit-debit);
 }
+// A date is locked if it falls within any CLOSED VAT period.
+function isDateInClosedVatPeriod(date){
+  if(!date) return false;
+  return (S.vatPeriods||[]).some(p=> p.status==='closed' && date>=p.from && date<=p.to);
+}
+function lockedVatPeriodFor(date){
+  return (S.vatPeriods||[]).find(p=> p.status==='closed' && date>=p.from && date<=p.to);
+}
 
 /* ============================= INVOICES ============================= */
 function lineSubtotal(line){ return (Number(line.qty)||0) * (Number(line.price)||0); }
@@ -1023,7 +1053,7 @@ function issueBill(billId, dateOverride){
   entry.ref = 'bill-issue-'+bill.id;
   bill.status='open'; bill.issueRef=entry.ref; bill.date=date;
 }
-function recordInvoicePayment(invId, amount, date, bankAccountId){
+function recordInvoicePayment(invId, amount, date, bankAccountId, refOverride){
   const inv = S.invoices.find(i=>i.id===invId);
   if(!inv) return;
   amount = Math.min(amount, docBalanceDue(inv));
@@ -1032,10 +1062,10 @@ function recordInvoicePayment(invId, amount, date, bankAccountId){
     {accountId:bankAccountId, debit:amount, credit:0},
     {accountId:'acc_ar', debit:0, credit:amount},
   ]);
-  entry.ref = 'inv-pay-'+uid('p');
+  entry.ref = refOverride || ('inv-pay-'+uid('p'));
   inv.payments.push({id:uid('pay'), date, amount, bankAccountId, journalRef:entry.ref});
 }
-function recordBillPayment(billId, amount, date, bankAccountId){
+function recordBillPayment(billId, amount, date, bankAccountId, refOverride){
   const bill = S.bills.find(b=>b.id===billId);
   if(!bill) return;
   amount = Math.min(amount, docBalanceDue(bill));
@@ -1044,7 +1074,7 @@ function recordBillPayment(billId, amount, date, bankAccountId){
     {accountId:'acc_ap', debit:amount, credit:0},
     {accountId:bankAccountId, debit:0, credit:amount},
   ]);
-  entry.ref = 'bill-pay-'+uid('p');
+  entry.ref = refOverride || ('bill-pay-'+uid('p'));
   bill.payments.push({id:uid('pay'), date, amount, bankAccountId, journalRef:entry.ref});
 }
 function voidInvoice(invId){
@@ -1258,6 +1288,10 @@ function render(){
     contacts: renderContacts,
     accounts: renderAccounts,
     reports: renderReports,
+    'rep-tb': ()=>{ REPORT_TAB='tb'; renderReports(); },
+    'rep-pl': ()=>{ REPORT_TAB='pl'; renderReports(); },
+    'rep-bs': ()=>{ REPORT_TAB='bs'; renderReports(); },
+    'rep-vat': ()=>{ REPORT_TAB='vat'; renderReports(); },
     settings: renderSettings,
     'invoice-print': renderInvoicePrintPage,
     'reconcile': renderReconcilePage,
@@ -2488,18 +2522,20 @@ function parseDateFlexible(str){
 function openCsvImportForm(){
   const bankAccounts = S.accounts.filter(a=>a.isBank);
   const categoryAccounts = S.accounts.filter(a=>!a.isBank);
-  CSV_IMPORT = { bankAccountId: bankAccounts[0]?.id, defaultCategoryId: categoryAccounts[0]?.id };
+  CSV_IMPORT = { bankAccountId: bankAccounts[0]?.id, defaultCategoryId: '' }; // '' => Unallocated holding
   const body = `
     <div class="field-row">
       <div class="field"><label>Import into</label><select id="csv-bank" onchange="CSV_IMPORT.bankAccountId=this.value">${bankAccounts.map(a=>`<option value="${a.id}">${a.name}</option>`).join('')}</select></div>
-      <div class="field"><label>Default category</label><select id="csv-defcat" onchange="changeDefaultCategory(this.value)">${categoryAccounts.map(a=>`<option value="${a.id}">${a.code} ${a.name}</option>`).join('')}</select></div>
+      <div class="field"><label>Default allocation</label><select id="csv-defcat" onchange="changeDefaultCategory(this.value)">
+        <option value="" selected>Unallocated (recode in Cashbook)</option>
+        ${categoryAccounts.map(a=>`<option value="${a.id}">${a.code} ${a.name}</option>`).join('')}</select></div>
     </div>
     <div class="field"><label>CSV file</label><input type="file" id="csv-file" accept=".csv,text/csv" onchange="handleCsvFile(event)"></div>
-    <div class="hint">Works with most bank/export CSVs — a Date, Description and Amount column (or separate Money in / Money out columns). Columns are auto-detected below; adjust if needed.</div>
+    <div class="hint">Works with most bank/export CSVs — a Date, Description and Amount column (or separate Money in / Money out columns). Columns are auto-detected below; adjust if needed. Rows land in the Cashbook where you finish allocating them.</div>
     <div id="csv-map-area"></div>
   `;
   openModal('Import bank transactions (CSV)', body, [
-    {label:'Import transactions', cls:'btn-primary', onclick:'confirmCsvImport()'}
+    {label:'Send to Cashbook →', cls:'btn-primary', onclick:'confirmCsvImport()'}
   ], true);
 }
 function handleCsvFile(event){
@@ -2577,19 +2613,66 @@ function computeCsvParsedRows(){
     const existing = prev[i];
     return {
       idx:i, date, desc, amount,
-      categoryId: existing ? existing.categoryId : defCat,
+      allocType: existing ? existing.allocType : 'account',   // 'account' | 'contact'
+      categoryId: existing ? existing.categoryId : defCat,     // nominal account when allocType==='account'
+      contactId: existing ? existing.contactId : null,         // chosen customer/supplier
+      matchDocId: existing ? existing.matchDocId : null,       // chosen invoice/bill
       include: existing ? existing.include : (!!date && amount!==0),
     };
   });
 }
 function changeDefaultCategory(id){
   CSV_IMPORT.defaultCategoryId = id;
-  if(CSV_IMPORT.parsedRows) CSV_IMPORT.parsedRows.forEach(r=>r.categoryId=id);
+  if(CSV_IMPORT.parsedRows) CSV_IMPORT.parsedRows.forEach(r=>{ if(r.allocType==='account') r.categoryId=id; });
   updateCsvPreview();
+}
+// per-row field setters used by the preview controls
+function setCsvRowType(idx, type){
+  const r = CSV_IMPORT.parsedRows[idx]; if(!r) return;
+  r.allocType = type;
+  if(type==='contact'){ r.contactId = null; r.matchDocId = null; }
+  updateCsvPreview();
+}
+function setCsvRowContact(idx, contactId){
+  const r = CSV_IMPORT.parsedRows[idx]; if(!r) return;
+  r.contactId = contactId || null; r.matchDocId = null;
+  updateCsvPreview();
+}
+function setCsvRowMatch(idx, docId){
+  const r = CSV_IMPORT.parsedRows[idx]; if(!r) return;
+  r.matchDocId = docId || null;
+}
+function setCsvRowCategory(idx, accId){
+  const r = CSV_IMPORT.parsedRows[idx]; if(!r) return;
+  r.categoryId = accId;
+}
+// build the Selection cell for a row (mirrors the cashbook: Account -> nominal, Contact -> invoice/bill)
+function csvSelectionCell(r){
+  const categoryAccounts = S.accounts.filter(a=>!a.isBank);
+  if(r.allocType==='contact'){
+    const isIn = r.amount>0;
+    const contacts = S.contacts.filter(c=>c.type===(isIn?'customer':'supplier'));
+    const openDocs = isIn
+      ? S.invoices.filter(i=>i.contactId===r.contactId && ['open','partial'].includes(docStatus(i)))
+      : S.bills.filter(b=>b.contactId===r.contactId && ['open','partial'].includes(docStatus(b)));
+    return `
+      <select style="margin-bottom:4px;" onchange="setCsvRowContact(${r.idx}, this.value)">
+        <option value="">${isIn?'Customer':'Supplier'}…</option>
+        ${contacts.map(c=>`<option value="${c.id}" ${c.id===r.contactId?'selected':''}>${escapeHtml(c.name)}</option>`).join('')}
+      </select>
+      ${r.contactId? `<select onchange="setCsvRowMatch(${r.idx}, this.value)">
+        <option value="">${isIn?'Invoice':'Bill'}…</option>
+        ${openDocs.map(d=>`<option value="${d.id}" ${d.id===r.matchDocId?'selected':''}>${d.number} (${fmt(docBalanceDue(d))} due)</option>`).join('')}
+      </select>` : (contacts.length===0? `<div class="hint" style="margin:0;">No ${isIn?'customers':'suppliers'} yet</div>`:'')}
+    `;
+  }
+  return `<select onchange="setCsvRowCategory(${r.idx}, this.value)" style="${!r.categoryId?'color:var(--gold); font-weight:600;':''}">
+    <option value="" ${!r.categoryId?'selected':''}>${r.amount>=0?'Unallocated Income':'Unallocated Expense'}</option>
+    ${categoryAccounts.map(a=>`<option value="${a.id}" ${a.id===r.categoryId?'selected':''}>${a.code} ${a.name}</option>`).join('')}
+  </select>`;
 }
 function updateCsvPreview(){
   computeCsvParsedRows();
-  const categoryAccounts = S.accounts.filter(a=>!a.isBank);
   const rows = CSV_IMPORT.parsedRows;
   const wrap = document.getElementById('csv-preview-wrap');
   if(!wrap) return;
@@ -2598,17 +2681,17 @@ function updateCsvPreview(){
   const includedCount = rows.filter(r=>r.include).length;
   wrap.innerHTML = `
     <div class="section-title">Preview — ${includedCount} of ${rows.length} selected · in ${fmt(totalIn)} · out ${fmt(totalOut)}</div>
-    <div style="max-height:280px; overflow:auto; border:1px solid var(--border); border-radius:6px;">
-    <table><thead><tr><th style="width:30px;"></th><th>Date</th><th>Description</th><th class="amt">Amount</th><th style="width:190px;">Category</th></tr></thead><tbody>
+    <div style="max-height:340px; overflow:auto; border:1px solid var(--border); border-radius:6px;">
+    <table><thead><tr><th style="width:28px;"></th><th>Date</th><th>Description</th><th class="amt">Amount</th></tr></thead><tbody>
       ${rows.map(r=>`<tr style="${r.date?'':'opacity:.5;'}">
         <td><input type="checkbox" ${r.include?'checked':''} ${r.date?'':'disabled'} onchange="CSV_IMPORT.parsedRows[${r.idx}].include=this.checked; updateCsvSummary();"></td>
         <td>${r.date? fmtDateShort(r.date) : '<span class="neg">invalid date</span>'}</td>
         <td>${escapeHtml(r.desc)}</td>
         <td class="amt num ${r.amount>=0?'pos':'neg'}">${fmt(r.amount)}</td>
-        <td><select onchange="CSV_IMPORT.parsedRows[${r.idx}].categoryId=this.value">${categoryAccounts.map(a=>`<option value="${a.id}" ${a.id===r.categoryId?'selected':''}>${a.code} ${a.name}</option>`).join('')}</select></td>
       </tr>`).join('')}
     </tbody></table>
     </div>
+    <div class="hint" style="margin-top:8px;">Tick the rows to import. They'll land in the <strong>Cashbook</strong>, where you set the Type and allocate each one to an account or an open invoice/bill before committing.</div>
   `;
 }
 function updateCsvSummary(){
@@ -2625,16 +2708,32 @@ function confirmCsvImport(){
   const bank = CSV_IMPORT.bankAccountId;
   const rows = CSV_IMPORT.parsedRows.filter(r=>r.include && r.date && r.amount!==0);
   if(!rows.length){ showToast('No transactions selected to import'); return; }
+  // Convert each imported row into a Cashbook draft row so it can be allocated in the
+  // full cashbook grid (Account/Contact, VAT, Selection) before being committed to the books.
+  S.cashbookDrafts = S.cashbookDrafts || [];
   rows.forEach(r=>{
-    if(r.amount>0){
-      postJournal(r.desc, r.date, [{accountId:bank, debit:r.amount, credit:0},{accountId:r.categoryId, debit:0, credit:r.amount}]);
+    const draft = blankCashbookRow(bank);
+    draft.date = r.date;
+    draft.description = r.desc;
+    // preserve any allocation already chosen in the preview
+    draft.type = r.allocType || 'account';
+    if(r.amount>0) draft.received = Math.abs(r.amount);
+    else draft.spent = Math.abs(r.amount);
+    if(draft.type==='account'){
+      draft.accountSelection = r.categoryId || null; // null => Unallocated holding account
     } else {
-      postJournal(r.desc, r.date, [{accountId:r.categoryId, debit:Math.abs(r.amount), credit:0},{accountId:bank, debit:0, credit:Math.abs(r.amount)}]);
+      draft.contactSelection = r.contactId || null;
+      draft.matchDocId = r.matchDocId || null;
     }
+    S.cashbookDrafts.push(draft);
   });
   const count = rows.length;
   CSV_IMPORT = null;
-  closeModal(); showToast(`Imported ${count} transaction${count===1?'':'s'}`); navigate('banking');
+  CASHBOOK_ACCOUNT = bank;
+  closeModal();
+  saveState(true);
+  showToast(`${count} transaction${count===1?'':'s'} sent to the Cashbook — allocate and add them`);
+  navigate('cashbook');
 }
 
 /* ============================= JOURNAL ENTRIES (manual) ============================= */
@@ -2806,12 +2905,18 @@ function insertCashbookRow(){
 function updateCashbookField(id, field, value){
   const row = (S.cashbookDrafts||[]).find(r=>r.id===id);
   if(!row) return;
+  // block edits if the row's date (current or the new value) falls in a closed VAT period
+  const effDate = field==='date' ? value : row.date;
+  if(isDateInClosedVatPeriod(row.date) || (field==='date' && isDateInClosedVatPeriod(value))){
+    showToast('That date is in a closed VAT period — reopen the period to edit'); renderCashbook(); return;
+  }
   row[field] = value;
   saveState();
 }
 function setCashbookAmount(id, field, value, inputEl){
   const row = (S.cashbookDrafts||[]).find(r=>r.id===id);
   if(!row) return;
+  if(isDateInClosedVatPeriod(row.date)){ showToast('That date is in a closed VAT period — reopen the period to edit'); renderCashbook(); return; }
   const v = Number(value)||0;
   row[field] = v;
   const otherField = field==='spent' ? 'received' : 'spent';
@@ -2826,6 +2931,8 @@ function setCashbookAmount(id, field, value, inputEl){
   saveState();
 }
 function deleteCashbookRow(id){
+  const row = (S.cashbookDrafts||[]).find(r=>r.id===id);
+  if(row && isDateInClosedVatPeriod(row.date)){ showToast('That date is in a closed VAT period — reopen the period to delete'); return; }
   S.cashbookDrafts = (S.cashbookDrafts||[]).filter(r=>r.id!==id);
   saveState(true);
   renderCashbook();
@@ -2834,13 +2941,27 @@ function postCashbookRow(row){
   const gross = row.spent>0 ? row.spent : row.received;
   const isIn = row.received>0;
   if(!row.date) return {ok:false, msg:'Enter a date'};
+  if(isDateInClosedVatPeriod(row.date)) return {ok:false, msg:'Date is in a closed VAT period — reopen it first'};
   if(!gross || gross<=0) return {ok:false, msg:'Enter a Spent or Received amount'};
   const desc = (row.description||row.payee||'Cashbook entry') + (row.reference? ' — '+row.reference : '');
+  const cashbookRef = 'cb-'+uid('r');
+  // snapshot for the Reviewed tab (so we can display + undo later)
+  const meta = {
+    cashbookRef, source:'cashbook', accountId:row.accountId, date:row.date,
+    payee:row.payee||'', description:row.description||'', reference:row.reference||'',
+    type:row.type, accountSelection:row.accountSelection||null,
+    contactSelection:row.contactSelection||null, matchDocId:row.matchDocId||null,
+    vatRate:row.vatRate||0, spent:row.spent||0, received:row.received||0,
+  };
 
   if(row.type==='contact'){
     if(!row.matchDocId) return {ok:false, msg:'Select an invoice or bill to allocate this to'};
-    if(isIn) recordInvoicePayment(row.matchDocId, gross, row.date, row.accountId);
-    else recordBillPayment(row.matchDocId, gross, row.date, row.accountId);
+    if(isIn) recordInvoicePayment(row.matchDocId, gross, row.date, row.accountId, cashbookRef);
+    else recordBillPayment(row.matchDocId, gross, row.date, row.accountId, cashbookRef);
+    // tag the payment's journal entry(ies) so they show under Reviewed
+    S.journal.filter(e=>e.ref===cashbookRef).forEach(e=>{ e.cashbookMeta = meta; });
+    S.cashbookReviewed = S.cashbookReviewed || [];
+    S.cashbookReviewed.push(meta);
     return {ok:true};
   }
   const catId = row.accountSelection || (isIn ? 'acc_unalloc_inc' : 'acc_unalloc_exp');
@@ -2857,7 +2978,11 @@ function postCashbookRow(row){
     if(tax>0) lines.push({accountId:'acc_vatr', debit:tax, credit:0});
     lines.push({accountId:row.accountId, debit:0, credit:gross});
   }
-  postJournal(desc, row.date, lines);
+  const entry = postJournal(desc, row.date, lines);
+  entry.ref = cashbookRef;
+  entry.cashbookMeta = meta;
+  S.cashbookReviewed = S.cashbookReviewed || [];
+  S.cashbookReviewed.push(meta);
   return {ok:true};
 }
 function commitCashbookRow(id){
@@ -2911,7 +3036,26 @@ function cashbookSelectionCell(r){
   </select>`;
 }
 function cashbookRowHtml(r){
+  const locked = isDateInClosedVatPeriod(r.date);
+  if(locked){
+    // read-only, locked row — no editable inputs, lock icon instead of the tick
+    const sel = selectionLabel(r);
+    return `<tr data-id="${r.id}" class="cb-locked-row" title="Locked — dated in a closed VAT period">
+      <td style="text-align:center;"><span class="cb-lock" title="Locked — in a closed VAT period">🔒</span></td>
+      <td>${fmtDateShort(r.date)}</td>
+      <td>${escapeHtml(r.payee||'—')}</td>
+      <td>${escapeHtml(r.description||'—')}</td>
+      <td>${r.type==='contact'?'Contact':'Account'}</td>
+      <td>${sel}</td>
+      <td>${escapeHtml(r.reference||'—')}</td>
+      <td>${r.vatRate>0? (S.settings.taxLabel):'No VAT'}</td>
+      <td class="amt num">${r.spent? fmt(r.spent):''}</td>
+      <td class="amt num">${r.received? fmt(r.received):''}</td>
+      <td class="cb-actions"></td>
+    </tr>`;
+  }
   return `<tr data-id="${r.id}">
+    <td style="text-align:center;"><input type="checkbox" class="cb-tick" title="Select this transaction"></td>
     <td><input type="date" value="${r.date}" onchange="updateCashbookField('${r.id}','date',this.value)"></td>
     <td><input type="text" value="${escapeHtml(r.payee)}" placeholder="Payee" onchange="updateCashbookField('${r.id}','payee',this.value)"></td>
     <td><input type="text" value="${escapeHtml(r.description)}" placeholder="Description" onchange="updateCashbookField('${r.id}','description',this.value)"></td>
@@ -2928,10 +3072,104 @@ function cashbookRowHtml(r){
     <td><input type="number" class="num cb-spent" min="0" step="0.01" value="${r.spent||''}" placeholder="0.00" onchange="setCashbookAmount('${r.id}','spent',this.value,this)"></td>
     <td><input type="number" class="num cb-received" min="0" step="0.01" value="${r.received||''}" placeholder="0.00" onchange="setCashbookAmount('${r.id}','received',this.value,this)"></td>
     <td class="cb-actions">
-      <button class="cb-add-btn" onclick="commitCashbookRow('${r.id}')" title="Add to books">✓</button>
-      <button class="cb-del-btn" onclick="deleteCashbookRow('${r.id}')" title="Delete row">✕</button>
+      <button class="cb-add-btn" onclick="insertCashbookRow()" title="Add a transaction (new row)">+</button>
+      <button class="cb-del-btn" onclick="deleteCashbookRow('${r.id}')" title="Delete this transaction">−</button>
     </td>
   </tr>`;
+}
+// Ticking a New Transactions checkbox commits that row straight to the books.
+function tickCommitCashbookRow(id){
+  const row = (S.cashbookDrafts||[]).find(r=>r.id===id);
+  if(!row) return;
+  const result = postCashbookRow(row);
+  if(!result.ok){ showToast(result.msg); renderCashbook(); return; } // re-render to clear the tick
+  S.cashbookDrafts = S.cashbookDrafts.filter(r=>r.id!==id);
+  showToast('Marked as reviewed — added to the books');
+  saveState(true);
+  renderCashbook();
+}
+// Commit all currently-ticked New Transactions rows.
+function markSelectedCashbookReviewed(){
+  const ids = Array.from(document.querySelectorAll('#cb-new-body .cb-tick:checked')).map(cb=>cb.closest('tr').getAttribute('data-id'));
+  if(!ids.length){ showToast('Tick the rows you want to mark as reviewed'); return; }
+  const succeeded = [];
+  let skipped = 0;
+  ids.forEach(id=>{
+    const row = (S.cashbookDrafts||[]).find(r=>r.id===id);
+    if(!row) return;
+    const result = postCashbookRow(row);
+    if(result.ok) succeeded.push(id); else skipped++;
+  });
+  S.cashbookDrafts = S.cashbookDrafts.filter(r=>!succeeded.includes(r.id));
+  showToast(`${succeeded.length} marked as reviewed${skipped? `, ${skipped} skipped (missing info)`:''}`);
+  saveState(true);
+  renderCashbook();
+}
+// Move selected Reviewed rows back to New Transactions (reverse the posting).
+function moveSelectedReviewedBack(){
+  const refs = Array.from(document.querySelectorAll('#cb-rev-body .cb-tick:checked')).map(cb=>cb.closest('tr').getAttribute('data-ref'));
+  if(!refs.length){ showToast('Tick the reviewed rows you want to move back'); return; }
+  refs.forEach(ref=> undoReviewedCashbook(ref, true));
+  showToast(`${refs.length} moved back to New Transactions`);
+  saveState(true);
+  CASHBOOK_TAB = 'new';
+  renderCashbook();
+}
+let CASHBOOK_TAB = 'new'; // 'new' | 'reviewed'
+// pagination state, independent per tab
+let CASHBOOK_PAGE = { new:1, reviewed:1 };
+let CASHBOOK_PAGE_SIZE = { new:20, reviewed:20 };
+const CASHBOOK_PAGE_SIZES = [10, 20, 35, 50, 100];
+function setCashbookPageSize(tab, size){
+  CASHBOOK_PAGE_SIZE[tab] = Number(size)||20;
+  CASHBOOK_PAGE[tab] = 1; // reset to first page when size changes
+  renderCashbook();
+}
+function setCashbookPage(tab, page){
+  CASHBOOK_PAGE[tab] = Math.max(1, page);
+  renderCashbook();
+}
+// page-size selector shown above a tab's table
+function cashbookPageSizeControl(tab, total){
+  return `<div style="display:flex; align-items:center; gap:8px;">
+    <label style="margin:0; font-size:12px; color:var(--text-muted);">Show</label>
+    <select style="max-width:110px;" onchange="setCashbookPageSize('${tab}', this.value)">
+      ${CASHBOOK_PAGE_SIZES.map(n=>`<option value="${n}" ${CASHBOOK_PAGE_SIZE[tab]===n?'selected':''}>1–${n}</option>`).join('')}
+    </select>
+    <span style="font-size:12px; color:var(--text-muted);">of ${total}</span>
+  </div>`;
+}
+// pager control shown below a tab's table
+function cashbookPager(tab, total){
+  const size = CASHBOOK_PAGE_SIZE[tab];
+  const pages = Math.max(1, Math.ceil(total/size));
+  let page = Math.min(CASHBOOK_PAGE[tab], pages);
+  CASHBOOK_PAGE[tab] = page;
+  if(pages<=1) return '';
+  const from = (page-1)*size + 1;
+  const to = Math.min(total, page*size);
+  // build a compact page-number list (first, current-1..current+1, last, with … gaps)
+  const nums = [];
+  const add = n => { if(!nums.includes(n) && n>=1 && n<=pages) nums.push(n); };
+  add(1); add(2); add(page-1); add(page); add(page+1); add(pages-1); add(pages);
+  nums.sort((a,b)=>a-b);
+  let btns = '';
+  let prev = 0;
+  nums.forEach(n=>{
+    if(prev && n-prev>1) btns += `<span style="padding:0 4px; color:var(--text-muted);">…</span>`;
+    btns += `<button class="cb-page-btn ${n===page?'active':''}" onclick="setCashbookPage('${tab}', ${n})">${n}</button>`;
+    prev = n;
+  });
+  return `<div class="card-body cb-pager" style="display:flex; justify-content:space-between; align-items:center; gap:10px; border-top:1px solid var(--border); flex-wrap:wrap;">
+    <span style="font-size:12px; color:var(--text-muted);">Showing ${from}–${to} of ${total}</span>
+    <div style="display:flex; align-items:center; gap:4px;">
+      <button class="cb-page-btn" ${page<=1?'disabled':''} onclick="setCashbookPage('${tab}', 1)">« First</button>
+      <button class="cb-page-btn" ${page<=1?'disabled':''} onclick="setCashbookPage('${tab}', ${page-1})">‹ Prev</button>
+      ${btns}
+      <button class="cb-page-btn" ${page>=pages?'disabled':''} onclick="setCashbookPage('${tab}', ${page+1})">Next ›</button>
+      <button class="cb-page-btn" ${page>=pages?'disabled':''} onclick="setCashbookPage('${tab}', ${pages})">Last »</button>
+    </div>
+  </div>`;
 }
 function renderCashbook(){
   const bankAccounts = S.accounts.filter(a=>a.isBank);
@@ -2941,31 +3179,165 @@ function renderCashbook(){
     return;
   }
   if(!CASHBOOK_ACCOUNT || !bankAccounts.find(a=>a.id===CASHBOOK_ACCOUNT)) CASHBOOK_ACCOUNT = bankAccounts[0].id;
-  setTopbar('Cashbook', 'Quick-capture and process bank transactions row by row', `
-    <button class="btn btn-ghost" onclick="insertCashbookRow()">+ Insert row</button>
-    <button class="btn btn-primary" onclick="addAllCashbookRows()">✓ Add all valid rows</button>
-  `);
-  const rows = (S.cashbookDrafts||[]).filter(r=>r.accountId===CASHBOOK_ACCOUNT);
-  let html = `<div class="card" style="margin-bottom:14px;"><div class="card-body" style="display:flex; align-items:center; gap:10px; padding:12px 18px;">
-      <label style="margin:0;">Bank account</label>
-      <select style="max-width:280px;" onchange="CASHBOOK_ACCOUNT=this.value; renderCashbook();">
-        ${bankAccounts.map(a=>`<option value="${a.id}" ${a.id===CASHBOOK_ACCOUNT?'selected':''}>${a.name}</option>`).join('')}
-      </select>
+  const tab = CASHBOOK_TAB;
+  const newRows = (S.cashbookDrafts||[]).filter(r=>r.accountId===CASHBOOK_ACCOUNT);
+  const reviewed = (S.cashbookReviewed||[]).filter(r=>r.accountId===CASHBOOK_ACCOUNT);
+  setTopbar('Cashbook', 'Quick-capture and process bank transactions row by row',
+    tab==='new' ? `
+      <button class="btn btn-ghost" onclick="openCsvImportForm()">⇪ Import CSV</button>
+      <button class="btn btn-ghost" onclick="insertCashbookRow()">+ Insert row</button>
+      <button class="btn btn-primary" onclick="addAllCashbookRows()">✓ Add all valid rows</button>
+    ` : `
+      <button class="btn btn-ghost" onclick="openCsvImportForm()">⇪ Import CSV</button>
+    `);
+
+  const bankBal = getAccountBalance(CASHBOOK_ACCOUNT);
+  // header strip: bank picker + balance + to-review count (mirrors the review screen)
+  let html = `<div class="card" style="margin-bottom:14px;"><div class="card-body" style="display:flex; align-items:center; gap:22px; padding:14px 18px; flex-wrap:wrap;">
+      <div style="display:flex; align-items:center; gap:10px;">
+        <label style="margin:0;">Bank or Credit Card</label>
+        <select style="max-width:280px;" onchange="CASHBOOK_ACCOUNT=this.value; renderCashbook();">
+          ${bankAccounts.map(a=>`<option value="${a.id}" ${a.id===CASHBOOK_ACCOUNT?'selected':''}>${a.name}</option>`).join('')}
+        </select>
+      </div>
+      <div style="border-left:1px solid var(--border); padding-left:22px;">
+        <div class="num" style="font-size:20px; font-weight:700; color:var(--accent-dark);">${fmt(bankBal)}</div>
+        <div style="font-size:11px; color:var(--text-muted);">Bank balance</div>
+      </div>
+      <div>
+        <div style="font-size:20px; font-weight:700;">${newRows.length}</div>
+        <div style="font-size:11px; color:var(--text-muted);">To be reviewed</div>
+      </div>
     </div></div>`;
-  html += `<div class="card">`;
-  if(rows.length){
-    html += `<div style="overflow-x:auto;"><table class="cashbook-table"><thead><tr>
-      <th>Date</th><th>Payee</th><th>Description</th><th>Type</th>
-      <th>Selection</th><th>Reference</th><th>VAT</th>
-      <th class="amt">Spent</th><th class="amt">Received</th><th></th>
-    </tr></thead><tbody>${rows.map(cashbookRowHtml).join('')}</tbody></table></div>`;
+
+  // tab bar
+  html += `<div class="tabs">
+    <div class="tab ${tab==='new'?'active':''}" onclick="CASHBOOK_TAB='new'; renderCashbook();">New Transactions${newRows.length? ` (${newRows.length})`:''}</div>
+    <div class="tab ${tab==='reviewed'?'active':''}" onclick="CASHBOOK_TAB='reviewed'; renderCashbook();">Reviewed${reviewed.length? ` (${reviewed.length})`:''}</div>
+  </div>`;
+
+  if(tab==='new'){
+    html += `<div class="card">`;
+    if(newRows.length){
+      const size = CASHBOOK_PAGE_SIZE.new;
+      const pages = Math.max(1, Math.ceil(newRows.length/size));
+      if(CASHBOOK_PAGE.new > pages) CASHBOOK_PAGE.new = pages;
+      const start = (CASHBOOK_PAGE.new-1)*size;
+      const pageRows = newRows.slice(start, start+size);
+      html += `<div class="card-body" style="display:flex; justify-content:flex-end; border-bottom:1px solid var(--border); padding:10px 18px;">${cashbookPageSizeControl('new', newRows.length)}</div>`;
+      html += `<div style="overflow-x:auto;"><table class="cashbook-table"><thead><tr>
+        <th style="width:32px; text-align:center;"><input type="checkbox" title="Select all on this page" onchange="toggleAllCashbookTicks('cb-new-body', this.checked)"></th>
+        <th>Date</th><th>Payee</th><th>Description</th><th>Type</th>
+        <th>Selection</th><th>Reference</th><th>VAT</th>
+        <th class="amt">Spent</th><th class="amt">Received</th><th></th>
+      </tr></thead><tbody id="cb-new-body">${pageRows.map(cashbookRowHtml).join('')}</tbody></table></div>`;
+      html += cashbookPager('new', newRows.length);
+      html += `<div class="card-body" style="display:flex; justify-content:space-between; align-items:center; gap:10px; border-top:1px solid var(--border); flex-wrap:wrap;">
+        <span class="hint" style="margin:0;">Select the transactions you want to review, then press <strong>Mark as reviewed</strong> to add them to the books.</span>
+        <button class="btn btn-primary btn-sm" onclick="markSelectedCashbookReviewed()">✓ Mark as reviewed</button>
+      </div>`;
+    } else {
+      html += emptyState('No new transactions', 'Insert a row or import a CSV to start capturing transactions into the cashbook.', 'insertCashbookRow()', '+ Insert row');
+    }
+    html += `</div>
+    <div class="hint" style="margin-top:12px;">Rows marked <strong style="color:var(--gold);">Unallocated Income / Unallocated Expense</strong> post to a holding account so your bank balance stays accurate — recode them properly any time from the Journal Entries or Chart of Accounts. Set Type to "Contact" to allocate a transaction straight to an open invoice or bill instead. Once added, transactions move to the <strong>Reviewed</strong> tab.</div>`;
   } else {
-    html += emptyState('No rows to process', 'Insert a row to start capturing transactions directly into the cashbook.', 'insertCashbookRow()', '+ Insert row');
+    html += renderCashbookReviewed(reviewed);
   }
-  html += `</div>
-  <div class="hint" style="margin-top:12px;">Rows marked <strong style="color:var(--gold);">Unallocated Income / Unallocated Expense</strong> post to a holding account so your bank balance stays accurate — recode them properly any time from the Journal Entries or Chart of Accounts. Set Type to "Contact" to allocate a transaction straight to an open invoice or bill instead.</div>`;
   document.getElementById('content').innerHTML = html;
 }
+function toggleAllCashbookTicks(bodyId, checked){
+  document.querySelectorAll('#'+bodyId+' .cb-tick').forEach(cb=>{ cb.checked = checked; });
+}
+function selectionLabel(meta){
+  if(meta.type==='contact'){
+    const isIn = meta.received>0;
+    const c = S.contacts.find(x=>x.id===meta.contactSelection);
+    const doc = (isIn?S.invoices:S.bills).find(d=>d.id===meta.matchDocId);
+    return (c?escapeHtml(c.name):'Contact') + (doc? ' · '+doc.number : '');
+  }
+  const isIn = meta.received>0;
+  const accId = meta.accountSelection || (isIn ? 'acc_unalloc_inc' : 'acc_unalloc_exp');
+  const a = S.accounts.find(x=>x.id===accId);
+  return a ? escapeHtml(a.code+' '+a.name) : '—';
+}
+function renderCashbookReviewed(reviewed){
+  if(!reviewed.length){
+    return `<div class="card">${emptyState('Nothing reviewed yet', 'Transactions you add from the New Transactions tab will appear here.', null)}</div>`;
+  }
+  const allRows = reviewed.slice().sort((a,b)=> (b.date||'').localeCompare(a.date||''));
+  const total = allRows.length;
+  const size = CASHBOOK_PAGE_SIZE.reviewed;
+  const pages = Math.max(1, Math.ceil(total/size));
+  if(CASHBOOK_PAGE.reviewed > pages) CASHBOOK_PAGE.reviewed = pages;
+  const start = (CASHBOOK_PAGE.reviewed-1)*size;
+  const rows = allRows.slice(start, start+size);
+  // totals reflect the full reviewed set, not just this page
+  const totalSpent = allRows.reduce((s,r)=>s+(r.spent||0),0);
+  const totalRecv = allRows.reduce((s,r)=>s+(r.received||0),0);
+  return `<div class="card">
+    <div class="card-body" style="display:flex; justify-content:flex-end; border-bottom:1px solid var(--border); padding:10px 18px;">${cashbookPageSizeControl('reviewed', total)}</div>
+    <div style="overflow-x:auto;"><table class="cashbook-table"><thead><tr>
+      <th style="width:32px; text-align:center;"><input type="checkbox" title="Select all on this page" onchange="toggleAllCashbookTicks('cb-rev-body', this.checked)"></th>
+      <th>Date</th><th>Payee</th><th>Description</th><th>Type</th><th>Selection</th>
+      <th>Reference</th><th>VAT</th><th class="amt">Spent</th><th class="amt">Received</th><th></th>
+    </tr></thead><tbody id="cb-rev-body">
+      ${rows.map(r=>{ const locked = isDateInClosedVatPeriod(r.date); return `<tr data-ref="${r.cashbookRef}" class="${locked?'cb-locked-row':''}">
+        <td style="text-align:center;">${locked? `<span class="cb-lock" title="Locked — in a closed VAT period">🔒</span>` : `<input type="checkbox" class="cb-tick">`}</td>
+        <td>${fmtDateShort(r.date)}</td>
+        <td>${escapeHtml(r.payee||'—')}</td>
+        <td>${escapeHtml(r.description||'—')}</td>
+        <td>${r.type==='contact'?'Contact':'Account'}</td>
+        <td>${selectionLabel(r)}</td>
+        <td>${escapeHtml(r.reference||'—')}</td>
+        <td>${r.vatRate>0? (S.settings.taxLabel):'No VAT'}</td>
+        <td class="amt num">${r.spent? fmt(r.spent):''}</td>
+        <td class="amt num">${r.received? fmt(r.received):''}</td>
+        <td class="cb-actions">${locked? `<span style="font-size:11px; color:var(--text-muted);">Locked</span>` : `<button class="cb-undo-btn" onclick="undoReviewedCashbook('${r.cashbookRef}')" title="Move back to New Transactions">↩ Move back</button>`}</td>
+      </tr>`; }).join('')}
+      <tr class="li-total-row"><td colspan="8">Total — ${total} reviewed</td>
+        <td class="amt num">${fmt(totalSpent)}</td><td class="amt num">${fmt(totalRecv)}</td><td></td></tr>
+    </tbody></table></div>
+    ${cashbookPager('reviewed', total)}
+    <div class="card-body" style="display:flex; justify-content:space-between; align-items:center; gap:10px; border-top:1px solid var(--border); flex-wrap:wrap;">
+      <span class="hint" style="margin:0;">Tick reviewed rows to move them back to New Transactions (this reverses the posting).</span>
+      <button class="btn btn-ghost btn-sm" onclick="moveSelectedReviewedBack()">↩ Move back to New</button>
+    </div>
+  </div>
+  <div class="hint" style="margin-top:12px;">These transactions are posted to the books. Moving one back to <strong>New Transactions</strong> reverses the posting so you can re-allocate it.</div>`;
+}
+function undoReviewedCashbook(cashbookRef, silent){
+  const meta = (S.cashbookReviewed||[]).find(m=>m.cashbookRef===cashbookRef);
+  if(!meta) return;
+  if(isDateInClosedVatPeriod(meta.date)){ if(!silent) showToast('That transaction is in a closed VAT period — reopen the period to move it'); return; }
+  if(!silent && !confirm('Undo this reviewed transaction? It will be reversed out of the books and returned to New Transactions.')) return;
+  // If it was a contact allocation, remove the payment record from the target doc
+  if(meta.type==='contact' && meta.matchDocId){
+    const isIn = meta.received>0;
+    const doc = (isIn?S.invoices:S.bills).find(d=>d.id===meta.matchDocId);
+    if(doc && doc.payments){
+      doc.payments = doc.payments.filter(p=>p.journalRef!==cashbookRef);
+    }
+  }
+  // remove the journal entry/entries tagged with this ref (this cleanly backs the posting out of all balances)
+  S.journal = S.journal.filter(e=> e.ref!==cashbookRef);
+  // restore as a draft row for re-allocation
+  S.cashbookDrafts = S.cashbookDrafts || [];
+  S.cashbookDrafts.push({
+    id:uid('cb'), accountId:meta.accountId, date:meta.date, payee:meta.payee||'', description:meta.description||'',
+    type:meta.type, accountSelection:meta.accountSelection||null, contactSelection:meta.contactSelection||null,
+    matchDocId:meta.matchDocId||null, reference:meta.reference||'', vatRate:meta.vatRate||0,
+    spent:meta.spent||0, received:meta.received||0,
+  });
+  S.cashbookReviewed = S.cashbookReviewed.filter(m=>m.cashbookRef!==cashbookRef);
+  if(!silent){
+    CASHBOOK_TAB = 'new';
+    showToast('Transaction reversed and returned to New Transactions');
+    saveState(true);
+    renderCashbook();
+  }
+}
+
 
 /* ============================= CONTACTS ============================= */
 /* Directory pages: Customers / Suppliers with Add · Transactions · Reports tabs */
@@ -3739,7 +4111,7 @@ function deleteAccount(id){
 /* ============================= REPORTS ============================= */
 let REPORT_TAB = 'pl';
 function renderReports(){
-  setTopbar('Reports', 'Profit & loss, balance sheet, and trial balance', '');
+  setTopbar('Reports', 'Profit & loss, balance sheet, trial balance, and VAT', '');
   const monthStart = todayStr().slice(0,8)+'01';
   const yearStart = todayStr().slice(0,4)+'-01-01';
   const from = window._rFrom || yearStart;
@@ -3748,14 +4120,16 @@ function renderReports(){
 
   document.getElementById('content').innerHTML = `
     <div class="tabs">
-      <div class="tab ${REPORT_TAB==='pl'?'active':''}" onclick="REPORT_TAB='pl'; renderReports();">Profit &amp; Loss</div>
-      <div class="tab ${REPORT_TAB==='bs'?'active':''}" onclick="REPORT_TAB='bs'; renderReports();">Balance Sheet</div>
-      <div class="tab ${REPORT_TAB==='tb'?'active':''}" onclick="REPORT_TAB='tb'; renderReports();">Trial Balance</div>
+      <div class="tab ${REPORT_TAB==='pl'?'active':''}" onclick="navigate('rep-pl')">Profit &amp; Loss</div>
+      <div class="tab ${REPORT_TAB==='bs'?'active':''}" onclick="navigate('rep-bs')">Balance Sheet</div>
+      <div class="tab ${REPORT_TAB==='tb'?'active':''}" onclick="navigate('rep-tb')">Trial Balance</div>
+      <div class="tab ${REPORT_TAB==='vat'?'active':''}" onclick="navigate('rep-vat')">VAT</div>
     </div>
     <div id="report-body"></div>
   `;
   if(REPORT_TAB==='pl') renderPL(from, to);
   else if(REPORT_TAB==='bs') renderBS(to);
+  else if(REPORT_TAB==='vat') renderVatReport();
   else renderTB(to);
 }
 function dateRangeControls(from,to,fn){
@@ -3841,6 +4215,195 @@ function renderTB(asOf){
       <tr class="li-total-row"><td></td><td>Total</td><td class="amt num">${fmt(totalD)}</td><td class="amt num">${fmt(totalC)}</td></tr>
     </tbody></table>
   </div>`;
+}
+
+/* ============================= VAT REPORT & PERIODS ============================= */
+let VAT_VIEW = 'list';       // 'list' | 'detail'
+let VAT_DETAIL_ID = null;    // which period's detailed return we're viewing
+
+// Compute the VAT return figures for a date range from the ledger.
+function computeVatReturn(from, to){
+  // Output VAT (on sales) accumulates as a credit on acc_vatp; Input VAT (on purchases) as a debit on acc_vatr.
+  // periodMovement returns the natural-sign movement (liability positive = credit; asset positive = debit).
+  const outputVat = periodMovement('acc_vatp', from, to);   // VAT charged on sales (payable to SARS)
+  const inputVat = periodMovement('acc_vatr', from, to);    // VAT paid on purchases (claimable)
+  // sales/purchases excl. VAT over the period (income credit-normal, expense debit-normal)
+  const salesExcl = S.accounts.filter(a=>a.type==='Income').reduce((s,a)=>s+periodMovement(a.id,from,to),0);
+  const purchasesExcl = S.accounts.filter(a=>a.type==='Expense').reduce((s,a)=>s+periodMovement(a.id,from,to),0);
+  const net = round2(outputVat - inputVat); // positive => payable to SARS; negative => refundable
+  return {
+    outputVat: round2(outputVat), inputVat: round2(inputVat),
+    salesExcl: round2(salesExcl), purchasesExcl: round2(purchasesExcl),
+    net, payable: net>0 ? net : 0, refundable: net<0 ? -net : 0,
+  };
+}
+function fmtPeriodLabel(from, to){ return fmtDateShort(from)+' – '+fmtDateShort(to); }
+function vatPeriodRef(from){
+  // e.g. "06/2026" from the END month is conventional; use the 'to' month of the period actually.
+  const d = new Date(from+'T00:00:00');
+  return String(d.getMonth()+1).padStart(2,'0')+'/'+d.getFullYear();
+}
+
+function renderVatReport(){
+  if(VAT_VIEW==='detail'){ renderVatDetail(); return; }
+  const body = document.getElementById('report-body');
+  const periods = (S.vatPeriods||[]).slice().sort((a,b)=> (b.from||'').localeCompare(a.from||''));
+  const openPeriod = periods.find(p=>p.status==='open');
+  const closed = periods.filter(p=>p.status==='closed');
+
+  // suggest sensible default dates for a new period: continue after the last period, else this VAT-ish period
+  const lastTo = periods.length ? periods.map(p=>p.to).sort().slice(-1)[0] : null;
+  let sugFrom, sugTo;
+  if(lastTo){
+    const d = new Date(lastTo+'T00:00:00'); d.setDate(d.getDate()+1); sugFrom = d.toISOString().slice(0,10);
+    const e = new Date(sugFrom+'T00:00:00'); e.setMonth(e.getMonth()+2); e.setDate(0); sugTo = e.toISOString().slice(0,10);
+  } else {
+    sugFrom = todayStr().slice(0,8)+'01';
+    const e = new Date(sugFrom+'T00:00:00'); e.setMonth(e.getMonth()+2); e.setDate(0); sugTo = e.toISOString().slice(0,10);
+  }
+
+  let html = '';
+
+  // ---- Current VAT Period and Return ----
+  html += `<div class="card" style="margin-bottom:20px;">
+    <div class="card-head"><h3>Current VAT Period and Return</h3>${openPeriod? `<button class="btn btn-primary btn-sm" onclick="closeVatPeriod('${openPeriod.id}')">Close VAT Period</button>`:''}</div>`;
+  if(openPeriod){
+    const r = computeVatReturn(openPeriod.from, openPeriod.to);
+    html += `<table><thead><tr><th>Period Status</th><th>Ref</th><th>VAT Period</th><th class="amt">VAT Payable</th><th class="amt">VAT Refundable</th><th>VAT Report</th></tr></thead><tbody>
+      <tr>
+        <td><span class="badge badge-open">Open</span></td>
+        <td class="mono">${vatPeriodRef(openPeriod.from)}</td>
+        <td>${fmtPeriodLabel(openPeriod.from, openPeriod.to)}</td>
+        <td class="amt num ${r.payable>0?'neg':''}">${r.payable>0?fmt(r.payable):'—'}</td>
+        <td class="amt num ${r.refundable>0?'pos':''}">${r.refundable>0?fmt(r.refundable):'—'}</td>
+        <td><a class="link-btn" onclick="openVatDetail('${openPeriod.id}')">view</a></td>
+      </tr>
+    </tbody></table>`;
+  } else {
+    // opener form
+    html += `<div class="card-body">
+      <p style="color:var(--text-muted); font-size:13px; margin:0 0 12px;">No VAT period is currently open. Choose the period dates and open one to start tracking this return.</p>
+      <div class="field-row" style="align-items:flex-end;">
+        <div class="field"><label>Period start</label><input type="date" id="vat-from" value="${sugFrom}"></div>
+        <div class="field"><label>Period end</label><input type="date" id="vat-to" value="${sugTo}"></div>
+        <div class="field" style="flex:0 0 auto;"><button class="btn btn-primary" onclick="openVatPeriod()">Open VAT Period</button></div>
+      </div>
+    </div>`;
+  }
+  html += `</div>`;
+
+  // ---- Previous VAT Periods and Returns ----
+  html += `<div class="card">
+    <div class="card-head"><h3>Previous VAT Periods and Returns</h3></div>`;
+  if(closed.length){
+    html += `<table><thead><tr>
+      <th>Submission Status</th><th>Period Status</th><th>Ref</th><th>VAT Period</th>
+      <th class="amt">VAT Payable</th><th class="amt">VAT Refundable</th><th>VAT Report</th>
+    </tr></thead><tbody>
+      ${closed.map(p=>{
+        const r = computeVatReturn(p.from, p.to);
+        return `<tr>
+          <td><a class="link-btn" onclick="reopenVatPeriod('${p.id}')">reopen</a></td>
+          <td><span class="badge badge-void">Closed</span></td>
+          <td class="mono">${vatPeriodRef(p.from)}</td>
+          <td>${fmtPeriodLabel(p.from, p.to)}</td>
+          <td class="amt num ${r.payable>0?'neg':''}">${r.payable>0?fmt(r.payable):'—'}</td>
+          <td class="amt num ${r.refundable>0?'pos':''}">${r.refundable>0?fmt(r.refundable):'—'}</td>
+          <td><a class="link-btn" onclick="openVatDetail('${p.id}')">view</a></td>
+        </tr>`;
+      }).join('')}
+    </tbody></table>`;
+  } else {
+    html += `<div class="card-body"><p style="color:var(--text-muted); font-size:13px; margin:0;">No closed VAT periods yet. When you close the current period it will move here, and you can reopen it any time.</p></div>`;
+  }
+  html += `</div>`;
+
+  body.innerHTML = html;
+}
+
+function openVatPeriod(){
+  const from = document.getElementById('vat-from').value;
+  const to = document.getElementById('vat-to').value;
+  if(!from || !to){ showToast('Choose both period dates'); return; }
+  if(from > to){ showToast('Start date must be before end date'); return; }
+  if((S.vatPeriods||[]).some(p=>p.status==='open')){ showToast('Close the current open period first'); return; }
+  // warn on overlap with an existing period
+  const overlap = (S.vatPeriods||[]).some(p=> from <= p.to && to >= p.from);
+  if(overlap && !confirm('This overlaps an existing VAT period. Open it anyway?')) return;
+  S.vatPeriods = S.vatPeriods || [];
+  S.vatPeriods.push({ id:uid('vat'), from, to, status:'open', openedAt:todayStr() });
+  showToast('VAT period opened');
+  saveState(true);
+  renderReports();
+}
+function closeVatPeriod(id){
+  const p = (S.vatPeriods||[]).find(x=>x.id===id);
+  if(!p) return;
+  // warn about uncommitted (draft) cashbook rows dated within this period — they'd be locked before review
+  const pendingDrafts = (S.cashbookDrafts||[]).filter(d=> d.date>=p.from && d.date<=p.to).length;
+  const r = computeVatReturn(p.from, p.to);
+  const msg = r.payable>0 ? `VAT payable of ${fmt(r.payable)}` : (r.refundable>0? `VAT refundable of ${fmt(r.refundable)}` : 'a nil return');
+  let warn = '';
+  if(pendingDrafts){ warn = `\n\nNote: ${pendingDrafts} unreviewed cashbook transaction${pendingDrafts===1?'':'s'} dated in this period will be LOCKED and can't be reviewed until you reopen the period. Review them first if you want them in this return.`; }
+  if(!confirm(`Close this VAT period (${fmtPeriodLabel(p.from,p.to)}) with ${msg}? This locks all cashbook and banking transactions dated in the period. You can reopen it later if needed.${warn}`)) return;
+  p.status = 'closed'; p.closedAt = todayStr();
+  // snapshot the figures at close so the history is stable even if later entries are backdated
+  p.snapshot = r;
+  showToast('VAT period closed — transactions in this period are now locked');
+  saveState(true);
+  renderReports();
+}
+function reopenVatPeriod(id){
+  const p = (S.vatPeriods||[]).find(x=>x.id===id);
+  if(!p) return;
+  if((S.vatPeriods||[]).some(x=>x.status==='open')){ showToast('Close the current open period before reopening another'); return; }
+  if(!confirm(`Reopen the VAT period ${fmtPeriodLabel(p.from,p.to)}?`)) return;
+  p.status = 'open'; delete p.closedAt; delete p.snapshot;
+  showToast('VAT period reopened');
+  saveState(true);
+  renderReports();
+}
+function openVatDetail(id){ VAT_DETAIL_ID = id; VAT_VIEW = 'detail'; renderReports(); }
+function backToVatList(){ VAT_VIEW = 'list'; VAT_DETAIL_ID = null; renderReports(); }
+
+// Detailed VAT return breakdown (SARS VAT201-style boxes)
+function renderVatDetail(){
+  const p = (S.vatPeriods||[]).find(x=>x.id===VAT_DETAIL_ID);
+  const body = document.getElementById('report-body');
+  if(!p){ backToVatList(); return; }
+  const r = computeVatReturn(p.from, p.to);
+  const rate = S.settings.taxRate;
+  const biz = S.settings;
+  body.innerHTML = `
+    <div class="card">
+      <div class="card-head" style="gap:10px;">
+        <div>
+          <h3>VAT Return — ${fmtPeriodLabel(p.from, p.to)}</h3>
+          <div style="font-size:11.5px; color:var(--text-muted); margin-top:2px;">Ref ${vatPeriodRef(p.from)} · ${p.status==='open'?'Open':'Closed'}${biz.businessVatNo? ' · VAT No. '+escapeHtml(biz.businessVatNo):''}</div>
+        </div>
+        <div style="display:flex; gap:8px;">
+          <button class="btn btn-ghost btn-sm" onclick="backToVatList()">← Back</button>
+          <button class="btn btn-ghost btn-sm" onclick="window.print()">🖶 Print</button>
+        </div>
+      </div>
+      <div class="card-body">
+        <div class="section-title">Output tax — sales &amp; income</div>
+        <div class="report-row"><span>Standard-rated sales (excl. ${biz.taxLabel})</span><span class="num">${fmt(r.salesExcl)}</span></div>
+        <div class="report-row total"><span>Output ${biz.taxLabel} charged (Box 4)</span><span class="num">${fmt(r.outputVat)}</span></div>
+
+        <div class="section-title" style="margin-top:18px;">Input tax — purchases &amp; expenses</div>
+        <div class="report-row"><span>Purchases &amp; expenses (excl. ${biz.taxLabel})</span><span class="num">${fmt(r.purchasesExcl)}</span></div>
+        <div class="report-row total"><span>Input ${biz.taxLabel} claimed (Box 14)</span><span class="num">${fmt(r.inputVat)}</span></div>
+
+        <div class="report-row total" style="font-size:15px; margin-top:18px; border-top:2px solid var(--border-strong); padding-top:12px;">
+          <span>${r.net>=0? `Net ${biz.taxLabel} payable to SARS` : `Net ${biz.taxLabel} refundable`} (Box 20)</span>
+          <span class="num ${r.net>0?'neg':(r.net<0?'pos':'')}">${fmt(Math.abs(r.net))}</span>
+        </div>
+      </div>
+      <div class="card-body" style="border-top:1px solid var(--border);">
+        <div class="hint" style="margin:0;">Figures are calculated live from ledger entries dated within the period, at the current ${rate}% ${biz.taxLabel} rate. Output ${biz.taxLabel} comes from the VAT Payable (Output) account; input ${biz.taxLabel} from VAT Receivable (Input). Box numbers mirror the SARS VAT201 layout for reference.</div>
+      </div>
+    </div>`;
 }
 
 /* ============================= SETTINGS ============================= */
