@@ -132,6 +132,7 @@
   .badge-partial{background:#E4EEFB; color:#2B5C9A;}
   .badge-paid{background:#E1F1E8; color:var(--accent-dark);}
   .badge-void{background:#F7E6E3; color:var(--red);}
+  .badge-ob{background:#F3E9D2; color:var(--gold);}
 
   .empty{padding:40px 20px; text-align:center; color:var(--text-muted);}
   .empty .big{font-size:28px; margin-bottom:8px;}
@@ -201,6 +202,37 @@
     .field-row, .field-row3{grid-template-columns:1fr;}
     #menu-toggle{display:inline-flex !important;}
   }
+
+  /* Printable invoice document */
+  .invoice-doc{ background:#fff; padding:44px 50px; max-width:900px; margin:0 auto; color:#181818; border:1px solid var(--border); border-radius:8px; }
+  .invoice-doc .doc-title{ text-align:right; font-size:19px; letter-spacing:1.2px; margin:0 0 8px; font-weight:700; }
+  .invoice-doc .doc-meta table{ margin-left:auto; border-collapse:collapse; }
+  .invoice-doc .doc-meta td{ padding:2px 0; font-size:11.5px; }
+  .invoice-doc .doc-meta td:first-child{ color:#777; padding-right:16px; text-align:left; }
+  .invoice-doc .doc-meta td:last-child{ font-weight:600; text-align:right; }
+  .invoice-doc .doc-parties{ display:grid; grid-template-columns:1fr 1fr; gap:24px; margin:32px 0 22px; padding-top:18px; border-top:1px solid #ddd; }
+  .invoice-doc .doc-label{ font-size:9.5px; color:#999; text-transform:uppercase; letter-spacing:1px; font-weight:700; }
+  .invoice-doc .party-name{ font-size:14.5px; font-weight:700; margin:3px 0 6px; }
+  .invoice-doc .addr-cols{ display:grid; grid-template-columns:1fr 1fr; gap:10px; font-size:11px; color:#333; margin-top:8px; line-height:1.6; }
+  .invoice-doc table.doc-items{ width:100%; border-collapse:collapse; margin-top:8px; }
+  .invoice-doc table.doc-items th{ text-align:left; font-size:10px; text-transform:uppercase; color:#888; border-bottom:1px solid #ccc; padding:7px 5px; font-weight:600; }
+  .invoice-doc table.doc-items td{ padding:9px 5px; font-size:12.5px; border-bottom:1px solid #eee; }
+  .invoice-doc table.doc-items .r{ text-align:right; }
+  .invoice-doc table.doc-items tbody tr:first-child td{ font-style:italic; }
+  .invoice-doc .doc-footer{ display:flex; justify-content:space-between; margin-top:34px; align-items:flex-start; gap:20px; }
+  .invoice-doc .doc-bank{ font-size:11.5px; color:#333; line-height:1.8; }
+  .invoice-doc .doc-totals{ width:260px; }
+  .invoice-doc .doc-totals .row{ display:flex; justify-content:space-between; font-size:12.5px; padding:4px 0; color:#333; }
+  .invoice-doc .doc-totals .row.grand{ font-weight:700; color:#111; border-top:1px solid #ccc; margin-top:4px; padding-top:8px; font-size:13.5px; }
+  .invoice-doc .doc-balance{ margin-top:18px; text-align:right; }
+  .invoice-doc .doc-balance .lbl{ font-size:9.5px; color:#999; text-transform:uppercase; letter-spacing:1px; font-weight:700; }
+  .invoice-doc .doc-balance .amt{ font-size:24px; font-weight:700; }
+  @media print{
+    #sidebar, #topbar, .toolbar { display:none !important; }
+    body{ background:#fff; }
+    #main, #content{ padding:0 !important; margin:0 !important; }
+    .invoice-doc{ border:none; box-shadow:none; max-width:100%; padding:0; }
+  }
 </style>
 </head>
 <body>
@@ -212,7 +244,7 @@
     </div>
     <div id="company-switcher" style="padding:0 12px 12px;"></div>
     <nav id="nav"></nav>
-    <div class="sidebar-foot">Local demo data · not connected to a bank</div>
+    <div class="sidebar-foot"><span id="save-status">Not saved yet</span></div>
   </aside>
   <div id="main">
     <div id="topbar">
@@ -247,6 +279,7 @@ const NAV = [
   {id:'sales', label:'Sales / Invoices', ic:'↗'},
   {id:'purchases', label:'Purchases / Bills', ic:'↙'},
   {id:'banking', label:'Banking', ic:'▤'},
+  {id:'journal', label:'Journal Entries', ic:'✎'},
   {sec:'Records'},
   {id:'contacts', label:'Contacts', ic:'●'},
   {id:'accounts', label:'Chart of Accounts', ic:'≡'},
@@ -259,7 +292,8 @@ function uid(p){ return p+'_'+Date.now().toString(36)+Math.random().toString(36)
 
 function defaultData(){
   return {
-    settings:{ businessName:'My Business', currency:'R', taxLabel:'VAT', taxRate:15, nextInvoiceNo:1001, nextBillNo:2001 },
+    settings:{ businessName:'My Business', currency:'R', taxLabel:'VAT', taxRate:15, nextInvoiceNo:1001, nextBillNo:2001,
+      businessVatNo:'', businessAddress:'', bankName:'', bankBranch:'', bankAccountNumber:'' },
     accounts:[
       {id:'acc_bank', code:'1000', name:'Business Bank Account', type:'Asset', isBank:true, system:true},
       {id:'acc_ar', code:'1100', name:'Accounts Receivable', type:'Asset', system:true},
@@ -281,11 +315,41 @@ function defaultData(){
     invoices:[],
     bills:[],
     journal:[],
+    reconciliations:[],
+    bankFeeds:{},
+    feedInbox:[],
     seeded:false,
   };
 }
 
 /* ============================= PERSISTENCE (multi-company workspace) ============================= */
+// Storage adapter: uses the Claude artifact storage API when available,
+// and transparently falls back to the browser's localStorage when this
+// file is opened on its own (e.g. downloaded and opened directly, or
+// hosted elsewhere) so entered data is always kept between sessions.
+function hasArtifactStorage(){
+  return typeof window.storage !== 'undefined' && window.storage && typeof window.storage.get === 'function' && typeof window.storage.set === 'function';
+}
+async function storageGet(key){
+  if(hasArtifactStorage()){
+    try{ return await window.storage.get(key, false); }
+    catch(e){ /* not found under this backend — fall through to try local as a safety net */ }
+  }
+  try{
+    const raw = window.localStorage.getItem(key);
+    return raw!==null ? {key, value:raw, shared:false} : null;
+  }catch(e){ return null; }
+}
+async function storageSet(key, value){
+  if(hasArtifactStorage()){
+    try{ return await window.storage.set(key, value, false); }
+    catch(e){ /* fall through and also try local so we don't silently lose data */ }
+  }
+  try{
+    window.localStorage.setItem(key, value);
+    return {key, value, shared:false};
+  }catch(e){ return null; }
+}
 function newCompanyRecord(name){
   const co = defaultData();
   co.settings.businessName = name || 'New Company';
@@ -293,17 +357,17 @@ function newCompanyRecord(name){
 }
 async function loadState(){
   try{
-    const res = await window.storage.get(STORAGE_KEY, false);
+    const res = await storageGet(STORAGE_KEY);
     if(res && res.value){
       WORKSPACE = JSON.parse(res.value);
       S = WORKSPACE.companies[WORKSPACE.activeId];
-      if(S) return;
+      if(S){ LAST_SAVED_AT = new Date(); return; }
     }
   }catch(e){ /* not found or storage unavailable */ }
 
   // Migrate a legacy single-company save if present
   try{
-    const old = await window.storage.get(OLD_STORAGE_KEY, false);
+    const old = await storageGet(OLD_STORAGE_KEY);
     if(old && old.value){
       const co = JSON.parse(old.value);
       const id = uid('co');
@@ -323,15 +387,99 @@ async function loadState(){
   await saveState(true);
 }
 
+let LAST_SAVED_AT = null;
 async function saveState(immediate){
   clearTimeout(SAVE_TIMER);
   const doSave = async ()=>{
-    try{ await window.storage.set(STORAGE_KEY, JSON.stringify(WORKSPACE), false); }
-    catch(e){ console.error('save failed', e); showToast('Could not save — changes may not persist'); }
+    try{
+      const result = await storageSet(STORAGE_KEY, JSON.stringify(WORKSPACE));
+      if(result){ LAST_SAVED_AT = new Date(); updateSaveIndicator(); }
+      else { showToast('Could not save — changes may not persist'); }
+    }catch(e){ console.error('save failed', e); showToast('Could not save — changes may not persist'); }
   };
   if(immediate) return doSave();
   SAVE_TIMER = setTimeout(doSave, 250);
 }
+function updateSaveIndicator(){
+  const el = document.getElementById('save-status');
+  if(!el) return;
+  if(!LAST_SAVED_AT){ el.textContent = 'Not saved yet'; return; }
+  const secs = Math.round((Date.now()-LAST_SAVED_AT.getTime())/1000);
+  const when = secs<5 ? 'just now' : secs<60 ? secs+'s ago' : Math.round(secs/60)+'m ago';
+  el.textContent = '● Saved '+when;
+}
+setInterval(updateSaveIndicator, 15000);
+
+/* ============================= BACKUP / RESTORE ============================= */
+function downloadJson(obj, filename){
+  const data = JSON.stringify(obj, null, 2);
+  const blob = new Blob([data], {type:'application/json'});
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  setTimeout(()=>URL.revokeObjectURL(url), 1000);
+}
+function exportWorkspaceBackup(){
+  downloadJson({ type:'ledgerly-workspace-backup', exportedAt: new Date().toISOString(), workspace: WORKSPACE },
+    `ledgerly-backup-${todayStr()}.json`);
+  showToast('Backup downloaded');
+}
+function exportCompanyBackup(){
+  const safeName = (S.settings.businessName||'company').toLowerCase().replace(/[^a-z0-9]+/g,'-').replace(/(^-|-$)/g,'');
+  downloadJson({ type:'ledgerly-company-backup', exportedAt: new Date().toISOString(), company: S },
+    `ledgerly-${safeName || 'company'}-${todayStr()}.json`);
+  showToast('Company backup downloaded');
+}
+function handleRestoreBackup(event){
+  const file = event.target.files[0];
+  if(!file) return;
+  const reader = new FileReader();
+  reader.onload = async (e)=>{
+    let parsed;
+    try{ parsed = JSON.parse(String(e.target.result)); }
+    catch(err){ showToast('That file is not valid JSON'); event.target.value=''; return; }
+
+    // Restoring a single-company export: add it as a new company, don't touch the rest of the workspace
+    if(parsed && parsed.type==='ledgerly-company-backup' && parsed.company){
+      if(!confirm(`Add "${parsed.company.settings?.businessName || 'this company'}" as a new company from the backup file?`)){ event.target.value=''; return; }
+      const id = uid('co');
+      WORKSPACE.companies[id] = parsed.company;
+      (WORKSPACE.order = WORKSPACE.order || Object.keys(WORKSPACE.companies)).push(id);
+      WORKSPACE.activeId = id;
+      S = WORKSPACE.companies[id];
+      await saveState(true);
+      showToast('Company restored from backup');
+      navigate('dashboard');
+      event.target.value = '';
+      return;
+    }
+
+    // Restoring a full workspace export: replace everything
+    let newWorkspace = null;
+    if(parsed && parsed.type==='ledgerly-workspace-backup' && parsed.workspace){ newWorkspace = parsed.workspace; }
+    else if(parsed && parsed.companies && parsed.activeId){ newWorkspace = parsed; } // raw workspace object, no wrapper
+    if(!newWorkspace || !newWorkspace.companies){
+      showToast("This file doesn't look like a Ledgerly backup");
+      event.target.value = '';
+      return;
+    }
+    if(!confirm('Restoring this backup will replace ALL companies and data currently in this app. This cannot be undone. Continue?')){ event.target.value=''; return; }
+    WORKSPACE = newWorkspace;
+    if(!WORKSPACE.order) WORKSPACE.order = Object.keys(WORKSPACE.companies);
+    if(!WORKSPACE.activeId || !WORKSPACE.companies[WORKSPACE.activeId]) WORKSPACE.activeId = WORKSPACE.order[0];
+    S = WORKSPACE.companies[WORKSPACE.activeId];
+    await saveState(true);
+    showToast('Backup restored');
+    navigate('dashboard');
+    event.target.value = '';
+  };
+  reader.readAsText(file);
+}
+
 
 function companyList(){
   return (WORKSPACE.order||Object.keys(WORKSPACE.companies)).map(id=>({id, name:WORKSPACE.companies[id].settings.businessName}));
@@ -399,16 +547,25 @@ function deleteCompanyAction(id){
 
 /* ============================= SEED DEMO DATA ============================= */
 function seedDemoData(){
-  const c1 = {id:uid('ct'), type:'customer', name:'Table Mountain Coffee Co.', email:'accounts@tmcoffee.co.za', phone:'021 555 0134'};
-  const c2 = {id:uid('ct'), type:'customer', name:'Harbour View Studios', email:'billing@harbourview.studio', phone:'021 555 0198'};
-  const s1 = {id:uid('ct'), type:'supplier', name:'Kloof Office Supplies', email:'sales@kloofoffice.co.za', phone:'021 555 0221'};
+  S.settings.businessVatNo = '4470308885';
+  S.settings.businessAddress = '89 Koedoe Street\nReebok\nMossel Bay\n6525';
+  S.settings.bankName = 'FNB';
+  S.settings.bankBranch = '250655';
+  S.settings.bankAccountNumber = '62927317314';
+
+  const c1 = {id:uid('ct'), type:'customer', name:'Table Mountain Coffee Co.', email:'accounts@tmcoffee.co.za', phone:'021 555 0134', vatNo:'4230187766', address:'12 Long Street\nCape Town\n8001'};
+  const c2 = {id:uid('ct'), type:'customer', name:'Harbour View Studios', email:'billing@harbourview.studio', phone:'021 555 0198', vatNo:'4501122938', address:'45 Beach Road\nSea Point\nCape Town\n8005'};
+  const s1 = {id:uid('ct'), type:'supplier', name:'Kloof Office Supplies', email:'sales@kloofoffice.co.za', phone:'021 555 0221', vatNo:'4890076521', address:'3 Kloof Street\nGardens\nCape Town\n8001'};
   S.contacts.push(c1,c2,s1);
 
   // Opening equity contribution
-  postJournal('Owner opening capital contribution', daysAgo(60), [
+  const openingEntry = postJournal('Owner opening capital contribution', daysAgo(60), [
     {accountId:'acc_bank', debit:50000, credit:0},
     {accountId:'acc_equity', debit:0, credit:50000},
   ]);
+  openingEntry.manual = true;
+  openingEntry.isOpeningBalance = true;
+  openingEntry.ref = 'manual-'+openingEntry.id;
 
   // Invoice 1 - issued and paid
   const inv1 = makeInvoiceObj(c1.id, daysAgo(24), daysAgo(10), [
@@ -463,6 +620,7 @@ function daysAgo(n){ const d=new Date(); d.setDate(d.getDate()-n); return d.toIS
 
 /* ============================= JOURNAL / LEDGER ENGINE ============================= */
 function postJournal(description, date, lines){
+  lines.forEach(l=>{ if(!l.id) l.id = uid('jl'); });
   const totalDebit = lines.reduce((s,l)=>s+(l.debit||0),0);
   const totalCredit = lines.reduce((s,l)=>s+(l.credit||0),0);
   const entry = {id:uid('je'), date, description, lines, ref:null};
@@ -480,10 +638,11 @@ function todayStr(){ return new Date().toISOString().slice(0,10); }
 function accountType(id){ const a=S.accounts.find(x=>x.id===id); return a?a.type:null; }
 function accountNormalIsDebit(type){ return type==='Asset'||type==='Expense'; }
 
-function getAccountBalance(accountId, asOfDate){
+function getAccountBalance(accountId, asOfDate, excludeOpening){
   let debit=0, credit=0;
   S.journal.forEach(e=>{
     if(asOfDate && e.date>asOfDate) return;
+    if(excludeOpening && e.isOpeningBalance) return;
     e.lines.forEach(l=>{ if(l.accountId===accountId){ debit+=l.debit||0; credit+=l.credit||0; } });
   });
   const type = accountType(accountId);
@@ -653,10 +812,14 @@ function render(){
     sales: renderSales,
     purchases: renderPurchases,
     banking: renderBanking,
+    journal: renderJournal,
     contacts: renderContacts,
     accounts: renderAccounts,
     reports: renderReports,
     settings: renderSettings,
+    'invoice-print': renderInvoicePrintPage,
+    'reconcile': renderReconcilePage,
+    'feed-review': renderFeedReviewPage,
   };
   (map[VIEW]||renderDashboard)();
   saveState();
@@ -861,7 +1024,7 @@ function openInvoiceDetail(id){
     </div>
     ${paymentsRows? `<div class="section-title">Payments</div><table><thead><tr><th>Date</th><th>Into</th><th class="amt">Amount</th></tr></thead><tbody>${paymentsRows}</tbody></table>`:''}
   `;
-  const actions = [];
+  const actions = [{label:'Print / Save as PDF', cls:'btn-ghost', onclick:`openInvoicePrintView('${inv.id}')`}];
   if(status==='draft'){
     actions.push({label:'Delete draft', cls:'btn-danger', onclick:`deleteInvoice('${inv.id}')`});
     actions.push({label:'Issue invoice', cls:'btn-primary', onclick:`issueInvoiceAction('${inv.id}')`});
@@ -895,6 +1058,91 @@ function submitInvoicePayment(id){
   if(amount<=0){ showToast('Enter a valid amount'); return; }
   recordInvoicePayment(id, amount, date, account);
   closeModal(); showToast('Payment recorded'); navigate('sales');
+}
+
+/* ============================= INVOICE PRINT / PDF VIEW ============================= */
+let PRINT_INVOICE_ID = null;
+function openInvoicePrintView(id){
+  PRINT_INVOICE_ID = id;
+  VIEW = 'invoice-print';
+  closeModal();
+  render();
+}
+function addrLines(addr){ return (addr||'').split('\n').map(l=>l.trim()).filter(Boolean); }
+function renderInvoicePrintPage(){
+  const inv = S.invoices.find(i=>i.id===PRINT_INVOICE_ID);
+  if(!inv){ navigate('sales'); return; }
+  const status = docStatus(inv);
+  setTopbar(inv.number, 'Tax invoice', `
+    <button class="btn btn-ghost" onclick="navigate('sales')">← Back to invoices</button>
+    <button class="btn btn-primary" onclick="window.print()">🖶 Print / Save as PDF</button>
+  `);
+  const biz = S.settings;
+  const cust = S.contacts.find(c=>c.id===inv.contactId) || {name:'—'};
+  const docTitle = status==='void' ? 'VOID TAX INVOICE' : status==='draft' ? 'PRO FORMA INVOICE' : 'TAX INVOICE';
+  const rows = inv.lines.map(l=>{
+    const excl = lineSubtotal(l);
+    const incl = excl * (1 + (inv.taxRate||0)/100);
+    return `<tr><td>${escapeHtml(l.desc)}</td><td class="r">${l.qty}</td><td class="r">${fmt(l.price)}</td><td class="r">0.00%</td><td class="r">${(inv.taxRate||0).toFixed(2)}%</td><td class="r">${fmt(excl)}</td><td class="r">${fmt(incl)}</td></tr>`;
+  }).join('');
+  const bizAddr = addrLines(biz.businessAddress);
+  const custAddr = addrLines(cust.address);
+  document.getElementById('content').innerHTML = `
+    <div class="invoice-doc">
+      <div style="display:flex; justify-content:space-between; align-items:flex-start;">
+        <div style="font-weight:700; font-size:15px;">${escapeHtml(biz.businessName||'')}</div>
+        <div>
+          <div class="doc-title">${docTitle}</div>
+          <div class="doc-meta"><table>
+            <tr><td>NUMBER:</td><td>${inv.number}</td></tr>
+            <tr><td>REFERENCE:</td><td></td></tr>
+            <tr><td>DATE:</td><td>${inv.status==='draft'?'—':fmtDate(inv.date)}</td></tr>
+            <tr><td>DUE DATE:</td><td>${fmtDate(inv.dueDate)}</td></tr>
+            <tr><td>SALES REP:</td><td></td></tr>
+            <tr><td>OVERALL DISCOUNT %:</td><td>0.00%</td></tr>
+          </table></div>
+        </div>
+      </div>
+      <div class="doc-parties">
+        <div>
+          <div class="doc-label">From</div>
+          <div class="party-name">${escapeHtml(biz.businessName||'')}</div>
+          ${biz.businessVatNo? `<div style="font-size:11px;"><strong>VAT NO:</strong> ${escapeHtml(biz.businessVatNo)}</div>`:''}
+          <div class="addr-cols">
+            <div><div class="doc-label">Postal Address</div>${bizAddr.length? bizAddr.map(l=>`<div>${escapeHtml(l)}</div>`).join('') : '<div style="color:#bbb;">—</div>'}</div>
+            <div><div class="doc-label">Physical Address</div>${bizAddr.length? bizAddr.map(l=>`<div>${escapeHtml(l)}</div>`).join('') : '<div style="color:#bbb;">—</div>'}</div>
+          </div>
+        </div>
+        <div>
+          <div class="doc-label">To</div>
+          <div class="party-name">${escapeHtml(cust.name||'')}</div>
+          ${cust.vatNo? `<div style="font-size:11px;"><strong>CUSTOMER VAT NO:</strong> ${escapeHtml(cust.vatNo)}</div>`:''}
+          <div class="addr-cols">
+            <div><div class="doc-label">Postal Address</div>${custAddr.length? custAddr.map(l=>`<div>${escapeHtml(l)}</div>`).join('') : '<div style="color:#bbb;">—</div>'}</div>
+            <div><div class="doc-label">Physical Address</div>${custAddr.length? custAddr.map(l=>`<div>${escapeHtml(l)}</div>`).join('') : '<div style="color:#bbb;">—</div>'}</div>
+          </div>
+        </div>
+      </div>
+      <table class="doc-items">
+        <thead><tr><th>Description</th><th class="r">Quantity</th><th class="r">Excl. Price</th><th class="r">Disc %</th><th class="r">VAT %</th><th class="r">Excl. Total</th><th class="r">Incl. Total</th></tr></thead>
+        <tbody>${rows}</tbody>
+      </table>
+      <div class="doc-footer">
+        <div class="doc-bank">
+          ${biz.bankName? `Bank: ${escapeHtml(biz.bankName)}<br>`:''}
+          ${biz.bankBranch? `Branch Code: ${escapeHtml(biz.bankBranch)}<br>`:''}
+          ${biz.bankAccountNumber? `Account Number: ${escapeHtml(biz.bankAccountNumber)}`:''}
+        </div>
+        <div class="doc-totals">
+          <div class="row"><span>Total Discount:</span><span class="num">${fmt(0)}</span></div>
+          <div class="row"><span>Total Exclusive:</span><span class="num">${fmt(docSubtotal(inv))}</span></div>
+          <div class="row"><span>Total VAT:</span><span class="num">${fmt(docTax(inv))}</span></div>
+          <div class="row grand"><span>Grand Total:</span><span class="num">${fmt(invoiceTotal(inv))}</span></div>
+          <div class="doc-balance"><div class="lbl">Balance Due</div><div class="amt num">${fmt(status==='draft'?invoiceTotal(inv):docBalanceDue(inv))}</div></div>
+        </div>
+      </div>
+    </div>
+  `;
 }
 
 /* ============================= PURCHASES (mirrors sales) ============================= */
@@ -1042,6 +1290,22 @@ function submitBillPayment(id){
 }
 
 /* ============================= BANKING ============================= */
+function getBankLinesForAccount(accountId){
+  const out = [];
+  S.journal.forEach(e=>{
+    e.lines.forEach(l=>{
+      if(l.accountId===accountId){
+        if(!l.id) l.id = uid('jl'); // lazy-migrate older entries that predate line ids
+        out.push({entryId:e.id, lineId:l.id, date:e.date, desc:e.description, debit:l.debit||0, credit:l.credit||0, reconciled: !!l.reconciled});
+      }
+    });
+  });
+  return out.sort((a,b)=> a.date.localeCompare(b.date) || a.lineId.localeCompare(b.lineId));
+}
+function lastReconciliation(accountId){
+  const list = S.reconciliations.filter(r=>r.accountId===accountId).sort((a,b)=>a.date.localeCompare(b.date) || a.id.localeCompare(b.id));
+  return list.length ? list[list.length-1] : null;
+}
 function renderBanking(){
   const bankAccounts = S.accounts.filter(a=>a.isBank);
   setTopbar('Banking', 'View bank ledgers and log manual transactions',
@@ -1049,20 +1313,46 @@ function renderBanking(){
      <button class="btn btn-primary" onclick="openBankTxnForm()">+ Add transaction</button>`);
   let html = '';
   bankAccounts.forEach(acc=>{
-    const entries = [];
-    S.journal.forEach(e=>{
-      e.lines.forEach(l=>{ if(l.accountId===acc.id) entries.push({date:e.date, desc:e.description, debit:l.debit||0, credit:l.credit||0, entryId:e.id}); });
-    });
-    entries.sort((a,b)=>a.date.localeCompare(b.date));
+    const lines = getBankLinesForAccount(acc.id);
     let running = 0;
-    const rows = entries.map(e=>{ running += e.debit - e.credit; return {...e, running}; });
+    const rows = lines.map(l=>{ running += l.debit - l.credit; return {...l, running}; });
+    const unreconciledCount = lines.filter(l=>!l.reconciled).length;
+    const lastRecon = lastReconciliation(acc.id);
+    const feed = (S.bankFeeds||{})[acc.id];
+    const pendingFeedCount = (S.feedInbox||[]).filter(f=>f.accountId===acc.id).length;
     html += `<div class="card" style="margin-bottom:18px;">
-      <div class="card-head"><h3>${acc.name}</h3><span class="num" style="font-weight:700;">${fmt(getAccountBalance(acc.id))}</span></div>
-      ${rows.length? `<table><thead><tr><th>Date</th><th>Description</th><th class="amt">Money in</th><th class="amt">Money out</th><th class="amt">Balance</th></tr></thead><tbody>
-        ${rows.slice().reverse().map(r=>`<tr><td>${fmtDateShort(r.date)}</td><td>${r.desc}</td>
+      <div class="card-head">
+        <div>
+          <h3>${acc.name}</h3>
+          <div style="font-size:11.5px; color:var(--text-muted); margin-top:3px;">
+            ${lastRecon? `Last reconciled ${fmtDateShort(lastRecon.date)} to ${fmt(lastRecon.closingBalance)}` : 'Never reconciled'}
+            ${unreconciledCount? ` · ${unreconciledCount} uncleared transaction${unreconciledCount===1?'':'s'}` : ' · all cleared'}
+          </div>
+        </div>
+        <div style="display:flex; align-items:center; gap:12px;">
+          <span class="num" style="font-weight:700;">${fmt(getAccountBalance(acc.id))}</span>
+          <button class="btn btn-ghost btn-sm" onclick="openReconcile('${acc.id}')">☑ Reconcile</button>
+        </div>
+      </div>
+      <div style="padding:9px 18px; border-bottom:1px solid var(--border); background:var(--surface-2); display:flex; align-items:center; justify-content:space-between; font-size:12px; flex-wrap:wrap; gap:8px;">
+        ${feed && feed.connected ? `
+          <span style="color:var(--text-muted);">🔗 ${escapeHtml(feed.institution)}${feed.last4?' ••'+escapeHtml(feed.last4):''} · ${feed.lastFetched? 'Last synced '+fmtDateShort(feed.lastFetched) : 'Not yet synced'}</span>
+          <span style="display:flex; gap:12px; align-items:center;">
+            ${pendingFeedCount? `<a href="#" onclick="openFeedReview('${acc.id}'); return false;" style="color:var(--gold); font-weight:700;">${pendingFeedCount} to review</a>`:''}
+            <button class="btn btn-ghost btn-sm" onclick="fetchFeedAction('${acc.id}')">🔄 Fetch</button>
+            <button class="icon-btn" onclick="disconnectFeed('${acc.id}')">Disconnect</button>
+          </span>
+        ` : `
+          <span style="color:var(--text-muted);">No bank feed connected</span>
+          <button class="btn btn-ghost btn-sm" onclick="openConnectFeedForm('${acc.id}')">🔗 Connect bank feed</button>
+        `}
+      </div>
+      ${rows.length? `<table><thead><tr><th>Date</th><th>Description</th><th class="amt">Money in</th><th class="amt">Money out</th><th class="amt">Balance</th><th style="width:40px;">✓</th></tr></thead><tbody>
+        ${rows.slice().reverse().map(r=>`<tr><td>${fmtDateShort(r.date)}</td><td>${escapeHtml(r.desc)}</td>
           <td class="amt num pos">${r.debit? fmt(r.debit):''}</td>
           <td class="amt num neg">${r.credit? fmt(r.credit):''}</td>
-          <td class="amt num">${fmt(r.running)}</td></tr>`).join('')}
+          <td class="amt num">${fmt(r.running)}</td>
+          <td style="text-align:center; color:${r.reconciled?'var(--accent-dark)':'var(--border-strong)'};">${r.reconciled?'✓':'—'}</td></tr>`).join('')}
       </tbody></table>` : `<div class="empty"><p>No transactions in this account yet.</p></div>`}
     </div>`;
   });
@@ -1099,6 +1389,311 @@ function submitBankTxn(){
     postJournal(desc, date, [{accountId:bank, debit:amount, credit:0},{accountId:cat, debit:0, credit:amount}]);
   }
   closeModal(); showToast('Transaction added'); navigate('banking');
+}
+
+/* ============================= BANK RECONCILIATION ============================= */
+let RECON = null; // {accountId, opening, closing, statementDate, ticks:{lineId:bool}}
+function openReconcile(accountId){
+  const last = lastReconciliation(accountId);
+  RECON = {
+    accountId,
+    opening: last ? last.closingBalance : 0,
+    closing: last ? last.closingBalance : 0,
+    statementDate: todayStr(),
+    ticks: {},
+  };
+  VIEW = 'reconcile';
+  render();
+}
+function reconUnclearedLines(){
+  return getBankLinesForAccount(RECON.accountId).filter(l=>!l.reconciled);
+}
+function reconTotals(){
+  const lines = reconUnclearedLines();
+  let inTotal=0, outTotal=0;
+  lines.forEach(l=>{ if(RECON.ticks[l.lineId]){ inTotal+=l.debit; outTotal+=l.credit; } });
+  const calcClosing = round2(RECON.opening + inTotal - outTotal);
+  const diff = round2(calcClosing - RECON.closing);
+  return {inTotal, outTotal, calcClosing, diff};
+}
+function renderReconcilePage(){
+  const acc = S.accounts.find(a=>a.id===(RECON&&RECON.accountId));
+  if(!acc){ navigate('banking'); return; }
+  setTopbar('Reconcile — '+acc.name, 'Tick off every transaction that appears on your bank statement',
+    `<button class="btn btn-ghost" onclick="RECON=null; navigate('banking');">← Back to banking</button>`);
+  const lines = reconUnclearedLines();
+  document.getElementById('content').innerHTML = `
+    <div class="card" style="margin-bottom:16px;">
+      <div class="card-body">
+        <div class="field-row3">
+          <div class="field"><label>Statement date</label><input type="date" id="rc-date" value="${RECON.statementDate}" onchange="RECON.statementDate=this.value"></div>
+          <div class="field"><label>Statement opening balance</label><input type="number" id="rc-open" value="${RECON.opening}" step="0.01" onchange="RECON.opening=Number(this.value)||0; recalcRecon();"></div>
+          <div class="field"><label>Statement closing balance</label><input type="number" id="rc-close" value="${RECON.closing}" step="0.01" onchange="RECON.closing=Number(this.value)||0; recalcRecon();"></div>
+        </div>
+        <div class="hint">Book balance right now: <strong class="num">${fmt(getAccountBalance(acc.id))}</strong></div>
+      </div>
+    </div>
+    <div class="card" style="margin-bottom:16px;">
+      <div class="card-head"><h3>Uncleared transactions</h3>
+        <span style="font-size:12px; color:var(--text-muted);">
+          <a href="#" onclick="setAllReconTicks(true); return false;" style="color:var(--accent-dark); font-weight:600;">Tick all</a> ·
+          <a href="#" onclick="setAllReconTicks(false); return false;" style="color:var(--text-muted); font-weight:600;">Clear all</a>
+        </span>
+      </div>
+      ${lines.length? `<table><thead><tr><th style="width:34px;"></th><th>Date</th><th>Description</th><th class="amt">Money in</th><th class="amt">Money out</th></tr></thead><tbody id="rc-rows">
+        ${lines.map(l=>`<tr>
+          <td><input type="checkbox" onchange="toggleReconLine('${l.lineId}', this.checked)"></td>
+          <td>${fmtDateShort(l.date)}</td><td>${escapeHtml(l.desc)}</td>
+          <td class="amt num pos">${l.debit? fmt(l.debit):''}</td>
+          <td class="amt num neg">${l.credit? fmt(l.credit):''}</td>
+        </tr>`).join('')}
+      </tbody></table>` : emptyState('Nothing to reconcile', 'Every transaction in this account is already cleared.', null)}
+    </div>
+    <div class="card">
+      <div class="card-body">
+        <div class="report-row"><span>Statement opening balance</span><span class="num" id="rc-sum-open">${fmt(RECON.opening)}</span></div>
+        <div class="report-row"><span>+ Money in ticked</span><span class="num pos" id="rc-sum-in">${fmt(0)}</span></div>
+        <div class="report-row"><span>− Money out ticked</span><span class="num neg" id="rc-sum-out">${fmt(0)}</span></div>
+        <div class="report-row total"><span>Calculated closing balance</span><span class="num" id="rc-sum-calc">${fmt(RECON.opening)}</span></div>
+        <div class="report-row"><span>Statement closing balance (entered)</span><span class="num" id="rc-sum-target">${fmt(RECON.closing)}</span></div>
+        <div class="balance-check" id="rc-balance-check" style="margin-top:12px;"><span class="dot" style="background:var(--red);"></span>
+          <span id="rc-diff-label">Difference: ${fmt(0)}</span></div>
+        <div style="margin-top:16px;">
+          <button class="btn btn-primary" id="rc-finish-btn" onclick="finishReconciliation()">Finish reconciliation</button>
+        </div>
+      </div>
+    </div>
+  `;
+  recalcRecon();
+}
+function toggleReconLine(lineId, checked){
+  RECON.ticks[lineId] = checked;
+  recalcRecon();
+}
+function setAllReconTicks(value){
+  reconUnclearedLines().forEach(l=>{ RECON.ticks[l.lineId] = value; });
+  document.querySelectorAll('#rc-rows input[type=checkbox]').forEach(cb=>cb.checked=value);
+  recalcRecon();
+}
+function recalcRecon(){
+  const t = reconTotals();
+  const set = (id, val)=>{ const el=document.getElementById(id); if(el) el.textContent = val; };
+  set('rc-sum-open', fmt(RECON.opening));
+  set('rc-sum-in', fmt(t.inTotal));
+  set('rc-sum-out', fmt(t.outTotal));
+  set('rc-sum-calc', fmt(t.calcClosing));
+  set('rc-sum-target', fmt(RECON.closing));
+  const balanced = Math.abs(t.diff) < 0.005;
+  const dot = document.querySelector('#rc-balance-check .dot');
+  const label = document.getElementById('rc-diff-label');
+  if(dot) dot.style.background = balanced ? 'var(--accent)' : 'var(--red)';
+  if(label) label.textContent = balanced ? 'Balanced ✓' : `Difference: ${fmt(Math.abs(t.diff))}`;
+}
+function finishReconciliation(){
+  const lines = reconUnclearedLines();
+  const tickedIds = lines.filter(l=>RECON.ticks[l.lineId]).map(l=>l.lineId);
+  if(tickedIds.length===0){ showToast('Tick at least one transaction'); return; }
+  const t = reconTotals();
+  if(Math.abs(t.diff) >= 0.005){
+    if(!confirm(`This reconciliation is out of balance by ${fmt(Math.abs(t.diff))}. Finish anyway?`)) return;
+  }
+  const reconId = uid('rc');
+  S.journal.forEach(e=>{
+    e.lines.forEach(l=>{
+      if(l.accountId===RECON.accountId && tickedIds.includes(l.id)){ l.reconciled = true; l.reconciledId = reconId; }
+    });
+  });
+  S.reconciliations.push({
+    id: reconId, accountId: RECON.accountId, date: RECON.statementDate,
+    openingBalance: RECON.opening, closingBalance: RECON.closing, clearedCount: tickedIds.length,
+  });
+  const cleared = tickedIds.length;
+  RECON = null;
+  showToast(`Reconciliation complete — ${cleared} transaction${cleared===1?'':'s'} cleared`);
+  navigate('banking');
+}
+
+/* ============================= BANK FEEDS (simulated) ============================= */
+const FEED_CATEGORY_HINTS = [
+  {kw:['vodacom','telkom','mtn','cell c','fibre','internet'], accountId:'acc_utilities'},
+  {kw:['rent','lease'], accountId:'acc_rent'},
+  {kw:['software','subscription','saas','adobe','microsoft','google','saas'], accountId:'acc_software'},
+  {kw:['uber','bolt','flight','airbnb','hotel','travel'], accountId:'acc_travel'},
+  {kw:['bank fee','service fee','admin fee'], accountId:'acc_bankfees'},
+  {kw:['stationery','office','printer','courier','takealot','makro'], accountId:'acc_office'},
+];
+const FEED_SAMPLE_TXNS = [
+  {desc:'POS Purchase - Woolworths', out:true, min:150, max:900},
+  {desc:'POS Purchase - Makro', out:true, min:300, max:2500},
+  {desc:'Debit Order - Vodacom', out:true, min:399, max:899},
+  {desc:'Debit Order - Telkom Fibre', out:true, min:799, max:999},
+  {desc:'EFT Payment Received', out:false, min:1000, max:15000},
+  {desc:'Interest Received', out:false, min:5, max:120},
+  {desc:'Bank Service Fee', out:true, min:45, max:150},
+  {desc:'Uber Trip', out:true, min:60, max:350},
+  {desc:'Insurance Premium - Santam', out:true, min:450, max:1200},
+  {desc:'Card Purchase - Takealot', out:true, min:200, max:2200},
+  {desc:'Refund Received', out:false, min:100, max:900},
+];
+function guessCategoryForDesc(desc, isIn){
+  const lower = desc.toLowerCase();
+  for(const h of FEED_CATEGORY_HINTS){ if(h.kw.some(k=>lower.includes(k))) return h.accountId; }
+  return isIn ? 'acc_other_inc' : 'acc_office';
+}
+function randomDateBetween(from, to){
+  const f = new Date(from+'T00:00:00'), t = new Date(to+'T00:00:00');
+  if(f>=t) return to;
+  const rand = new Date(f.getTime() + Math.random()*(t-f));
+  return rand.toISOString().slice(0,10);
+}
+function fetchFeedTransactions(accountId){
+  S.bankFeeds = S.bankFeeds || {};
+  S.feedInbox = S.feedInbox || [];
+  const feed = S.bankFeeds[accountId];
+  if(!feed) return 0;
+  const fromDate = feed.lastFetched || daysAgo(14);
+  const count = 3 + Math.floor(Math.random()*4);
+  const openInvoices = S.invoices.filter(i=>{ const st=docStatus(i); return st==='open'||st==='partial'; });
+  const openBills = S.bills.filter(b=>{ const st=docStatus(b); return st==='open'||st==='partial'; });
+  let added = 0;
+  for(let i=0;i<count;i++){
+    let desc, amount, isIn, matchType=null, matchId=null;
+    const roll = Math.random();
+    if(roll<0.22 && openInvoices.length){
+      const inv = openInvoices[Math.floor(Math.random()*openInvoices.length)];
+      desc = 'EFT Payment Received - '+contactName(inv.contactId);
+      amount = docBalanceDue(inv); isIn = true; matchType='invoice'; matchId=inv.id;
+    } else if(roll<0.38 && openBills.length){
+      const bill = openBills[Math.floor(Math.random()*openBills.length)];
+      desc = 'Payment Sent - '+contactName(bill.contactId);
+      amount = docBalanceDue(bill); isIn = false; matchType='bill'; matchId=bill.id;
+    } else {
+      const t = FEED_SAMPLE_TXNS[Math.floor(Math.random()*FEED_SAMPLE_TXNS.length)];
+      desc = t.desc; isIn = !t.out; amount = round2(t.min + Math.random()*(t.max-t.min));
+    }
+    if(amount<=0) continue;
+    const date = randomDateBetween(fromDate, todayStr());
+    S.feedInbox.push({
+      id:uid('fd'), accountId, date, desc, amount:round2(amount), isIn,
+      matchType, matchId, included:true, categoryOverride:null,
+      categoryId: matchType? null : guessCategoryForDesc(desc, isIn),
+    });
+    added++;
+  }
+  feed.lastFetched = todayStr();
+  return added;
+}
+function openConnectFeedForm(accountId){
+  const acc = S.accounts.find(a=>a.id===accountId);
+  const body = `
+    <p style="font-size:12.5px; color:var(--text-muted); margin-top:0;">This links a simulated bank feed to <strong>${acc.name}</strong>. Since this environment can't reach real banking APIs, it generates realistic sample transactions you review, categorize and add to your books — the same workflow a live feed uses.</p>
+    <div class="field"><label>Bank</label><select id="bf-institution">
+      <option>FNB</option><option>Standard Bank</option><option>ABSA</option><option>Nedbank</option><option>Capitec</option><option>Other</option>
+    </select></div>
+    <div class="field"><label>Account number — last 4 digits (optional)</label><input type="text" id="bf-last4" maxlength="4" placeholder="e.g. 7314"></div>
+  `;
+  openModal('Connect bank feed', body, [{label:'Connect', cls:'btn-primary', onclick:`submitConnectFeed('${accountId}')`}]);
+}
+function submitConnectFeed(accountId){
+  const institution = document.getElementById('bf-institution').value;
+  const last4 = document.getElementById('bf-last4').value.trim();
+  S.bankFeeds = S.bankFeeds || {};
+  S.bankFeeds[accountId] = {connected:true, institution, last4, connectedAt:todayStr(), lastFetched:null};
+  closeModal();
+  const n = fetchFeedTransactions(accountId);
+  showToast('Bank feed connected — '+n+' transaction'+(n===1?'':'s')+' pulled in');
+  openFeedReview(accountId);
+}
+function disconnectFeed(accountId){
+  if(!confirm('Disconnect this bank feed? Any unreviewed transactions from it will be discarded.')) return;
+  delete S.bankFeeds[accountId];
+  S.feedInbox = (S.feedInbox||[]).filter(f=>f.accountId!==accountId);
+  showToast('Bank feed disconnected'); saveState(true); navigate('banking');
+}
+function fetchFeedAction(accountId){
+  const n = fetchFeedTransactions(accountId);
+  showToast(n? `${n} new transaction${n===1?'':'s'} fetched` : 'No new transactions found');
+  if(n>0) openFeedReview(accountId); else render();
+}
+let FEED_REVIEW_ACCOUNT = null;
+function openFeedReview(accountId){
+  FEED_REVIEW_ACCOUNT = accountId;
+  VIEW = 'feed-review';
+  render();
+}
+function feedCategorySelect(item){
+  const matchDoc = item.matchType==='invoice' ? S.invoices.find(i=>i.id===item.matchId) : item.matchType==='bill' ? S.bills.find(b=>b.id===item.matchId) : null;
+  const matchOpt = matchDoc ? `<option value="match" ${!item.categoryOverride?'selected':''}>✓ Match → ${matchDoc.number} (${contactName(matchDoc.contactId)})</option>` : '';
+  const selectedForList = item.categoryOverride ? item.categoryOverride : (matchDoc ? null : item.categoryId);
+  return `<select onchange="setFeedCategory('${item.id}', this.value)">${matchOpt}${accountOptionsHtml(selectedForList)}</select>`;
+}
+function setFeedCategory(id, value){
+  const item = S.feedInbox.find(f=>f.id===id);
+  if(!item) return;
+  item.categoryOverride = (value==='match') ? null : value;
+  saveState();
+}
+function toggleFeedInclude(id, checked){
+  const item = S.feedInbox.find(f=>f.id===id);
+  if(item) item.included = checked;
+  saveState();
+}
+function excludeFeedItem(id){
+  if(!confirm('Exclude this transaction? It will not be added to your books.')) return;
+  S.feedInbox = S.feedInbox.filter(f=>f.id!==id);
+  saveState(true);
+  renderFeedReviewPage();
+}
+function addFeedItemsToBooks(accountId){
+  const items = (S.feedInbox||[]).filter(f=>f.accountId===accountId && f.included!==false);
+  if(!items.length){ showToast('Nothing ticked to add'); return; }
+  items.forEach(item=>{
+    const useMatch = item.matchType && !item.categoryOverride;
+    if(useMatch){
+      if(item.matchType==='invoice') recordInvoicePayment(item.matchId, item.amount, item.date, accountId);
+      else recordBillPayment(item.matchId, item.amount, item.date, accountId);
+    } else {
+      const cat = item.categoryOverride || item.categoryId || (item.isIn?'acc_other_inc':'acc_office');
+      if(item.isIn){
+        postJournal(item.desc, item.date, [{accountId, debit:item.amount, credit:0},{accountId:cat, debit:0, credit:item.amount}]);
+      } else {
+        postJournal(item.desc, item.date, [{accountId:cat, debit:item.amount, credit:0},{accountId, debit:0, credit:item.amount}]);
+      }
+    }
+  });
+  const addedIds = new Set(items.map(i=>i.id));
+  const count = items.length;
+  S.feedInbox = S.feedInbox.filter(f=>!addedIds.has(f.id));
+  showToast(`${count} transaction${count===1?'':'s'} added to your books`);
+  navigate('banking');
+}
+function renderFeedReviewPage(){
+  const acc = S.accounts.find(a=>a.id===FEED_REVIEW_ACCOUNT);
+  if(!acc){ navigate('banking'); return; }
+  const items = (S.feedInbox||[]).filter(f=>f.accountId===acc.id).sort((a,b)=>a.date.localeCompare(b.date));
+  setTopbar('Bank Feed — '+acc.name, 'Review, match, and add transactions pulled from your feed', `
+    <button class="btn btn-ghost" onclick="navigate('banking')">← Back to banking</button>
+    <button class="btn btn-ghost" onclick="fetchFeedAction('${acc.id}')">🔄 Fetch new transactions</button>
+    <button class="btn btn-primary" onclick="addFeedItemsToBooks('${acc.id}')">Add ticked to books</button>
+  `);
+  document.getElementById('content').innerHTML = `
+    <div class="card">
+      ${items.length? `<table><thead><tr><th style="width:30px;"></th><th>Date</th><th>Description</th><th class="amt">Amount</th><th style="width:230px;">Category / Match</th><th></th></tr></thead><tbody>
+        ${items.map(item=>{
+          const signed = item.isIn ? item.amount : -item.amount;
+          return `<tr>
+            <td><input type="checkbox" ${item.included!==false?'checked':''} onchange="toggleFeedInclude('${item.id}', this.checked)"></td>
+            <td>${fmtDateShort(item.date)}</td>
+            <td>${escapeHtml(item.desc)}</td>
+            <td class="amt num ${item.isIn?'pos':'neg'}">${fmt(signed)}</td>
+            <td>${feedCategorySelect(item)}</td>
+            <td><button class="icon-btn" onclick="excludeFeedItem('${item.id}')">Exclude</button></td>
+          </tr>`;
+        }).join('')}
+      </tbody></table>` : emptyState('Nothing to review', 'Fetch new transactions to pull in the latest feed activity.', `fetchFeedAction('${acc.id}')`, '🔄 Fetch new transactions')}
+    </div>
+    <div class="hint" style="margin-top:14px;">This is a simulated bank feed for demo purposes — it generates plausible sample transactions since this environment can't connect to a real bank. Items that match an open invoice or bill by amount are pre-matched to record as a payment; everything else is pre-categorized and can be changed before adding.</div>
+  `;
 }
 
 /* ============================= CSV IMPORT (bank transactions, bulk) ============================= */
@@ -1303,6 +1898,158 @@ function confirmCsvImport(){
   closeModal(); showToast(`Imported ${count} transaction${count===1?'':'s'}`); navigate('banking');
 }
 
+/* ============================= JOURNAL ENTRIES (manual) ============================= */
+let JOURNAL_FILTER = 'all';
+function accountOptionsHtml(selectedId){
+  const types = ['Asset','Liability','Equity','Income','Expense'];
+  return types.map(t=>{
+    const accs = S.accounts.filter(a=>a.type===t).sort((a,b)=>a.code.localeCompare(b.code));
+    if(!accs.length) return '';
+    return `<optgroup label="${t}s">${accs.map(a=>`<option value="${a.id}" ${a.id===selectedId?'selected':''}>${a.code} ${a.name}</option>`).join('')}</optgroup>`;
+  }).join('');
+}
+function entryTotals(e){
+  return { debit: e.lines.reduce((s,l)=>s+(l.debit||0),0), credit: e.lines.reduce((s,l)=>s+(l.credit||0),0) };
+}
+function renderJournal(){
+  setTopbar('Journal Entries', 'Manual double-entry postings and the full transaction log',
+    `<button class="btn btn-primary" onclick="openJournalEntryForm()">+ New Journal Entry</button>`);
+  const list = S.journal.filter(e=> JOURNAL_FILTER==='all' || (JOURNAL_FILTER==='manual'? e.manual : JOURNAL_FILTER==='opening'? e.isOpeningBalance : !e.manual))
+    .slice().sort((a,b)=> b.date.localeCompare(a.date) || b.id.localeCompare(a.id));
+  document.getElementById('content').innerHTML = `
+    <div class="toolbar">
+      <div class="filter-pills">
+        ${['all','manual','system','opening'].map(f=>`<span class="pill ${JOURNAL_FILTER===f?'active':''}" onclick="JOURNAL_FILTER='${f}'; renderJournal();">${f==='opening'?'Opening balances':f[0].toUpperCase()+f.slice(1)}</span>`).join('')}
+      </div>
+    </div>
+    <div class="card">
+      ${list.length? `<table><thead><tr><th>Date</th><th>Description</th><th>Accounts</th><th class="amt">Debit</th><th class="amt">Credit</th><th>Source</th></tr></thead><tbody>
+        ${list.map(e=>{
+          const t = entryTotals(e);
+          const acctNames = e.lines.map(l=>S.accounts.find(a=>a.id===l.accountId)?.name||'—').join(', ');
+          return `<tr class="clickable" onclick="openJournalEntryDetail('${e.id}')">
+            <td>${fmtDateShort(e.date)}</td><td>${escapeHtml(e.description)}</td>
+            <td style="color:var(--text-muted); font-size:12.5px;">${escapeHtml(acctNames)}</td>
+            <td class="amt num">${fmt(t.debit)}</td><td class="amt num">${fmt(t.credit)}</td>
+            <td>${e.manual? '<span class="badge badge-open">Manual</span>' : '<span class="badge badge-draft">System</span>'}${e.isOpeningBalance?' <span class="badge badge-ob">Opening bal.</span>':''}</td>
+          </tr>`;
+        }).join('')}
+      </tbody></table>` : emptyState('No journal entries', 'Post a manual journal entry for things like depreciation, accruals, or corrections.', "openJournalEntryForm()", '+ New Journal Entry')}
+    </div>
+  `;
+}
+function journalLineRow(){
+  return `<tr>
+    <td><select class="je-acct">${accountOptionsHtml()}</select></td>
+    <td style="width:120px;"><input type="number" class="je-debit" value="" placeholder="0.00" min="0" step="0.01"></td>
+    <td style="width:120px;"><input type="number" class="je-credit" value="" placeholder="0.00" min="0" step="0.01"></td>
+    <td style="width:30px;"><button class="icon-btn" onclick="this.closest('tr').remove(); recalcJournalForm();">✕</button></td>
+  </tr>`;
+}
+function openJournalEntryForm(){
+  const body = `
+    <div class="field-row">
+      <div class="field"><label>Date</label><input type="date" id="je-date" value="${todayStr()}"></div>
+      <div class="field"><label>Description</label><input type="text" id="je-desc" placeholder="e.g. Depreciation, accrual, correction"></div>
+    </div>
+    <table class="li-table" id="je-body-wrap">
+      <thead><tr><th>Account</th><th class="amt">Debit</th><th class="amt">Credit</th><th></th></tr></thead>
+      <tbody id="je-body">${journalLineRow()}${journalLineRow()}</tbody>
+    </table>
+    <button class="btn btn-ghost btn-sm" style="margin-top:8px;" onclick="document.getElementById('je-body').insertAdjacentHTML('beforeend', journalLineRow()); recalcJournalForm();">+ Add line</button>
+    <div style="margin-top:18px; border-top:1px solid var(--border); padding-top:12px;">
+      <div class="report-row"><span>Total debit</span><span class="num" id="je-sum-debit">${S.settings.currency}0.00</span></div>
+      <div class="report-row"><span>Total credit</span><span class="num" id="je-sum-credit">${S.settings.currency}0.00</span></div>
+      <div class="report-row total"><span id="je-balance-label">Difference</span><span class="num" id="je-sum-diff">${S.settings.currency}0.00</span></div>
+    </div>
+    <label style="display:flex; align-items:center; gap:8px; cursor:pointer; margin-top:14px; text-transform:none; letter-spacing:normal; font-weight:500; color:var(--text); font-size:13px;">
+      <input type="checkbox" id="je-opening" style="width:auto;">
+      Mark as an opening balance entry
+    </label>
+    <div class="hint">Opening balance entries can be excluded from the Trial Balance report, so you can view the books with or without brought-forward balances.</div>
+  `;
+  openModal('New Journal Entry', body, [
+    {label:'Post entry', cls:'btn-primary', onclick:'submitJournalEntryForm()'}
+  ], true);
+  recalcJournalForm();
+}
+function recalcJournalForm(){
+  const rows = document.querySelectorAll('#je-body tr');
+  let debit=0, credit=0;
+  rows.forEach(r=>{
+    debit += Number(r.querySelector('.je-debit').value)||0;
+    credit += Number(r.querySelector('.je-credit').value)||0;
+  });
+  const diff = round2(debit-credit);
+  if(document.getElementById('je-sum-debit')) document.getElementById('je-sum-debit').textContent = fmt(debit);
+  if(document.getElementById('je-sum-credit')) document.getElementById('je-sum-credit').textContent = fmt(credit);
+  const diffEl = document.getElementById('je-sum-diff');
+  const labelEl = document.getElementById('je-balance-label');
+  if(diffEl){
+    diffEl.textContent = fmt(Math.abs(diff));
+    diffEl.className = 'num ' + (Math.abs(diff)<0.005 ? 'pos' : 'neg');
+    labelEl.textContent = Math.abs(diff)<0.005 ? 'Balanced ✓' : 'Out of balance by';
+  }
+}
+function submitJournalEntryForm(){
+  const date = document.getElementById('je-date').value;
+  const desc = document.getElementById('je-desc').value.trim();
+  if(!date){ showToast('Choose a date'); return; }
+  if(!desc){ showToast('Enter a description'); return; }
+  const rows = document.querySelectorAll('#je-body tr');
+  const lines = [];
+  rows.forEach(r=>{
+    const accountId = r.querySelector('.je-acct').value;
+    const debit = Number(r.querySelector('.je-debit').value)||0;
+    const credit = Number(r.querySelector('.je-credit').value)||0;
+    if(debit>0 || credit>0) lines.push({accountId, debit, credit});
+  });
+  if(lines.length<2){ showToast('Add at least two lines'); return; }
+  const totalDebit = lines.reduce((s,l)=>s+l.debit,0);
+  const totalCredit = lines.reduce((s,l)=>s+l.credit,0);
+  if(Math.abs(round2(totalDebit-totalCredit))>0.004){ showToast('Debits and credits must balance before posting'); return; }
+  const isOpening = document.getElementById('je-opening').checked;
+  const entry = postJournal(desc, date, lines);
+  entry.manual = true;
+  entry.ref = 'manual-'+entry.id;
+  if(isOpening) entry.isOpeningBalance = true;
+  closeModal(); showToast(isOpening? 'Opening balance entry posted' : 'Journal entry posted'); navigate('journal');
+}
+function openJournalEntryDetail(id){
+  const e = S.journal.find(x=>x.id===id);
+  if(!e) return;
+  const t = entryTotals(e);
+  const rows = e.lines.map(l=>`<tr><td>${S.accounts.find(a=>a.id===l.accountId)?.name||'—'}</td>
+    <td class="amt num">${l.debit? fmt(l.debit):''}</td><td class="amt num">${l.credit? fmt(l.credit):''}</td></tr>`).join('');
+  const body = `
+    <div style="display:flex; justify-content:space-between; margin-bottom:14px;">
+      <div><div style="font-size:12px; color:var(--text-muted);">Description</div><strong>${escapeHtml(e.description)}</strong></div>
+      <div style="text-align:right;">${e.manual? '<span class="badge badge-open">Manual</span>' : '<span class="badge badge-draft">System</span>'}<div style="font-size:12px; color:var(--text-muted); margin-top:6px;">${fmtDate(e.date)}</div></div>
+    </div>
+    <table><thead><tr><th>Account</th><th class="amt">Debit</th><th class="amt">Credit</th></tr></thead><tbody>${rows}
+      <tr class="li-total-row"><td>Total</td><td class="amt num">${fmt(t.debit)}</td><td class="amt num">${fmt(t.credit)}</td></tr>
+    </tbody></table>
+    ${!e.manual? `<div class="hint" style="margin-top:12px;">This entry was posted automatically from a sale, purchase, payment, or CSV import and can't be edited here — void or edit the originating record instead.</div>`:''}
+  `;
+  const actions = [];
+  if(e.manual){
+    actions.push({label:'Delete', cls:'btn-danger', onclick:`deleteJournalEntry('${e.id}')`});
+    actions.push({label:'Reverse entry', cls:'btn-primary', onclick:`reverseJournalEntry('${e.id}')`});
+  }
+  openModal('Journal Entry', body, actions, true);
+}
+function deleteJournalEntry(id){
+  if(!confirm('Permanently delete this journal entry? This cannot be undone.')) return;
+  S.journal = S.journal.filter(e=>e.id!==id);
+  closeModal(); showToast('Journal entry deleted'); navigate('journal');
+}
+function reverseJournalEntry(id){
+  const e = S.journal.find(x=>x.id===id);
+  if(!e) return;
+  reverseJournalByRef(e.ref);
+  closeModal(); showToast('Reversing entry posted'); navigate('journal');
+}
+
 /* ============================= CONTACTS ============================= */
 function renderContacts(){
   setTopbar('Contacts', 'Customers and suppliers', `<button class="btn btn-primary" onclick="openContactForm()">+ New Contact</button>`);
@@ -1332,6 +2079,10 @@ function openContactForm(presetType, editId){
       <div class="field"><label>Email</label><input type="email" id="c-email" value="${editing?editing.email||'':''}"></div>
       <div class="field"><label>Phone</label><input type="text" id="c-phone" value="${editing?editing.phone||'':''}"></div>
     </div>
+    <div class="field"><label>VAT number</label><input type="text" id="c-vat" value="${editing?editing.vatNo||'':''}" placeholder="Optional — shown on tax invoices"></div>
+    <div class="field"><label>Address</label><textarea id="c-address" rows="3" placeholder="One line per address line">${editing?editing.address||'':''}</textarea>
+      <div class="hint">Used for both postal and physical address on printed invoices.</div>
+    </div>
   `;
   const actions = editing
     ? [{label:'Delete', cls:'btn-danger', onclick:`deleteContact('${editing.id}')`}, {label:'Save changes', cls:'btn-primary', onclick:`submitContactForm('${editing.id}')`}]
@@ -1343,12 +2094,14 @@ function submitContactForm(editId){
   const type = document.getElementById('c-type').value;
   const email = document.getElementById('c-email').value.trim();
   const phone = document.getElementById('c-phone').value.trim();
+  const vatNo = document.getElementById('c-vat').value.trim();
+  const address = document.getElementById('c-address').value.trim();
   if(!name){ showToast('Enter a name'); return; }
   if(editId){
     const c = S.contacts.find(x=>x.id===editId);
-    Object.assign(c, {name,type,email,phone});
+    Object.assign(c, {name,type,email,phone,vatNo,address});
   }else{
-    S.contacts.push({id:uid('ct'), name, type, email, phone});
+    S.contacts.push({id:uid('ct'), name, type, email, phone, vatNo, address});
   }
   closeModal(); showToast('Contact saved'); navigate('contacts');
 }
@@ -1481,8 +2234,9 @@ function renderBS(asOf){
   </div>`;
 }
 function renderTB(asOf){
+  const includeOpening = window._rIncludeOpening !== false; // default true
   const rows = S.accounts.map(a=>{
-    const bal = getAccountBalance(a.id, asOf);
+    const bal = getAccountBalance(a.id, asOf, !includeOpening);
     const isDebitNormal = accountNormalIsDebit(a.type);
     const debit = (isDebitNormal && bal>=0) || (!isDebitNormal && bal<0) ? Math.abs(bal) : 0;
     const credit = (!isDebitNormal && bal>=0) || (isDebitNormal && bal<0) ? Math.abs(bal) : 0;
@@ -1490,8 +2244,17 @@ function renderTB(asOf){
   }).filter(r=>Math.abs(r.debit)>0.001 || Math.abs(r.credit)>0.001);
   const totalD = rows.reduce((s,r)=>s+r.debit,0);
   const totalC = rows.reduce((s,r)=>s+r.credit,0);
+  const obEntries = S.journal.filter(e=>e.isOpeningBalance && (!asOf || e.date<=asOf));
+  const obCount = obEntries.length;
   document.getElementById('report-body').innerHTML = `<div class="card">
     <div class="card-head"><h3>As of</h3><input type="date" value="${asOf}" style="width:150px;" onchange="window._rTo=this.value; renderReports();"></div>
+    <div class="card-body" style="padding-bottom:0;">
+      <label style="display:flex; align-items:center; gap:8px; cursor:pointer; text-transform:none; letter-spacing:normal; font-weight:500; color:var(--text); font-size:13px;">
+        <input type="checkbox" style="width:auto;" ${includeOpening?'checked':''} onchange="window._rIncludeOpening=this.checked; renderReports();">
+        Include opening balances
+      </label>
+      <div class="hint">${obCount? `${obCount} journal ${obCount===1?'entry is':'entries are'} marked as an opening balance.` : 'No journal entries are currently marked as an opening balance — tag one when posting a manual journal entry.'}</div>
+    </div>
     <table><thead><tr><th>Code</th><th>Account</th><th class="amt">Debit</th><th class="amt">Credit</th></tr></thead><tbody>
       ${rows.map(r=>`<tr><td class="mono">${r.a.code}</td><td>${r.a.name}</td><td class="amt num">${r.debit?fmt(r.debit):''}</td><td class="amt num">${r.credit?fmt(r.credit):''}</td></tr>`).join('')}
       <tr class="li-total-row"><td></td><td>Total</td><td class="amt num">${fmt(totalD)}</td><td class="amt num">${fmt(totalC)}</td></tr>
@@ -1511,12 +2274,38 @@ function renderSettings(){
           <div class="field"><label>Tax label</label><input type="text" id="s-taxlabel" value="${S.settings.taxLabel}"></div>
         </div>
         <div class="field"><label>Default tax rate (%)</label><input type="number" id="s-taxrate" value="${S.settings.taxRate}" step="0.1"></div>
+        <div class="field"><label>VAT / tax number</label><input type="text" id="s-vatno" value="${S.settings.businessVatNo||''}" placeholder="Shown on printed invoices"></div>
+        <div class="field"><label>Business address</label><textarea id="s-address" rows="3" placeholder="One line per address line">${S.settings.businessAddress||''}</textarea></div>
         <button class="btn btn-primary" onclick="saveSettings()">Save settings</button>
       </div></div>
-      <div class="card"><div class="card-head"><h3>Data</h3></div><div class="card-body">
-        <p style="font-size:12.5px; color:var(--text-muted); margin-top:0;">Your books are stored privately in this app's persistent storage. Resetting will erase all accounts, invoices, bills and journal entries for <strong>${S.settings.businessName}</strong> only, and reload sample data.</p>
-        <button class="btn btn-danger" onclick="resetData()">Reset this company to sample data</button>
-      </div></div>
+      <div>
+        <div class="card" style="margin-bottom:14px;"><div class="card-head"><h3>Banking details</h3></div><div class="card-body">
+          <p style="font-size:12px; color:var(--text-muted); margin-top:0;">Shown on printed invoices so customers know where to pay.</p>
+          <div class="field"><label>Bank name</label><input type="text" id="s-bankname" value="${S.settings.bankName||''}"></div>
+          <div class="field-row">
+            <div class="field"><label>Branch code</label><input type="text" id="s-bankbranch" value="${S.settings.bankBranch||''}"></div>
+            <div class="field"><label>Account number</label><input type="text" id="s-bankacc" value="${S.settings.bankAccountNumber||''}"></div>
+          </div>
+          <button class="btn btn-primary" onclick="saveSettings()">Save settings</button>
+        </div></div>
+        <div class="card"><div class="card-head"><h3>Data</h3></div><div class="card-body">
+          <p style="font-size:12.5px; color:var(--text-muted); margin-top:0;">Your books are saved automatically as you work — stored privately ${hasArtifactStorage()? "in this app\u2019s persistent storage" : "in this browser\u2019s local storage, since it was opened outside the Claude app"}. <span id="settings-save-status" style="color:var(--text); font-weight:600;">${LAST_SAVED_AT? 'Saved '+LAST_SAVED_AT.toLocaleTimeString() : 'Not saved yet'}</span></p>
+          <button class="btn btn-ghost" onclick="saveState(true).then(()=>{ showToast('All changes saved'); renderSettings(); })">💾 Save now</button>
+
+          <div class="section-title" style="margin-top:20px;">Backup &amp; restore</div>
+          <p style="font-size:12px; color:var(--text-muted); margin-top:0;">Browser storage can be cleared or lost if you switch devices — download a backup file now and then so you always have a copy outside the browser.</p>
+          <div style="display:flex; gap:8px; flex-wrap:wrap;">
+            <button class="btn btn-ghost btn-sm" onclick="exportWorkspaceBackup()">⬇ Download backup (all companies)</button>
+            <button class="btn btn-ghost btn-sm" onclick="exportCompanyBackup()">⬇ Export this company only</button>
+            <button class="btn btn-ghost btn-sm" onclick="document.getElementById('restore-file-input').click()">⬆ Restore from backup</button>
+            <input type="file" id="restore-file-input" accept=".json,application/json" style="display:none;" onchange="handleRestoreBackup(event)">
+          </div>
+
+          <div class="section-title" style="margin-top:20px;">Reset</div>
+          <p style="font-size:12px; color:var(--text-muted);">Erases all accounts, invoices, bills and journal entries for <strong>${S.settings.businessName}</strong> only, and reloads sample data.</p>
+          <button class="btn btn-danger" onclick="resetData()">Reset this company to sample data</button>
+        </div></div>
+      </div>
     </div>
     <div class="section-title">Companies</div>
     <div class="card"><div class="card-body">
@@ -1542,6 +2331,11 @@ function saveSettings(){
   S.settings.currency = document.getElementById('s-currency').value.trim() || 'R';
   S.settings.taxLabel = document.getElementById('s-taxlabel').value.trim() || 'Tax';
   S.settings.taxRate = Number(document.getElementById('s-taxrate').value)||0;
+  S.settings.businessVatNo = document.getElementById('s-vatno').value.trim();
+  S.settings.businessAddress = document.getElementById('s-address').value.trim();
+  S.settings.bankName = document.getElementById('s-bankname').value.trim();
+  S.settings.bankBranch = document.getElementById('s-bankbranch').value.trim();
+  S.settings.bankAccountNumber = document.getElementById('s-bankacc').value.trim();
   showToast('Settings saved'); saveState(true); render();
 }
 async function resetData(){
