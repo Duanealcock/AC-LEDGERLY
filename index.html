@@ -194,6 +194,9 @@
 
   /* Report sub-menu pills */
   .report-submenu{ display:flex; gap:8px; flex-wrap:wrap; margin-bottom:18px; }
+  .param-panel .param-grid{ display:grid; grid-template-columns:repeat(3, 1fr); gap:12px; }
+  .param-panel .field{ margin-bottom:0; }
+  @media (max-width: 880px){ .param-panel .param-grid{ grid-template-columns:1fr; } }
   .report-pill{ padding:8px 14px; border-radius:20px; font-size:12.5px; font-weight:600; border:1px solid var(--border-strong); cursor:pointer; color:var(--text-muted); background:#fff; font-family:inherit; }
   .report-pill:hover{ border-color:var(--accent); color:var(--text); }
   .report-pill.active{ background:var(--ink); color:#fff; border-color:var(--ink); }
@@ -2970,16 +2973,23 @@ function renderCashbook(){
 // which sub-report is showing under Reports, and (for statements) which contact
 let CONTACT_REPORT_VIEW = 'balances'; // 'balances' | 'aging' | 'statement' | 'statement-run'
 let CONTACT_REPORT_ID = null;         // selected contact for single statement
+// report parameters, keyed by kind so customer/supplier keep independent settings
+let REPORT_PARAMS = {
+  customer: { periodMode:'all', from:'', to:'', agingAsOf:'', agingBasis:'due', includeZero:false, ran:{statement:false, aging:false} },
+  supplier: { periodMode:'all', from:'', to:'', agingAsOf:'', agingBasis:'due', includeZero:false, ran:{statement:false, aging:false} },
+};
+function reportParams(kind){ return REPORT_PARAMS[kind] || (REPORT_PARAMS[kind]={periodMode:'all',from:'',to:'',agingAsOf:'',agingBasis:'due',includeZero:false,ran:{statement:false,aging:false}}); }
 
 function daysBetween(a, b){ return Math.round((new Date(b+'T00:00:00') - new Date(a+'T00:00:00'))/86400000); }
 
-// Aging buckets for a set of docs as of a date: current / 30 / 60 / 90+
-function agingForDocs(cdocs, asOf){
+// Aging buckets for a set of docs as of a date, keyed off due date or document date.
+function agingForDocs(cdocs, asOf, basis){
   const b = {current:0, d30:0, d60:0, d90:0, total:0};
   cdocs.forEach(d=>{
     const bal = docBalanceDue(d);
     if(bal<=0) return;
-    const overdueDays = d.dueDate ? daysBetween(d.dueDate, asOf) : 0;
+    const refDate = (basis==='invoice') ? d.date : (d.dueDate || d.date);
+    const overdueDays = refDate ? daysBetween(refDate, asOf) : 0;
     if(overdueDays<=0) b.current+=bal;
     else if(overdueDays<=30) b.d30+=bal;
     else if(overdueDays<=60) b.d60+=bal;
@@ -3163,16 +3173,25 @@ function renderContactReports(kind, list, docs, totalOf, isCust, label, singular
       <div class="hint" style="margin-top:10px;">Tip: click any ${singular.toLowerCase()} row to open their statement.</div>`;
   }
 
-  // ---- AGING: balances — days outstanding ----
+  // ---- AGING: balances — days outstanding (parameter-driven) ----
   if(view==='aging'){
-    const asOf = todayStr();
-    const rowsData = list.map(c=>{
-      const cdocs = docs.filter(d=>d.contactId===c.id && docStatus(d)!=='void' && d.status!=='draft' && docBalanceDue(d)>0);
-      const a = agingForDocs(cdocs, asOf);
+    const p = reportParams(kind);
+    const paramPanel = reportParamPanel(kind, 'aging', list, singular, label);
+    if(!p.ran.aging){
+      return submenu + paramPanel + `<div class="hint" style="margin-top:6px;">Set your options above and click <strong>Run report</strong>.</div>`;
+    }
+    const asOf = p.agingAsOf || todayStr();
+    const basis = p.agingBasis || 'due';
+    const selId = p.contactId || 'all';
+    const targetList = selId==='all' ? list : list.filter(c=>c.id===selId);
+    let rowsData = targetList.map(c=>{
+      const cdocs = docs.filter(d=>d.contactId===c.id && docStatus(d)!=='void' && d.status!=='draft' && d.date<=asOf && docBalanceDue(d)>0);
+      const a = agingForDocs(cdocs, asOf, basis);
       return {c, a};
-    }).filter(r=>r.a.total>0.004);
+    });
+    if(!p.includeZero) rowsData = rowsData.filter(r=>r.a.total>0.004);
     const g = rowsData.reduce((acc,r)=>({current:acc.current+r.a.current, d30:acc.d30+r.a.d30, d60:acc.d60+r.a.d60, d90:acc.d90+r.a.d90, total:acc.total+r.a.total}), {current:0,d30:0,d60:0,d90:0,total:0});
-    return submenu + `
+    return submenu + paramPanel + `
       <div class="grid-4" style="margin-bottom:18px;">
         <div class="kpi"><div class="label">Current</div><div class="value num">${fmt(g.current)}</div><div class="delta">Not yet due</div></div>
         <div class="kpi"><div class="label">1–30 days</div><div class="value num ${g.d30>0?'neg':''}">${fmt(g.d30)}</div></div>
@@ -3180,7 +3199,7 @@ function renderContactReports(kind, list, docs, totalOf, isCust, label, singular
         <div class="kpi"><div class="label">61–90+ days</div><div class="value num ${g.d90>0?'neg':''}">${fmt(g.d90)}</div></div>
       </div>
       <div class="card">
-        <div class="card-head"><h3>${label} — days outstanding (as of ${fmtDate(asOf)})</h3>
+        <div class="card-head"><h3>${label} — days outstanding (as of ${fmtDate(asOf)}, by ${basis==='invoice'?'document date':'due date'})</h3>
           <button class="btn btn-ghost btn-sm" onclick="window.print()">🖶 Print</button></div>
         ${rowsData.length? `<table><thead><tr><th>${singular}</th><th class="amt">Current</th><th class="amt">1–30</th><th class="amt">31–60</th><th class="amt">61–90+</th><th class="amt">Total due</th></tr></thead><tbody>
           ${rowsData.sort((a,b)=>b.a.total-a.a.total).map(r=>`<tr class="clickable" onclick="openContactStatement('${r.c.id}','${kind}')">
@@ -3195,29 +3214,33 @@ function renderContactReports(kind, list, docs, totalOf, isCust, label, singular
             <td class="amt num">${fmt(g.current)}</td><td class="amt num">${fmt(g.d30)}</td>
             <td class="amt num">${fmt(g.d60)}</td><td class="amt num">${fmt(g.d90)}</td>
             <td class="amt num">${fmt(g.total)}</td></tr>
-        </tbody></table>` : emptyState('Nothing outstanding', `No ${isCust?'customers owe you':'balances owed to suppliers'} right now.`, null)}
+        </tbody></table>` : emptyState('Nothing outstanding', `No ${isCust?'customers owe you':'balances owed to suppliers'} for these options.`, null)}
       </div>
-      <div class="hint" style="margin-top:10px;">Buckets are based on each ${docLabel.slice(0,-1).toLowerCase()}'s due date. Click a row to open the statement.</div>`;
+      <div class="hint" style="margin-top:10px;">Click a row to open that ${singular.toLowerCase()}'s statement.</div>`;
   }
 
-  // ---- SINGLE STATEMENT ----
+  // ---- SINGLE STATEMENT (parameter-driven) ----
   if(view==='statement'){
+    const p = reportParams(kind);
     const withActivity = list.filter(c=> (docs.some(d=>d.contactId===c.id && d.status!=='draft' && docStatus(d)!=='void')) );
     if(!CONTACT_REPORT_ID && withActivity.length) CONTACT_REPORT_ID = withActivity[0].id;
+    const paramPanel = reportParamPanel(kind, 'statement', list, singular, label);
+    if(!p.ran.statement){
+      return submenu + paramPanel + `<div class="hint" style="margin-top:6px;">Choose a ${singular.toLowerCase()} and period above, then click <strong>Run report</strong>.</div>`;
+    }
     const contact = list.find(c=>c.id===CONTACT_REPORT_ID);
-    const picker = `<div class="card" style="margin-bottom:14px;"><div class="card-body" style="display:flex; gap:10px; align-items:center; flex-wrap:wrap;">
-        <label style="margin:0;">${singular}</label>
-        <select style="max-width:280px;" onchange="CONTACT_REPORT_ID=this.value; navigate('${kind==='customer'?'cust-reports':'supp-reports'}')">
-          ${list.map(c=>`<option value="${c.id}" ${c.id===CONTACT_REPORT_ID?'selected':''}>${escapeHtml(c.name)}</option>`).join('')}
-        </select>
-        ${contact? `<span style="flex:1;"></span>
-          <button class="btn btn-ghost btn-sm" onclick="copyStatementText('${contact.id}','${kind}')">⧉ Copy text</button>
-          <button class="btn btn-ghost btn-sm" onclick="downloadStatementHtml('${contact.id}','${kind}')">⬇ Download</button>
-          ${contact.email? `<button class="btn btn-ghost btn-sm" onclick="emailStatement('${contact.id}','${kind}')">✉ Email</button>`:''}
-          <button class="btn btn-ghost btn-sm" onclick="printStatement('${contact.id}','${kind}')">🖶 Print / PDF</button>`:''}
+    if(!contact) return submenu + paramPanel + emptyState('No '+label.toLowerCase(), `Add a ${singular.toLowerCase()} to produce a statement.`, null);
+    const {from, to} = resolvePeriod(p);
+    const actions = `<div class="card" style="margin-bottom:14px;"><div class="card-body" style="display:flex; gap:8px; align-items:center; flex-wrap:wrap;">
+        <strong style="font-size:13.5px;">${escapeHtml(contact.name)}</strong>
+        <span style="font-size:12px; color:var(--text-muted);">${from||to? `Period: ${from?fmtDate(from):'start'} – ${to?fmtDate(to):fmtDate(todayStr())}`:'All transactions'}</span>
+        <span style="flex:1;"></span>
+        <button class="btn btn-ghost btn-sm" onclick="copyStatementText('${contact.id}','${kind}')">⧉ Copy text</button>
+        <button class="btn btn-ghost btn-sm" onclick="downloadStatementHtml('${contact.id}','${kind}')">⬇ Download</button>
+        ${contact.email? `<button class="btn btn-ghost btn-sm" onclick="emailStatement('${contact.id}','${kind}')">✉ Email</button>`:''}
+        <button class="btn btn-ghost btn-sm" onclick="printStatement('${contact.id}','${kind}')">🖶 Print / PDF</button>
       </div></div>`;
-    if(!contact) return submenu + picker + emptyState('No '+label.toLowerCase(), `Add a ${singular.toLowerCase()} to produce a statement.`, null);
-    return submenu + picker + statementCardHtml(contact, kind);
+    return submenu + paramPanel + actions + statementCardHtml(contact, kind, false, from, to);
   }
 
   // ---- STATEMENT RUN (all with a balance) ----
@@ -3237,29 +3260,111 @@ function renderContactReports(kind, list, docs, totalOf, isCust, label, singular
   return submenu;
 }
 
+// Parameter panel shown above statement / aging reports
+function reportParamPanel(kind, which, list, singular, label){
+  const p = reportParams(kind);
+  const navView = kind==='customer'?'cust-reports':'supp-reports';
+  if(which==='statement'){
+    return `<div class="card param-panel" style="margin-bottom:16px;"><div class="card-body">
+      <div class="param-grid">
+        <div class="field"><label>${singular}</label>
+          <select id="rp-contact">${list.map(c=>`<option value="${c.id}" ${c.id===CONTACT_REPORT_ID?'selected':''}>${escapeHtml(c.name)}</option>`).join('')}</select></div>
+        <div class="field"><label>Period</label>
+          <select id="rp-period" onchange="document.getElementById('rp-custom').style.display=this.value==='custom'?'grid':'none';">
+            <option value="all" ${p.periodMode==='all'?'selected':''}>All transactions</option>
+            <option value="ytd" ${p.periodMode==='ytd'?'selected':''}>This year to date</option>
+            <option value="this-month" ${p.periodMode==='this-month'?'selected':''}>This month</option>
+            <option value="last-month" ${p.periodMode==='last-month'?'selected':''}>Last month</option>
+            <option value="last-30" ${p.periodMode==='last-30'?'selected':''}>Last 30 days</option>
+            <option value="last-90" ${p.periodMode==='last-90'?'selected':''}>Last 90 days</option>
+            <option value="custom" ${p.periodMode==='custom'?'selected':''}>Custom dates…</option>
+          </select></div>
+      </div>
+      <div id="rp-custom" class="param-grid" style="margin-top:10px; display:${p.periodMode==='custom'?'grid':'none'};">
+        <div class="field"><label>From</label><input type="date" id="rp-from" value="${p.from||''}"></div>
+        <div class="field"><label>To</label><input type="date" id="rp-to" value="${p.to||''}"></div>
+      </div>
+      <div style="margin-top:12px;"><button class="btn btn-primary btn-sm" onclick="runContactReport('${kind}','statement')">Run report</button></div>
+    </div></div>`;
+  }
+  // aging
+  return `<div class="card param-panel" style="margin-bottom:16px;"><div class="card-body">
+    <div class="param-grid">
+      <div class="field"><label>${singular}</label>
+        <select id="rp-contact"><option value="all" ${(!p.contactId||p.contactId==='all')?'selected':''}>All ${label.toLowerCase()}</option>
+          ${list.map(c=>`<option value="${c.id}" ${c.id===p.contactId?'selected':''}>${escapeHtml(c.name)}</option>`).join('')}</select></div>
+      <div class="field"><label>As of date</label><input type="date" id="rp-asof" value="${p.agingAsOf||todayStr()}"></div>
+      <div class="field"><label>Age by</label>
+        <select id="rp-basis"><option value="due" ${p.agingBasis!=='invoice'?'selected':''}>Due date</option>
+          <option value="invoice" ${p.agingBasis==='invoice'?'selected':''}>Document date</option></select></div>
+    </div>
+    <label style="display:flex; align-items:center; gap:8px; margin-top:12px; text-transform:none; letter-spacing:normal; font-weight:500; color:var(--text); font-size:13px;">
+      <input type="checkbox" id="rp-zero" style="width:auto;" ${p.includeZero?'checked':''}> Include ${label.toLowerCase()} with no balance</label>
+    <div style="margin-top:12px;"><button class="btn btn-primary btn-sm" onclick="runContactReport('${kind}','aging')">Run report</button></div>
+  </div></div>`;
+}
+function runContactReport(kind, which){
+  const p = reportParams(kind);
+  if(which==='statement'){
+    const sel = document.getElementById('rp-contact'); if(sel) CONTACT_REPORT_ID = sel.value;
+    const per = document.getElementById('rp-period'); if(per) p.periodMode = per.value;
+    const f = document.getElementById('rp-from'); const t = document.getElementById('rp-to');
+    if(f) p.from = f.value; if(t) p.to = t.value;
+    p.ran.statement = true;
+  } else {
+    const sel = document.getElementById('rp-contact'); if(sel) p.contactId = sel.value;
+    const asof = document.getElementById('rp-asof'); if(asof) p.agingAsOf = asof.value;
+    const basis = document.getElementById('rp-basis'); if(basis) p.agingBasis = basis.value;
+    const zero = document.getElementById('rp-zero'); if(zero) p.includeZero = zero.checked;
+    p.ran.aging = true;
+  }
+  navigate(kind==='customer'?'cust-reports':'supp-reports');
+}
+// Turn a period mode + custom dates into concrete from/to
+function resolvePeriod(p){
+  const today = todayStr();
+  const y = today.slice(0,4), m = today.slice(5,7);
+  switch(p.periodMode){
+    case 'ytd': return {from:`${y}-01-01`, to:today};
+    case 'this-month': return {from:`${y}-${m}-01`, to:today};
+    case 'last-month': {
+      const d = new Date(today+'T00:00:00'); d.setDate(1); d.setMonth(d.getMonth()-1);
+      const from = d.toISOString().slice(0,10);
+      const end = new Date(today+'T00:00:00'); end.setDate(0); // last day of prev month
+      return {from, to:end.toISOString().slice(0,10)};
+    }
+    case 'last-30': { const d=new Date(today+'T00:00:00'); d.setDate(d.getDate()-30); return {from:d.toISOString().slice(0,10), to:today}; }
+    case 'last-90': { const d=new Date(today+'T00:00:00'); d.setDate(d.getDate()-90); return {from:d.toISOString().slice(0,10), to:today}; }
+    case 'custom': return {from:p.from||'', to:p.to||''};
+    default: return {from:'', to:''};
+  }
+}
+
 // A single statement rendered as a card (used in single view, run, and print)
-function statementCardHtml(contact, kind, compact){
+function statementCardHtml(contact, kind, compact, fromDate, toDate){
   const isCust = kind==='customer';
-  const st = buildStatement(contact, kind, null, null);
+  const st = buildStatement(contact, kind, fromDate||null, toDate||null);
   const openDocs = (isCust?S.invoices:S.bills).filter(d=>d.contactId===contact.id && d.status!=='draft' && docStatus(d)!=='void' && docBalanceDue(d)>0);
   const aging = agingForDocs(openDocs, todayStr());
   const rows = st.rows;
+  const periodNote = (fromDate||toDate) ? ` · ${fromDate?fmtDate(fromDate):'start'}–${toDate?fmtDate(toDate):fmtDate(todayStr())}` : '';
   return `
     <div class="card statement-card" style="margin-bottom:16px;">
       <div class="card-head">
         <div><h3>${escapeHtml(contact.name)}</h3>
-          <div style="font-size:11.5px; color:var(--text-muted); margin-top:2px;">Statement as of ${fmtDate(todayStr())}${contact.email? ' · '+escapeHtml(contact.email):''}</div></div>
+          <div style="font-size:11.5px; color:var(--text-muted); margin-top:2px;">Statement as of ${fmtDate(toDate||todayStr())}${periodNote}${contact.email? ' · '+escapeHtml(contact.email):''}</div></div>
         <div style="text-align:right;"><div style="font-size:11px; color:var(--text-muted);">Balance ${isCust?'owing to you':'you owe'}</div>
           <div class="num" style="font-size:18px; font-weight:700; ${st.closingBalance>0?'color:var(--red);':''}">${fmt(st.closingBalance)}</div></div>
       </div>
       <div class="card-body" style="padding-top:12px; padding-bottom:6px;">
+        ${(fromDate)? `<div class="report-row" style="padding:4px 2px; font-size:12.5px;"><span style="color:var(--text-muted);">Opening balance ${fmtDate(fromDate)}</span><span class="num">${fmt(st.openingBalance)}</span></div>`:''}
         ${rows.length? `<table><thead><tr><th>Date</th><th>Type</th><th>Reference</th><th class="amt">Charge</th><th class="amt">Credit</th><th class="amt">Balance</th></tr></thead><tbody>
           ${rows.map(e=>`<tr>
             <td>${fmtDateShort(e.date)}</td><td>${e.type}</td><td class="mono">${escapeHtml(e.ref)}</td>
             <td class="amt num">${e.charge?fmt(e.charge):''}</td>
             <td class="amt num pos">${e.credit?fmt(e.credit):''}</td>
             <td class="amt num">${fmt(e.balance)}</td></tr>`).join('')}
-        </tbody></table>` : `<p style="color:var(--text-muted); font-size:13px; padding:8px 0;">No transactions.</p>`}
+        </tbody></table>` : `<p style="color:var(--text-muted); font-size:13px; padding:8px 0;">No transactions in this period.</p>`}
       </div>
       <div class="card-body" style="border-top:1px solid var(--border); padding-top:10px;">
         <div style="display:flex; gap:18px; flex-wrap:wrap; font-size:12px;">
@@ -3276,13 +3381,22 @@ function statementCardHtml(contact, kind, compact){
 function openContactStatement(contactId, kind){
   CONTACT_REPORT_VIEW = 'statement';
   CONTACT_REPORT_ID = contactId;
+  const p = reportParams(kind);
+  p.ran.statement = true; // show the statement immediately when opened from a row
   navigate(kind==='customer'?'cust-reports':'supp-reports');
 }
 
 /* ---- Statement printing (portrait, uses business header) ---- */
-let STATEMENT_PRINT = null; // {kind, contactIds:[]}
+let STATEMENT_PRINT = null; // {kind, contactIds:[], from, to}
+// resolve the period currently configured for single statements of this kind
+function activeStatementPeriod(kind){
+  const p = reportParams(kind);
+  if(CONTACT_REPORT_VIEW==='statement' && p.ran.statement) return resolvePeriod(p);
+  return {from:'', to:''};
+}
 function printStatement(contactId, kind){
-  STATEMENT_PRINT = {kind, contactIds:[contactId]};
+  const per = activeStatementPeriod(kind);
+  STATEMENT_PRINT = {kind, contactIds:[contactId], from:per.from, to:per.to};
   VIEW='statement-print'; render();
 }
 function printStatementRun(kind){
@@ -3291,12 +3405,12 @@ function printStatementRun(kind){
   const list = S.contacts.filter(c=>c.type===kind);
   const withBalance = list.filter(c=> docs.some(d=>d.contactId===c.id && d.status!=='draft' && docStatus(d)!=='void' && docBalanceDue(d)>0));
   if(!withBalance.length){ showToast('No statements to print'); return; }
-  STATEMENT_PRINT = {kind, contactIds:withBalance.map(c=>c.id)};
+  STATEMENT_PRINT = {kind, contactIds:withBalance.map(c=>c.id), from:'', to:''};
   VIEW='statement-print'; render();
 }
 function renderStatementPrintPage(){
   if(!STATEMENT_PRINT){ navigate('cust-reports'); return; }
-  const {kind, contactIds} = STATEMENT_PRINT;
+  const {kind, contactIds, from, to} = STATEMENT_PRINT;
   const isCust = kind==='customer';
   const biz = S.settings;
   setTopbar('Statements', `${contactIds.length} statement${contactIds.length===1?'':'s'}`, `
@@ -3316,20 +3430,21 @@ function renderStatementPrintPage(){
         ${contact.email? `<button class="btn btn-ghost btn-sm" onclick="emailStatement('${contact.id}','${kind}')">✉ Email</button>`
           : `<button class="btn btn-ghost btn-sm" onclick="showToast('No email on file — add one on the ${isCust?'customer':'supplier'} record')">✉ Email</button>`}
       </div>`;
-    return perStatementBar + statementDocHtml(contact, kind);
+    return perStatementBar + statementDocHtml(contact, kind, from, to);
   }).join('<div class="statement-page-break"></div>');
   document.getElementById('content').innerHTML = pages;
 }
 
 // The printable statement document markup for one contact (shared by screen + export).
-function statementDocHtml(contact, kind){
+function statementDocHtml(contact, kind, fromDate, toDate){
   const isCust = kind==='customer';
   const biz = S.settings;
-  const st = buildStatement(contact, kind, null, null);
+  const st = buildStatement(contact, kind, fromDate||null, toDate||null);
   const openDocs = (isCust?S.invoices:S.bills).filter(d=>d.contactId===contact.id && d.status!=='draft' && docStatus(d)!=='void' && docBalanceDue(d)>0);
-  const aging = agingForDocs(openDocs, todayStr());
+  const aging = agingForDocs(openDocs, toDate||todayStr());
   const bizAddr = (biz.businessAddress||'').split('\n').map(l=>l.trim()).filter(Boolean);
   const custAddr = (contact.address||'').split('\n').map(l=>l.trim()).filter(Boolean);
+  const periodNote = (fromDate||toDate)? `<div style="font-size:11.5px; color:#555; margin-top:2px;">Period: ${fromDate?fmtDate(fromDate):'start'} – ${toDate?fmtDate(toDate):fmtDate(todayStr())}</div>`:'';
   return `<div class="statement-doc">
       <div style="display:flex; justify-content:space-between; align-items:flex-start;">
         <div>
@@ -3340,7 +3455,8 @@ function statementDocHtml(contact, kind){
         </div>
         <div style="text-align:right;">
           <div class="doc-title">STATEMENT</div>
-          <div style="font-size:11.5px; color:#555; margin-top:6px;">Date: <strong>${fmtDate(todayStr())}</strong></div>
+          <div style="font-size:11.5px; color:#555; margin-top:6px;">Date: <strong>${fmtDate(toDate||todayStr())}</strong></div>
+          ${periodNote}
         </div>
       </div>
       <div style="margin:22px 0 16px; padding-top:14px; border-top:1px solid #ddd;">
@@ -3350,7 +3466,7 @@ function statementDocHtml(contact, kind){
         ${contact.vatNo?`<div style="font-size:11px; color:#444;">VAT: ${escapeHtml(contact.vatNo)}</div>`:''}
       </div>
       <table class="doc-items"><thead><tr><th>Date</th><th>Type</th><th>Reference</th><th class="r">Charge</th><th class="r">Credit</th><th class="r">Balance</th></tr></thead>
-        <tbody>${st.rows.map(e=>`<tr><td>${fmtDateShort(e.date)}</td><td>${e.type}</td><td>${escapeHtml(e.ref)}</td>
+        <tbody>${fromDate? `<tr><td>${fmtDateShort(fromDate)}</td><td colspan="4" style="color:#666;">Opening balance</td><td class="r">${fmt(st.openingBalance)}</td></tr>`:''}${st.rows.map(e=>`<tr><td>${fmtDateShort(e.date)}</td><td>${e.type}</td><td>${escapeHtml(e.ref)}</td>
           <td class="r">${e.charge?fmt(e.charge):''}</td><td class="r">${e.credit?fmt(e.credit):''}</td><td class="r">${fmt(e.balance)}</td></tr>`).join('')}</tbody>
       </table>
       <div style="display:flex; justify-content:space-between; margin-top:22px; align-items:flex-start; gap:20px;">
@@ -3377,16 +3493,18 @@ function statementDocHtml(contact, kind){
 function statementPlainText(contact, kind){
   const isCust = kind==='customer';
   const biz = S.settings;
-  const st = buildStatement(contact, kind, null, null);
+  const per = activeStatementPeriod(kind);
+  const st = buildStatement(contact, kind, per.from||null, per.to||null);
   const openDocs = (isCust?S.invoices:S.bills).filter(d=>d.contactId===contact.id && d.status!=='draft' && docStatus(d)!=='void' && docBalanceDue(d)>0);
-  const aging = agingForDocs(openDocs, todayStr());
+  const aging = agingForDocs(openDocs, per.to||todayStr());
   const cur = biz.currency||'R';
   const money = n => cur + (Number(n)||0).toLocaleString('en-ZA',{minimumFractionDigits:2, maximumFractionDigits:2});
   const pad = (s,n)=> String(s).padEnd(n).slice(0,n);
   const padL = (s,n)=> String(s).padStart(n);
   const lines = [];
   lines.push(`STATEMENT — ${biz.businessName||''}`);
-  lines.push(`Date: ${fmtDate(todayStr())}`);
+  lines.push(`Date: ${fmtDate(per.to||todayStr())}`);
+  if(per.from||per.to) lines.push(`Period: ${per.from?fmtDate(per.from):'start'} - ${per.to?fmtDate(per.to):fmtDate(todayStr())}`);
   if(biz.businessVatNo) lines.push(`VAT: ${biz.businessVatNo}`);
   lines.push('');
   lines.push(`To: ${contact.name}`);
@@ -3394,6 +3512,7 @@ function statementPlainText(contact, kind){
   lines.push('');
   lines.push(`${pad('Date',12)}${pad('Type',18)}${pad('Reference',14)}${padL('Charge',12)}${padL('Credit',12)}${padL('Balance',12)}`);
   lines.push('-'.repeat(80));
+  if(per.from) lines.push(`${pad(fmtDateShort(per.from),12)}${pad('Opening balance',32)}${padL(money(st.openingBalance),12)}`);
   st.rows.forEach(e=>{
     lines.push(`${pad(fmtDateShort(e.date),12)}${pad(e.type,18)}${pad(e.ref,14)}${padL(e.charge?money(e.charge):'',12)}${padL(e.credit?money(e.credit):'',12)}${padL(money(e.balance),12)}`);
   });
@@ -3424,7 +3543,8 @@ function fallbackCopy(text, done){
 }
 function statementStandaloneHtml(contact, kind){
   // a self-contained printable HTML file (good as an email attachment or to "print to PDF")
-  const inner = statementDocHtml(contact, kind);
+  const per = activeStatementPeriod(kind);
+  const inner = statementDocHtml(contact, kind, per.from, per.to);
   return `<!DOCTYPE html><html><head><meta charset="UTF-8"><title>Statement — ${escapeHtml(contact.name)}</title>
 <style>
   body{ font-family: Arial, Helvetica, sans-serif; color:#181818; margin:0; padding:24px; background:#fff; }
@@ -3478,7 +3598,8 @@ function emailStatement(contactId, kind){
   const contact = S.contacts.find(c=>c.id===contactId);
   if(!contact || !contact.email){ showToast('No email on file for this contact'); return; }
   const isCust = kind==='customer';
-  const st = buildStatement(contact, kind, null, null);
+  const per = activeStatementPeriod(kind);
+  const st = buildStatement(contact, kind, per.from||null, per.to||null);
   const biz = S.settings;
   const subject = `Statement from ${biz.businessName||'us'} — ${fmtDate(todayStr())}`;
   const cur = biz.currency||'R';
