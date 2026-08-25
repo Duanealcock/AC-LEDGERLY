@@ -429,6 +429,7 @@ const NAV = [
     {id:'rep-vat', label:'VAT'},
   ]},
   {id:'yearend', label:'Year-End Close', ic:'⊗'},
+  {id:'usage', label:'Time Tracking', ic:'◷'},
   {id:'settings', label:'Settings', ic:'⚙'},
 ];
 // which nav view belongs to which expandable group, so the group auto-opens
@@ -858,8 +859,10 @@ function switchCompany(id){
   if(WORKSPACE.authEnabled && CURRENT_USER && !CURRENT_USER.isAdmin && !(CURRENT_USER.companyIds||[]).includes(id)){
     showToast("You don't have access to that company"); return;
   }
+  if(typeof timeTick==='function') timeTick(); // credit time to the outgoing company first
   WORKSPACE.activeId = id;
   S = WORKSPACE.companies[id];
+  TIME_LAST_TICK = Date.now(); TIME_LAST_ACTIVE = Date.now();
   closeModal();
   saveState(true);
   navigate('dashboard');
@@ -953,6 +956,7 @@ function showApp(){
   document.getElementById('login-screen').style.display = 'none';
   updateSessionIndicator();
   render();
+  startTimeTracking();
 }
 function ensureActiveCompanyAccessible(){
   if(!WORKSPACE.authEnabled || !CURRENT_USER || CURRENT_USER.isAdmin) return;
@@ -1520,6 +1524,7 @@ function render(){
     'rep-gl': ()=>{ REPORT_TAB='gl'; renderReports(); },
     'rep-vat': ()=>{ REPORT_TAB='vat'; renderReports(); },
     yearend: renderYearEnd,
+    usage: renderUsage,
     settings: renderSettings,
     'invoice-print': renderInvoicePrintPage,
     'reconcile': renderReconcilePage,
@@ -5430,6 +5435,83 @@ function reverseYearEndClose(labelYear){
   saveState(true);
   renderYearEnd();
 }
+/* ============================= TIME TRACKING REPORT ============================= */
+let USAGE_FROM = '';
+let USAGE_TO = '';
+function companyNameById(id){ const c = WORKSPACE.companies[id]; return c ? (c.settings.businessName||'Untitled') : '(deleted company)'; }
+function renderUsage(){
+  setTopbar('Time Tracking', 'Time spent working in each company (tracked automatically)', '');
+  timeTick(); // make sure the current slice is counted before showing totals
+  const from = USAGE_FROM || '';
+  const to = USAGE_TO || '';
+  const totals = timeTotalsByCompany(from||null, to||null);
+  const companyIds = Object.keys(totals).sort((a,b)=> totals[b]-totals[a]);
+  const grand = Object.values(totals).reduce((s,v)=>s+v,0);
+
+  // entries list (most recent first), filtered by range
+  const entries = timeEntriesInRange(from||null, to||null).slice().sort((a,b)=> (b.date||'').localeCompare(a.date||''));
+
+  const activeId = WORKSPACE.activeId;
+
+  document.getElementById('content').innerHTML = `
+    <div class="card" style="margin-bottom:16px;">
+      <div class="card-head" style="flex-wrap:wrap;"><h3>Filter</h3>
+        <div style="display:flex; gap:8px; align-items:center; margin-left:auto; flex-wrap:wrap;">
+          <input type="date" value="${from}" style="width:150px;" onchange="USAGE_FROM=this.value; renderUsage();" title="From date">
+          <span style="color:var(--text-muted);">to</span>
+          <input type="date" value="${to}" style="width:150px;" onchange="USAGE_TO=this.value; renderUsage();" title="To date">
+          ${(from||to)? `<button class="btn btn-ghost btn-sm" onclick="USAGE_FROM=''; USAGE_TO=''; renderUsage();">Clear</button>`:''}
+          <button class="btn btn-ghost btn-sm" onclick="exportReportCsv(usageReportModel())" title="Export to Excel (CSV)">⊞ Excel</button>
+          <button class="btn btn-ghost btn-sm" onclick="exportReportPdf(usageReportModel())" title="Export to PDF">⎙ PDF</button>
+        </div>
+      </div>
+      <div class="card-body">
+        <div class="hint" style="margin:0;">Time is logged automatically while a company is open. It pauses when the browser tab is hidden or after a few minutes of no activity, so it reflects active work time. ${from||to? '':'Showing all recorded time.'}</div>
+      </div>
+    </div>
+
+    <div class="card" style="margin-bottom:16px;">
+      <div class="card-head"><h3>Total time per company</h3><span style="font-size:12px; color:var(--text-muted);">Grand total: <strong style="color:var(--text);">${fmtDuration(grand)}</strong></span></div>
+      ${companyIds.length? `<table><thead><tr><th>Company</th><th class="amt">Time</th><th class="amt">Share</th></tr></thead><tbody>
+        ${companyIds.map(cid=>`<tr>
+          <td>${escapeHtml(companyNameById(cid))}${cid===activeId? ' <span class="badge badge-open">Active</span>':''}</td>
+          <td class="amt num">${fmtDuration(totals[cid])}</td>
+          <td class="amt num">${grand>0? Math.round(totals[cid]/grand*100):0}%</td>
+        </tr>`).join('')}
+        <tr class="li-total-row"><td>Total</td><td class="amt num">${fmtDuration(grand)}</td><td class="amt num">100%</td></tr>
+      </tbody></table>` : `<div class="card-body"><p style="color:var(--text-muted); font-size:13px; margin:0;">No time recorded yet in this range.</p></div>`}
+    </div>
+
+    <div class="card">
+      <div class="card-head"><h3>Entries</h3><span style="font-size:12px; color:var(--text-muted);">${entries.length} day-record${entries.length===1?'':'s'}</span></div>
+      ${entries.length? `<table><thead><tr><th>Date</th><th>Company</th><th class="amt">Time</th></tr></thead><tbody>
+        ${entries.map(e=>`<tr>
+          <td>${fmtDateShort(e.date)}</td>
+          <td>${escapeHtml(companyNameById(e.companyId))}</td>
+          <td class="amt num">${fmtDuration(e.seconds)}</td>
+        </tr>`).join('')}
+      </tbody></table>` : `<div class="card-body"><p style="color:var(--text-muted); font-size:13px; margin:0;">No entries in this range.</p></div>`}
+    </div>`;
+}
+function usageReportModel(){
+  const from = USAGE_FROM||'', to = USAGE_TO||'';
+  const totals = timeTotalsByCompany(from||null, to||null);
+  const companyIds = Object.keys(totals).sort((a,b)=> totals[b]-totals[a]);
+  const grand = Object.values(totals).reduce((s,v)=>s+v,0);
+  const entries = timeEntriesInRange(from||null, to||null).slice().sort((a,b)=> (b.date||'').localeCompare(a.date||''));
+  const rows=[], rowClasses=[];
+  const push=(cells,c)=>{ rows.push(cells); rowClasses.push(c||''); };
+  push(['TOTAL PER COMPANY','',''],'section');
+  companyIds.forEach(cid=> push([companyNameById(cid), fmtDuration(totals[cid]), round2(totals[cid]/3600)]));
+  push(['Total', fmtDuration(grand), round2(grand/3600)],'total');
+  push(['','',''],'');
+  push(['ENTRIES','',''],'section');
+  entries.forEach(e=> push([fmtDateShort(e.date)+' · '+companyNameById(e.companyId), fmtDuration(e.seconds), round2((e.seconds||0)/3600)]));
+  return { title:'Time Tracking',
+    meta:[{label:'Range', value:(from||to)? (fmtDateShort(from||'…')+' to '+fmtDateShort(to||'…')) : 'All time'}],
+    columns:['Company / Entry','Time','Hours'], rows, rowClasses };
+}
+
 function renderYearEnd(){
   setTopbar('Year-End Close', 'Roll a financial year’s profit into Retained Income', '');
   // Offer the years that have activity, plus a window — reuse the FY selector's list.
@@ -5694,6 +5776,83 @@ function openModal(title, bodyHtml, actions, wide){
     </div>`;
 }
 function closeModal(){ document.getElementById('modal-root').innerHTML=''; }
+
+/* ============================= TIME TRACKING (automatic, per company) ============================= */
+// Records active time against whichever company is open. Pauses when the tab is hidden
+// or after a few minutes of no interaction. Stored at workspace level, keyed by company + day.
+const TIME_IDLE_MS = 3*60*1000;      // 3 minutes with no interaction => idle
+const TIME_TICK_MS = 15*1000;        // accrue in 15-second ticks
+let TIME_LAST_ACTIVE = Date.now();
+let TIME_LAST_TICK = Date.now();
+let TIME_TIMER = null;
+function ensureTimeLog(){
+  if(!WORKSPACE.timeLog) WORKSPACE.timeLog = { entries:[] };
+  if(!Array.isArray(WORKSPACE.timeLog.entries)) WORKSPACE.timeLog.entries = [];
+  return WORKSPACE.timeLog;
+}
+function timeMarkActive(){ TIME_LAST_ACTIVE = Date.now(); }
+function timeIsActive(){
+  if(typeof document!=='undefined' && document.hidden) return false;   // tab hidden
+  if(Date.now()-TIME_LAST_ACTIVE > TIME_IDLE_MS) return false;         // idle
+  return true;
+}
+// Accrue seconds to today's entry for the active company.
+function timeAccrue(seconds){
+  if(seconds<=0 || !WORKSPACE || !WORKSPACE.activeId) return;
+  const log = ensureTimeLog();
+  const day = todayStr();
+  const cid = WORKSPACE.activeId;
+  let e = log.entries.find(x=>x.companyId===cid && x.date===day);
+  if(!e){ e = {companyId:cid, date:day, seconds:0}; log.entries.push(e); }
+  e.seconds = Math.round((e.seconds||0) + seconds);
+}
+function timeTick(){
+  const now = Date.now();
+  const elapsed = (now - TIME_LAST_TICK)/1000;
+  TIME_LAST_TICK = now;
+  // only credit the elapsed slice if we were active across it (cap to a bit over one tick to avoid
+  // crediting long sleeps/background gaps)
+  if(timeIsActive() && elapsed>0){
+    timeAccrue(Math.min(elapsed, (TIME_TICK_MS/1000)+2));
+    // persist periodically without spamming saves
+    if(!timeTick._sinceSave) timeTick._sinceSave = 0;
+    timeTick._sinceSave += elapsed;
+    if(timeTick._sinceSave >= 30){ timeTick._sinceSave = 0; saveState(); }
+  }
+}
+function startTimeTracking(){
+  if(TIME_TIMER) return;
+  TIME_LAST_TICK = Date.now();
+  TIME_LAST_ACTIVE = Date.now();
+  // user-activity signals reset the idle clock
+  ['mousemove','mousedown','keydown','scroll','touchstart','click'].forEach(ev=>{
+    window.addEventListener(ev, timeMarkActive, {passive:true});
+  });
+  document.addEventListener('visibilitychange', ()=>{
+    // reset tick baseline on return so hidden time isn't back-credited
+    if(!document.hidden){ TIME_LAST_TICK = Date.now(); TIME_LAST_ACTIVE = Date.now(); }
+  });
+  // flush on unload
+  window.addEventListener('beforeunload', ()=>{ timeTick(); try{ saveState(true); }catch(e){} });
+  TIME_TIMER = setInterval(timeTick, TIME_TICK_MS);
+}
+// ----- reporting helpers -----
+function fmtDuration(totalSeconds){
+  const s = Math.max(0, Math.round(totalSeconds));
+  const h = Math.floor(s/3600), m = Math.floor((s%3600)/60);
+  if(h>0) return `${h}h ${String(m).padStart(2,'0')}m`;
+  const sec = s%60;
+  return m>0 ? `${m}m ${String(sec).padStart(2,'0')}s` : `${sec}s`;
+}
+function timeEntriesInRange(from, to){
+  const log = ensureTimeLog();
+  return log.entries.filter(e=> (!from || e.date>=from) && (!to || e.date<=to));
+}
+function timeTotalsByCompany(from, to){
+  const totals = {};
+  timeEntriesInRange(from, to).forEach(e=>{ totals[e.companyId] = (totals[e.companyId]||0) + (e.seconds||0); });
+  return totals;
+}
 
 /* ============================= INIT ============================= */
 async function init(){
