@@ -263,6 +263,10 @@
   .cb-page-btn{ min-width:30px; padding:5px 9px; border-radius:6px; border:1px solid var(--border-strong); background:#fff; color:var(--text); cursor:pointer; font-size:12.5px; font-weight:600; font-family:inherit; }
   .cb-page-btn:hover:not(:disabled){ border-color:var(--accent); }
   .cb-page-btn.active{ background:var(--ink); color:#fff; border-color:var(--ink); }
+  .cb-sort-th{ cursor:pointer; user-select:none; white-space:nowrap; }
+  .cb-sort-th:hover{ color:var(--accent-dark); }
+  .cb-sort-th.sorted{ color:var(--accent-dark); }
+  .cb-sort-arrow{ font-size:9px; opacity:.85; }
   .link-btn{ color:var(--accent-dark); cursor:pointer; font-weight:600; text-decoration:none; }
   .link-btn:hover{ text-decoration:underline; }
   .cb-lock{ font-size:14px; opacity:.75; cursor:not-allowed; }
@@ -418,8 +422,10 @@ const NAV = [
     {id:'rep-tb', label:'Trial Balance'},
     {id:'rep-pl', label:'Profit & Loss'},
     {id:'rep-bs', label:'Balance Sheet'},
+    {id:'rep-gl', label:'General Ledger'},
     {id:'rep-vat', label:'VAT'},
   ]},
+  {id:'yearend', label:'Year-End Close', ic:'⊗'},
   {id:'settings', label:'Settings', ic:'⚙'},
 ];
 // which nav view belongs to which expandable group, so the group auto-opens
@@ -476,6 +482,8 @@ function defaultData(){
     cashbookDrafts:[],
     cashbookReviewed:[],
     vatPeriods:[],
+    yearEndCloses:[],
+    accountMappings:[],
     seeded:false,
   };
 }
@@ -522,6 +530,8 @@ function migrateCompanyShape(co){
   co.cashbookDrafts = co.cashbookDrafts || [];
   co.cashbookReviewed = co.cashbookReviewed || [];
   co.vatPeriods = co.vatPeriods || [];
+  co.yearEndCloses = co.yearEndCloses || [];
+  co.accountMappings = co.accountMappings || [];
   const s = co.settings || (co.settings={});
   if(s.nextQuoteNo==null) s.nextQuoteNo = 3001;
   if(s.nextSuppQuoteNo==null) s.nextSuppQuoteNo = 3501;
@@ -701,6 +711,77 @@ function downloadJson(obj, filename){
   a.click();
   document.body.removeChild(a);
   setTimeout(()=>URL.revokeObjectURL(url), 1000);
+}
+/* ---- Generic report export (Excel-compatible CSV + PDF via print) ---- */
+function csvCell(v){
+  const s = String(v==null?'':v);
+  return /[",\n]/.test(s) ? '"'+s.replace(/"/g,'""')+'"' : s;
+}
+function downloadBlob(content, filename, mime){
+  const blob = new Blob([content], {type:mime});
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url; a.download = filename;
+  document.body.appendChild(a); a.click(); document.body.removeChild(a);
+  setTimeout(()=>URL.revokeObjectURL(url), 1000);
+}
+function safeFileStem(s){ return (s||'report').toLowerCase().replace(/[^a-z0-9]+/g,'-').replace(/(^-|-$)/g,''); }
+// A "report model" is { title, meta:[{label,value}], columns:[...], rows:[[...cells]] }.
+// Cells may be strings/numbers; number cells export raw (unformatted) to Excel.
+function exportReportCsv(model){
+  const lines = [];
+  lines.push([model.title]);
+  lines.push([S.settings.businessName||'']);
+  (model.meta||[]).forEach(m=> lines.push([m.label, m.value]));
+  lines.push([]); // blank row
+  if(model.columns) lines.push(model.columns);
+  (model.rows||[]).forEach(r=> lines.push(r));
+  const csv = lines.map(row=> (row||[]).map(csvCell).join(',')).join('\r\n');
+  // BOM so Excel reads UTF-8 (R symbol etc.) correctly
+  downloadBlob('\uFEFF'+csv, `${safeFileStem(model.title)}-${todayStr()}.csv`, 'text/csv;charset=utf-8;');
+  showToast('Exported for Excel (CSV)');
+}
+function exportReportPdf(model){
+  // Build a clean printable HTML doc and open the browser's print dialog (Save as PDF).
+  const money = c => (typeof c==='number') ? fmt(c) : escapeHtml(String(c==null?'':c));
+  const headRow = model.columns ? `<tr>${model.columns.map((c,i)=>`<th class="${i===0?'':'r'}">${escapeHtml(c)}</th>`).join('')}</tr>` : '';
+  const bodyRows = (model.rows||[]).map(r=>{
+    const cls = (model.rowClasses && model.rowClasses[model.rows.indexOf(r)]) || '';
+    return `<tr class="${cls}">${r.map((c,i)=>`<td class="${i===0?'':'r'}">${money(c)}</td>`).join('')}</tr>`;
+  }).join('');
+  const metaHtml = (model.meta||[]).map(m=>`<div><span class="k">${escapeHtml(m.label)}:</span> ${escapeHtml(String(m.value))}</div>`).join('');
+  const logo = S.settings.invoiceLogoDataUrl ? `<img src="${S.settings.invoiceLogoDataUrl}" style="max-height:54px; max-width:180px; object-fit:contain;">` : '';
+  const win = window.open('', '_blank');
+  if(!win){ showToast('Allow pop-ups to export PDF'); return; }
+  win.document.write(`<!doctype html><html><head><meta charset="utf-8"><title>${escapeHtml(model.title)}</title>
+    <style>
+      *{ box-sizing:border-box; } body{ font-family:-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif; color:#0B0F1D; margin:32px; font-size:12.5px; }
+      .head{ display:flex; justify-content:space-between; align-items:flex-start; border-bottom:2px solid #0B0F1D; padding-bottom:12px; margin-bottom:6px; }
+      h1{ font-size:19px; margin:0 0 4px; } .sub{ color:#5b6270; font-size:12px; }
+      .meta{ color:#5b6270; font-size:11.5px; margin:10px 0 16px; display:flex; gap:18px; flex-wrap:wrap; } .meta .k{ font-weight:600; color:#0B0F1D; }
+      table{ width:100%; border-collapse:collapse; margin-top:6px; } th,td{ padding:6px 8px; text-align:left; border-bottom:1px solid #e6e8ee; }
+      th{ font-size:10.5px; text-transform:uppercase; letter-spacing:.4px; color:#5b6270; border-bottom:1.5px solid #cfd3dc; }
+      td.r,th.r{ text-align:right; font-variant-numeric:tabular-nums; } tr.total td{ font-weight:700; border-top:1.5px solid #cfd3dc; }
+      tr.section td{ font-weight:700; background:#f6f7f9; text-transform:uppercase; font-size:10.5px; letter-spacing:.4px; }
+      tr.grand td{ font-weight:800; font-size:14px; border-top:2px solid #0B0F1D; }
+      .foot{ margin-top:20px; color:#8a909c; font-size:10.5px; border-top:1px solid #e6e8ee; padding-top:8px; }
+      @media print{ body{ margin:14mm; } .noprint{ display:none; } }
+    </style></head><body>
+    <div class="head"><div><h1>${escapeHtml(model.title)}</h1><div class="sub">${escapeHtml(S.settings.businessName||'')}</div></div>${logo}</div>
+    <div class="meta">${metaHtml}</div>
+    <table>${headRow? '<thead>'+headRow+'</thead>':''}<tbody>${bodyRows}</tbody></table>
+    <div class="foot">Generated by Ledgerly · ${new Date().toLocaleString()}</div>
+    <div class="noprint" style="margin-top:18px;"><button onclick="window.print()" style="padding:8px 16px; font-size:13px; cursor:pointer;">Print / Save as PDF</button></div>
+    </body></html>`);
+  win.document.close();
+  setTimeout(()=>{ try{ win.focus(); win.print(); }catch(e){} }, 350);
+}
+// Export-button pair shown in a report's header.
+function reportExportButtons(modelFnName){
+  return `<div style="display:flex; gap:6px;">
+    <button class="btn btn-ghost btn-sm" onclick="exportReportCsv(${modelFnName}())" title="Export to Excel (CSV)">⊞ Excel</button>
+    <button class="btn btn-ghost btn-sm" onclick="exportReportPdf(${modelFnName}())" title="Export to PDF">⎙ PDF</button>
+  </div>`;
 }
 function exportWorkspaceBackup(){
   downloadJson({ type:'ledgerly-workspace-backup', exportedAt: new Date().toISOString(), workspace: WORKSPACE },
@@ -1073,6 +1154,7 @@ function reverseJournalByRef(ref){
   });
 }
 function todayStr(){ return new Date().toISOString().slice(0,10); }
+function isoAddDays(iso, n){ const d=new Date(iso+'T00:00:00'); d.setDate(d.getDate()+n); return d.toISOString().slice(0,10); }
 
 function accountType(id){ const a=S.accounts.find(x=>x.id===id); return a?a.type:null; }
 function accountNormalIsDebit(type){ return type==='Asset'||type==='Expense'; }
@@ -1106,10 +1188,34 @@ function lockedVatPeriodFor(date){
   return (S.vatPeriods||[]).find(p=> p.status==='closed' && date>=p.from && date<=p.to);
 }
 
+/* ============================= VAT TYPES (South Africa) ============================= */
+// Each VAT type has an id, display name, rate, and whether it's a taxable supply
+// (zero-rated is taxable at 0%; exempt is not a taxable supply). "none" = no VAT applied.
+const VAT_TYPES = [
+  { id:'none',     name:'No VAT',          rate:0,  taxable:false, system:true },
+  { id:'standard', name:'Standard Rate',   rate:15, taxable:true },
+  { id:'zero',     name:'Zero Rate',       rate:0,  taxable:true },
+  { id:'exempt',   name:'Exempt',          rate:0,  taxable:false },
+  { id:'capital',  name:'Capital Goods',   rate:15, taxable:true },
+];
+function vatTypeById(id){ return VAT_TYPES.find(t=>t.id===id) || VAT_TYPES[0]; }
+function vatTypeRate(id){ return vatTypeById(id).rate; }
+// Resolve a document's VAT type id from either the new vatType field or the legacy taxRate.
+function docVatTypeId(doc){
+  if(doc && doc.vatType) return doc.vatType;
+  // legacy: taxRate>0 means standard, else none
+  return (doc && doc.taxRate>0) ? 'standard' : 'none';
+}
+function vatTypeLabel(id){ return vatTypeById(id).name; }
+// Build the <option>s for a VAT-type selector; 'selectedId' marked selected.
+function vatTypeOptions(selectedId){
+  return VAT_TYPES.map(t=>`<option value="${t.id}" ${t.id===selectedId?'selected':''}>${t.name}${t.rate?` (${t.rate}%)`:' (0%)'}</option>`).join('');
+}
+
 /* ============================= INVOICES ============================= */
 function lineSubtotal(line){ return (Number(line.qty)||0) * (Number(line.price)||0); }
 function docSubtotal(doc){ return doc.lines.reduce((s,l)=>s+lineSubtotal(l),0); }
-function docTax(doc){ return doc.taxRate>0 ? docSubtotal(doc)*doc.taxRate/100 : 0; }
+function docTax(doc){ const rate = doc.taxRate!=null ? doc.taxRate : vatTypeRate(docVatTypeId(doc)); return rate>0 ? docSubtotal(doc)*rate/100 : 0; }
 function invoiceTotal(doc){ return docSubtotal(doc)+docTax(doc); }
 function billTotal(doc){ return docSubtotal(doc)+docTax(doc); }
 function docPaidAmount(doc){ return (doc.payments||[]).reduce((s,p)=>s+p.amount,0); }
@@ -1125,13 +1231,21 @@ function docStatus(doc){
   return 'open';
 }
 
-function makeInvoiceObj(contactId, date, dueDate, lines, useTax){
-  const num = 'INV-'+(S.settings.nextInvoiceNo++);
-  return {id:uid('inv'), number:num, contactId, date, dueDate, lines:lines.map(l=>({id:uid('li'),...l})), taxRate: useTax?S.settings.taxRate:0, status:'draft', payments:[], notes:''};
+// Accept either a vatType id (string) or a legacy boolean useTax; return {vatType, taxRate}.
+function normalizeVat(arg){
+  if(typeof arg==='string'){ const t=vatTypeById(arg); return {vatType:t.id, taxRate:t.rate}; }
+  // legacy boolean
+  return arg ? {vatType:'standard', taxRate:S.settings.taxRate} : {vatType:'none', taxRate:0};
 }
-function makeBillObj(contactId, date, dueDate, lines, useTax){
+function makeInvoiceObj(contactId, date, dueDate, lines, vat){
+  const num = 'INV-'+(S.settings.nextInvoiceNo++);
+  const v = normalizeVat(vat);
+  return {id:uid('inv'), number:num, contactId, date, dueDate, lines:lines.map(l=>({id:uid('li'),...l})), vatType:v.vatType, taxRate:v.taxRate, status:'draft', payments:[], notes:''};
+}
+function makeBillObj(contactId, date, dueDate, lines, vat){
   const num = 'BILL-'+(S.settings.nextBillNo++);
-  return {id:uid('bill'), number:num, contactId, date, dueDate, lines:lines.map(l=>({id:uid('li'),...l})), taxRate: useTax?S.settings.taxRate:0, status:'draft', payments:[], notes:''};
+  const v = normalizeVat(vat);
+  return {id:uid('bill'), number:num, contactId, date, dueDate, lines:lines.map(l=>({id:uid('li'),...l})), vatType:v.vatType, taxRate:v.taxRate, status:'draft', payments:[], notes:''};
 }
 
 function issueInvoice(invId, dateOverride){
@@ -1201,11 +1315,12 @@ function contactName(id){ const c=S.contacts.find(x=>x.id===id); return c?c.name
 
 /* ============================= QUOTES (non-posting until converted) ============================= */
 // Customer quotes (sales) and supplier quotes (purchase) share this shape.
-function makeQuoteObj(kind, contactId, date, expiryDate, lines, useTax){
+function makeQuoteObj(kind, contactId, date, expiryDate, lines, vat){
   const isCust = kind==='customer';
   const num = (isCust? 'QUO-'+(S.settings.nextQuoteNo++) : 'PQ-'+(S.settings.nextSuppQuoteNo++));
+  const v = normalizeVat(vat);
   return {id:uid('quo'), kind, number:num, contactId, date, dueDate:expiryDate,
-    lines:lines.map(l=>({id:uid('li'),...l})), taxRate: useTax?S.settings.taxRate:0,
+    lines:lines.map(l=>({id:uid('li'),...l})), vatType:v.vatType, taxRate:v.taxRate,
     status:'draft', payments:[], notes:'', convertedToId:null};
 }
 function quoteCollection(kind){ return kind==='customer' ? S.quotes : S.suppQuotes; }
@@ -1218,17 +1333,17 @@ function convertQuoteToDoc(quoteId, kind){
   const coll = quoteCollection(kind);
   const q = coll.find(x=>x.id===quoteId);
   if(!q || q.convertedToId) return null;
-  const useTax = (q.taxRate||0) > 0;
+  const vatType = docVatTypeId(q);
   const plainLines = q.lines.map(l=>({desc:l.desc, qty:l.qty, price:l.price, accountId:l.accountId}));
   let newDoc;
   if(kind==='customer'){
     const due = new Date(); due.setDate(due.getDate()+14);
-    newDoc = makeInvoiceObj(q.contactId, todayStr(), due.toISOString().slice(0,10), plainLines, useTax);
+    newDoc = makeInvoiceObj(q.contactId, todayStr(), due.toISOString().slice(0,10), plainLines, vatType);
     S.invoices.push(newDoc);
     issueInvoice(newDoc.id, todayStr());
   } else {
     const due = new Date(); due.setDate(due.getDate()+30);
-    newDoc = makeBillObj(q.contactId, todayStr(), due.toISOString().slice(0,10), plainLines, useTax);
+    newDoc = makeBillObj(q.contactId, todayStr(), due.toISOString().slice(0,10), plainLines, vatType);
     S.bills.push(newDoc);
     issueBill(newDoc.id, todayStr());
   }
@@ -1239,11 +1354,12 @@ function convertQuoteToDoc(quoteId, kind){
 /* ============================= CREDIT NOTES (post real ledger reversals) ============================= */
 // Customer credit note reduces what a customer owes (reverses income + AR + output VAT).
 // Supplier credit note reduces what you owe a supplier (reverses expense + AP + input VAT).
-function makeCreditNoteObj(kind, contactId, date, lines, useTax, appliesToId){
+function makeCreditNoteObj(kind, contactId, date, lines, vat, appliesToId){
   const isCust = kind==='customer';
   const num = (isCust? 'CN-'+(S.settings.nextCreditNoteNo++) : 'SCN-'+(S.settings.nextSuppCreditNoteNo++));
+  const v = normalizeVat(vat);
   return {id:uid('cn'), kind, number:num, contactId, date, dueDate:date,
-    lines:lines.map(l=>({id:uid('li'),...l})), taxRate: useTax?S.settings.taxRate:0,
+    lines:lines.map(l=>({id:uid('li'),...l})), vatType:v.vatType, taxRate:v.taxRate,
     status:'draft', payments:[], notes:'', appliesToId:appliesToId||null};
 }
 function creditNoteCollection(kind){ return kind==='customer' ? S.creditNotes : S.suppCreditNotes; }
@@ -1398,7 +1514,9 @@ function render(){
     'rep-tb': ()=>{ REPORT_TAB='tb'; renderReports(); },
     'rep-pl': ()=>{ REPORT_TAB='pl'; renderReports(); },
     'rep-bs': ()=>{ REPORT_TAB='bs'; renderReports(); },
+    'rep-gl': ()=>{ REPORT_TAB='gl'; renderReports(); },
     'rep-vat': ()=>{ REPORT_TAB='vat'; renderReports(); },
+    yearend: renderYearEnd,
     settings: renderSettings,
     'invoice-print': renderInvoicePrintPage,
     'reconcile': renderReconcilePage,
@@ -1541,8 +1659,8 @@ function openInvoiceForm(){
     </div>
     <div class="field-row">
       <div class="field"><label>Due date</label><input type="date" id="f-due" value="${dueStr}"></div>
-      <div class="field"><label>Apply ${S.settings.taxLabel} (${S.settings.taxRate}%)</label>
-        <select id="f-tax"><option value="1">Yes</option><option value="0">No</option></select></div>
+      <div class="field"><label>${S.settings.taxLabel} type</label>
+        <select id="f-tax" onchange="recalcInvoiceForm()">${vatTypeOptions('standard')}</select></div>
     </div>
     <div class="section-title">Line items</div>
     <table class="li-table" id="li-body-wrap">
@@ -1563,6 +1681,10 @@ function openInvoiceForm(){
   ], true);
   recalcInvoiceForm();
 }
+function selectedVatType(){
+  const el = document.getElementById('f-tax');
+  return el ? el.value : 'none';
+}
 function recalcInvoiceForm(){
   const rows = document.querySelectorAll('#li-body tr');
   let sub = 0;
@@ -1573,8 +1695,8 @@ function recalcInvoiceForm(){
     sub += t;
     r.querySelector('.li-line-total').textContent = fmt(t);
   });
-  const taxOn = document.getElementById('f-tax') ? document.getElementById('f-tax').value==='1' : false;
-  const tax = taxOn ? sub*S.settings.taxRate/100 : 0;
+  const rate = vatTypeRate(selectedVatType());
+  const tax = sub*rate/100;
   if(document.getElementById('sum-sub')) document.getElementById('sum-sub').textContent = fmt(sub);
   if(document.getElementById('sum-tax')) document.getElementById('sum-tax').textContent = fmt(tax);
   if(document.getElementById('sum-total')) document.getElementById('sum-total').textContent = fmt(sub+tax);
@@ -1595,10 +1717,10 @@ function submitInvoiceForm(issueNow){
   const contactId = document.getElementById('f-contact').value;
   const date = document.getElementById('f-date').value;
   const due = document.getElementById('f-due').value;
-  const taxOn = document.getElementById('f-tax').value==='1';
+  const vatType = selectedVatType();
   const lines = collectLines('.li-desc','.li-qty','.li-price','.li-acct');
   if(lines.length===0){ showToast('Add at least one line item'); return; }
-  const inv = makeInvoiceObj(contactId, date, due, lines, taxOn);
+  const inv = makeInvoiceObj(contactId, date, due, lines, vatType);
   S.invoices.push(inv);
   if(issueNow) issueInvoice(inv.id, date);
   closeModal();
@@ -1803,8 +1925,8 @@ function openBillForm(){
     </div>
     <div class="field-row">
       <div class="field"><label>Due date</label><input type="date" id="f-due" value="${dueStr}"></div>
-      <div class="field"><label>Apply ${S.settings.taxLabel} (${S.settings.taxRate}%)</label>
-        <select id="f-tax"><option value="0">No</option><option value="1">Yes</option></select></div>
+      <div class="field"><label>${S.settings.taxLabel} type</label>
+        <select id="f-tax" onchange="recalcInvoiceForm()">${vatTypeOptions('standard')}</select></div>
     </div>
     <div class="section-title">Line items</div>
     <table class="li-table" id="li-body-wrap">
@@ -1832,7 +1954,7 @@ function submitBillForm(issueNow){
   const taxOn = document.getElementById('f-tax').value==='1';
   const lines = collectLines('.li-desc','.li-qty','.li-price','.li-acct');
   if(lines.length===0){ showToast('Add at least one line item'); return; }
-  const bill = makeBillObj(contactId, date, due, lines, taxOn);
+  const bill = makeBillObj(contactId, date, due, lines, selectedVatType());
   S.bills.push(bill);
   if(issueNow) issueBill(bill.id, date);
   closeModal();
@@ -1959,8 +2081,8 @@ function openQuoteForm(kind){
     </div>
     <div class="field-row">
       <div class="field"><label>Valid until</label><input type="date" id="f-due" value="${validStr}"></div>
-      <div class="field"><label>Apply ${S.settings.taxLabel} (${S.settings.taxRate}%)</label>
-        <select id="f-tax"><option value="1">Yes</option><option value="0">No</option></select></div>
+      <div class="field"><label>${S.settings.taxLabel} type</label>
+        <select id="f-tax" onchange="recalcInvoiceForm()">${vatTypeOptions('standard')}</select></div>
     </div>
     <div class="section-title">Line items</div>
     <table class="li-table" id="li-body-wrap">
@@ -1984,10 +2106,10 @@ function submitQuoteForm(kind, markSent){
   const contactId = document.getElementById('f-contact').value;
   const date = document.getElementById('f-date').value;
   const due = document.getElementById('f-due').value;
-  const taxOn = document.getElementById('f-tax').value==='1';
+  const vatType = selectedVatType();
   const lines = collectLines('.li-desc','.li-qty','.li-price','.li-acct');
   if(lines.length===0){ showToast('Add at least one line item'); return; }
-  const q = makeQuoteObj(kind, contactId, date, due, lines, taxOn);
+  const q = makeQuoteObj(kind, contactId, date, due, lines, vatType);
   if(markSent) q.status='open';
   quoteCollection(kind).push(q);
   closeModal();
@@ -2103,8 +2225,8 @@ function openCreditNoteForm(kind, prefillContactId, prefillTargetId){
         <select id="f-applyto"><option value="">Standalone credit (no allocation)</option>
           ${openDocs.map(d=>`<option value="${d.id}" ${d.id===prefillTargetId?'selected':''}>${d.number} — ${contactName(d.contactId)} (${fmt(docBalanceDue(d))} due)</option>`).join('')}
         </select></div>
-      <div class="field"><label>Apply ${S.settings.taxLabel} (${S.settings.taxRate}%)</label>
-        <select id="f-tax"><option value="1">Yes</option><option value="0">No</option></select></div>
+      <div class="field"><label>${S.settings.taxLabel} type</label>
+        <select id="f-tax" onchange="recalcInvoiceForm()">${vatTypeOptions('standard')}</select></div>
     </div>
     <div class="section-title">Line items</div>
     <table class="li-table" id="li-body-wrap">
@@ -2127,11 +2249,11 @@ function openCreditNoteForm(kind, prefillContactId, prefillTargetId){
 function submitCreditNoteForm(kind, issueNow){
   const contactId = document.getElementById('f-contact').value;
   const date = document.getElementById('f-date').value;
-  const taxOn = document.getElementById('f-tax').value==='1';
+  const vatType = selectedVatType();
   const applyTo = document.getElementById('f-applyto').value || null;
   const lines = collectLines('.li-desc','.li-qty','.li-price','.li-acct');
   if(lines.length===0){ showToast('Add at least one line item'); return; }
-  const cn = makeCreditNoteObj(kind, contactId, date, lines, taxOn, applyTo);
+  const cn = makeCreditNoteObj(kind, contactId, date, lines, vatType, applyTo);
   creditNoteCollection(kind).push(cn);
   if(issueNow) issueCreditNote(cn.id, kind, date);
   closeModal();
@@ -2836,7 +2958,8 @@ function confirmCsvImport(){
     if(r.amount>0) draft.received = Math.abs(r.amount);
     else draft.spent = Math.abs(r.amount);
     if(draft.type==='account'){
-      draft.accountSelection = r.categoryId || null; // null => Unallocated holding account
+      // use the preview's category if set, else auto-apply a saved description→account mapping
+      draft.accountSelection = r.categoryId || mappedAccountFor(r.desc) || null; // null => Unallocated holding account
     } else {
       draft.contactSelection = r.contactId || null;
       draft.matchDocId = r.matchDocId || null;
@@ -2844,6 +2967,7 @@ function confirmCsvImport(){
     S.cashbookDrafts.push(draft);
   });
   const count = rows.length;
+  const mapped = (S.cashbookDrafts||[]).filter(d=>d.accountId===bank && d.accountSelection).length;
   CSV_IMPORT = null;
   CASHBOOK_ACCOUNT = bank;
   closeModal();
@@ -3006,13 +3130,137 @@ function reverseJournalEntry(id){
 
 /* ============================= CASHBOOK (quick-capture grid) ============================= */
 let CASHBOOK_ACCOUNT = null;
+let CASHBOOK_SEARCH = '';
+// Per-tab sort: key + direction. null key = natural order (as entered).
+let CASHBOOK_SORT = { new:{key:null, dir:1}, reviewed:{key:'date', dir:-1} };
+function setCashbookSort(tab, key){
+  const s = CASHBOOK_SORT[tab];
+  if(s.key===key){ s.dir = -s.dir; }        // same column → flip direction
+  else { s.key = key; s.dir = 1; }          // new column → ascending
+  renderCashbook();
+}
+// Value extractor for sorting a cashbook row by a column key.
+function cbSortValue(r, key){
+  switch(key){
+    case 'date': return r.date||'';
+    case 'payee': return (r.payee||'').toLowerCase();
+    case 'description': return (r.description||'').toLowerCase();
+    case 'type': return cbTypeLabel(r.type).toLowerCase();
+    case 'selection': return selectionLabel(r).replace(/<[^>]*>/g,'').toLowerCase();
+    case 'reference': return (r.reference||'').toLowerCase();
+    case 'vat': return vatTypeLabel(cbVatTypeId(r)).toLowerCase();
+    case 'spent': return Number(r.spent)||0;
+    case 'received': return Number(r.received)||0;
+    default: return '';
+  }
+}
+function sortCashbookRows(rows, tab){
+  const s = CASHBOOK_SORT[tab];
+  if(!s || !s.key) return rows;
+  return rows.slice().sort((a,b)=>{
+    const va = cbSortValue(a, s.key), vb = cbSortValue(b, s.key);
+    if(va<vb) return -1*s.dir;
+    if(va>vb) return 1*s.dir;
+    return 0;
+  });
+}
+// Sortable <th> for a cashbook table.
+function cbSortTh(tab, key, label, extraClass){
+  const s = CASHBOOK_SORT[tab];
+  const active = s && s.key===key;
+  const arrow = active ? (s.dir>0? ' ▲':' ▼') : '';
+  return `<th class="cb-sort-th ${extraClass||''} ${active?'sorted':''}" onclick="setCashbookSort('${tab}','${key}')" title="Sort by ${label}">${label}<span class="cb-sort-arrow">${arrow}</span></th>`;
+}
+function setCashbookSearch(v){
+  CASHBOOK_SEARCH = v;
+  CASHBOOK_PAGE.new = 1; CASHBOOK_PAGE.reviewed = 1;
+  renderCashbook();
+  // keep focus + caret in the search box after re-render
+  const el = document.getElementById('cb-search');
+  if(el){ el.focus(); const val=el.value; el.value=''; el.value=val; }
+}
 function blankCashbookRow(accountId){
   return { id:uid('cb'), accountId, date:todayStr(), payee:'', description:'', type:'account',
-    accountSelection:null, contactSelection:null, matchDocId:null, reference:'',
-    vatRate:0, spent:0, received:0 };
+    accountSelection:null, contactSelection:null, matchDocId:null, transferAccountId:null, reference:'',
+    vatType:'none', vatRate:0, spent:0, received:0 };
+}
+// Resolve a cashbook row's VAT type id (new field, or legacy from vatRate).
+function cbVatTypeId(row){ if(row.vatType) return row.vatType; return row.vatRate>0 ? 'standard' : 'none'; }
+function cbTypeLabel(t){ return t==='contact'?'Contact': t==='transfer'?'Transfer': t==='vat'?'VAT':'Account'; }
+
+/* ---- Description → account mappings (auto-coding) ---- */
+// Find the first mapping whose phrase is contained in the description (case-insensitive).
+function findAccountMapping(description){
+  const desc = (description||'').trim().toLowerCase();
+  if(!desc) return null;
+  return (S.accountMappings||[]).find(m=> m.phrase && desc.includes(m.phrase.toLowerCase())) || null;
+}
+function mappedAccountFor(description){ const m = findAccountMapping(description); return m ? m.accountId : null; }
+function addAccountMapping(phrase, accountId){
+  phrase = (phrase||'').trim();
+  if(!phrase || !accountId) return;
+  S.accountMappings = S.accountMappings || [];
+  // replace an existing rule with the same phrase (case-insensitive), else add
+  const existing = S.accountMappings.find(m=> m.phrase.toLowerCase()===phrase.toLowerCase());
+  if(existing){ existing.accountId = accountId; }
+  else S.accountMappings.push({ id:uid('map'), phrase, accountId });
+  saveState(true);
+}
+function deleteAccountMapping(id){
+  S.accountMappings = (S.accountMappings||[]).filter(m=>m.id!==id);
+  saveState(true);
+}
+// Settings UI: add/edit a mapping via modal.
+function openMappingForm(id){
+  const m = id ? (S.accountMappings||[]).find(x=>x.id===id) : null;
+  const accountOpts = S.accounts.slice().sort((a,b)=>(a.code||'').localeCompare(b.code||''))
+    .map(a=>`<option value="${a.id}" ${m&&m.accountId===a.id?'selected':''}>${escapeHtml(a.code+' '+a.name)}</option>`).join('');
+  const body = `
+    <div class="field"><label>If description contains</label>
+      <input type="text" id="map-phrase" placeholder="e.g. Vodacom" value="${m?escapeHtml(m.phrase):''}"></div>
+    <div class="field"><label>Code to account</label>
+      <select id="map-acct">${accountOpts}</select></div>
+    <div class="hint">Matching is case-insensitive and matches anywhere in the description.</div>
+  `;
+  openModal(m?'Edit mapping':'Add mapping', body, [{label:m?'Save changes':'Add mapping', cls:'btn-primary', onclick:`submitMappingForm(${id?`'${id}'`:'null'})`}]);
+}
+function submitMappingForm(id){
+  const phrase = document.getElementById('map-phrase').value.trim();
+  const accountId = document.getElementById('map-acct').value;
+  if(!phrase){ showToast('Enter a phrase to match'); return; }
+  if(!accountId){ showToast('Choose an account'); return; }
+  if(id){
+    const m = (S.accountMappings||[]).find(x=>x.id===id);
+    if(m){ m.phrase = phrase; m.accountId = accountId; saveState(true); }
+  } else {
+    // guard against duplicate phrase
+    if((S.accountMappings||[]).some(x=>x.phrase.toLowerCase()===phrase.toLowerCase())){ showToast('A mapping with that phrase already exists'); return; }
+    addAccountMapping(phrase, accountId);
+  }
+  closeModal(); showToast('Mapping saved'); renderSettings();
+}
+function removeMapping(id){
+  const m = (S.accountMappings||[]).find(x=>x.id===id);
+  if(!m) return;
+  if(!confirm(`Delete the mapping for “${m.phrase}”?`)) return;
+  deleteAccountMapping(id);
+  renderSettings();
+}
+// Apply mappings to any draft rows on the current bank that have a description but no allocation yet.
+function applyMappingsToDrafts(){
+  let applied = 0;
+  (S.cashbookDrafts||[]).forEach(r=>{
+    if(r.type!=='account') return;
+    if(r.accountSelection) return;         // already allocated — don't override
+    if(r._mapDismissed) return;            // user cleared it deliberately
+    const accId = mappedAccountFor(r.description);
+    if(accId){ r.accountSelection = accId; applied++; }
+  });
+  return applied;
 }
 function insertCashbookRow(){
   if(!CASHBOOK_ACCOUNT){ showToast('Add a bank account first'); return; }
+  CASHBOOK_SEARCH = ''; // clear any active search so the new blank row is visible
   S.cashbookDrafts = S.cashbookDrafts || [];
   S.cashbookDrafts.push(blankCashbookRow(CASHBOOK_ACCOUNT));
   saveState(true);
@@ -3027,7 +3275,41 @@ function updateCashbookField(id, field, value){
     showToast('That date is in a closed VAT period — reopen the period to edit'); renderCashbook(); return;
   }
   row[field] = value;
+  if(field==='vatType'){ row.vatRate = vatTypeRate(value); } // keep legacy rate in sync
+
+  // Auto-coding by description:
+  if(field==='description'){
+    // if this row isn't allocated yet, try to auto-fill from a saved mapping
+    if(row.type==='account' && !row.accountSelection && !row._mapDismissed){
+      const accId = mappedAccountFor(value);
+      if(accId){ row.accountSelection = accId; saveState(); renderCashbook(); return; }
+    }
+  }
+  if(field==='accountSelection'){
+    if(!value){ row._mapDismissed = true; } // user cleared it — don't re-apply automatically
+    else if(row.type==='account' && (row.description||'').trim()){
+      // offer to remember this description→account rule (only if none matches yet)
+      maybeOfferMapping(row);
+    }
+  }
   saveState();
+}
+// Ask whether to save a new description→account rule (once per unmatched description).
+function maybeOfferMapping(row){
+  const desc = (row.description||'').trim();
+  if(!desc || !row.accountSelection) return;
+  if(findAccountMapping(desc)) return;              // already covered by a rule
+  if(row._mapOffered) return;                       // don't ask twice for this row
+  row._mapOffered = true;
+  const acct = S.accounts.find(a=>a.id===row.accountSelection);
+  if(!acct) return;
+  // defer the confirm so the select's onchange finishes first
+  setTimeout(()=>{
+    if(confirm(`Always code transactions containing “${desc}” to ${acct.code} ${acct.name}?\n\nThis creates a rule you can edit later in Settings.`)){
+      addAccountMapping(desc, row.accountSelection);
+      showToast('Mapping saved');
+    }
+  }, 50);
 }
 function setCashbookAmount(id, field, value, inputEl){
   const row = (S.cashbookDrafts||[]).find(r=>r.id===id);
@@ -3067,7 +3349,7 @@ function postCashbookRow(row){
     payee:row.payee||'', description:row.description||'', reference:row.reference||'',
     type:row.type, accountSelection:row.accountSelection||null,
     contactSelection:row.contactSelection||null, matchDocId:row.matchDocId||null,
-    vatRate:row.vatRate||0, spent:row.spent||0, received:row.received||0,
+    vatType:cbVatTypeId(row), vatRate:row.vatRate||0, spent:row.spent||0, received:row.received||0,
   };
 
   if(row.type==='contact'){
@@ -3080,9 +3362,37 @@ function postCashbookRow(row){
     S.cashbookReviewed.push(meta);
     return {ok:true};
   }
+  if(row.type==='transfer'){
+    // Move money between this bank account and another. Received = money in from the other; Spent = money out to the other.
+    if(!row.transferAccountId) return {ok:false, msg:'Select the other account to transfer with'};
+    if(row.transferAccountId===row.accountId) return {ok:false, msg:'Choose a different account to transfer to'};
+    meta.transferAccountId = row.transferAccountId;
+    const other = row.transferAccountId;
+    const lines = isIn
+      ? [{accountId:row.accountId, debit:gross, credit:0}, {accountId:other, debit:0, credit:gross}]  // money in: this bank up, other down
+      : [{accountId:other, debit:gross, credit:0}, {accountId:row.accountId, debit:0, credit:gross}]; // money out: other up, this bank down
+    const entry = postJournal(desc+' (transfer)', row.date, lines);
+    entry.ref = cashbookRef; entry.cashbookMeta = meta;
+    S.cashbookReviewed = S.cashbookReviewed || [];
+    S.cashbookReviewed.push(meta);
+    return {ok:true};
+  }
+  if(row.type==='vat'){
+    // Allocate straight to a VAT control account (e.g. paying SARS, or a VAT refund received).
+    const vatAcct = row.accountSelection || 'acc_vatp';
+    const lines = isIn
+      ? [{accountId:row.accountId, debit:gross, credit:0}, {accountId:vatAcct, debit:0, credit:gross}]  // refund in
+      : [{accountId:vatAcct, debit:gross, credit:0}, {accountId:row.accountId, debit:0, credit:gross}]; // payment out
+    const entry = postJournal(desc+' (VAT)', row.date, lines);
+    entry.ref = cashbookRef; entry.cashbookMeta = meta;
+    S.cashbookReviewed = S.cashbookReviewed || [];
+    S.cashbookReviewed.push(meta);
+    return {ok:true};
+  }
   const catId = row.accountSelection || (isIn ? 'acc_unalloc_inc' : 'acc_unalloc_exp');
-  const useVat = row.vatRate>0;
-  const net = useVat ? round2(gross/(1+row.vatRate/100)) : gross;
+  const rate = vatTypeRate(cbVatTypeId(row));
+  const useVat = rate>0;
+  const net = useVat ? round2(gross/(1+rate/100)) : gross;
   const tax = round2(gross-net);
   const lines = [];
   if(isIn){
@@ -3143,6 +3453,23 @@ function cashbookSelectionCell(r){
       </select>` : (r.contactSelection!==null && contacts.length===0 ? `<div class="hint" style="margin:0;">No ${isIn?'customers':'suppliers'} yet</div>` : '')}
     `;
   }
+  if(r.type==='transfer'){
+    // choose the OTHER bank/asset account to move money to/from
+    const banks = S.accounts.filter(a=>a.isBank && a.id!==r.accountId);
+    const isIn = r.received>0;
+    return `<select onchange="updateCashbookField('${r.id}','transferAccountId',this.value)">
+      <option value="">${isIn?'Transfer from…':'Transfer to…'}</option>
+      ${banks.map(a=>`<option value="${a.id}" ${a.id===r.transferAccountId?'selected':''}>${escapeHtml(a.code+' '+a.name)}</option>`).join('')}
+    </select>${banks.length===0? `<div class="hint" style="margin:0;">Add another bank account first</div>`:''}`;
+  }
+  if(r.type==='vat'){
+    // allocate straight to a VAT control account
+    const vatAccts = S.accounts.filter(a=>a.id==='acc_vatp' || a.id==='acc_vatr' || /vat/i.test(a.name));
+    const val = r.accountSelection || 'acc_vatp';
+    return `<select onchange="updateCashbookField('${r.id}','accountSelection',this.value)">
+      ${vatAccts.map(a=>`<option value="${a.id}" ${a.id===val?'selected':''}>${escapeHtml(a.code+' '+a.name)}</option>`).join('')}
+    </select>`;
+  }
   const isIn = r.received>0;
   const value = r.accountSelection;
   const defaultLabel = isIn ? 'Unallocated Income' : 'Unallocated Expense';
@@ -3161,10 +3488,10 @@ function cashbookRowHtml(r){
       <td>${fmtDateShort(r.date)}</td>
       <td>${escapeHtml(r.payee||'—')}</td>
       <td>${escapeHtml(r.description||'—')}</td>
-      <td>${r.type==='contact'?'Contact':'Account'}</td>
+      <td>${cbTypeLabel(r.type)}</td>
       <td>${sel}</td>
       <td>${escapeHtml(r.reference||'—')}</td>
-      <td>${r.vatRate>0? (S.settings.taxLabel):'No VAT'}</td>
+      <td>${vatTypeLabel(cbVatTypeId(r))}</td>
       <td class="amt num">${r.spent? fmt(r.spent):''}</td>
       <td class="amt num">${r.received? fmt(r.received):''}</td>
       <td class="cb-actions"></td>
@@ -3178,13 +3505,14 @@ function cashbookRowHtml(r){
     <td><select onchange="updateCashbookField('${r.id}','type',this.value); renderCashbook();">
       <option value="account" ${r.type==='account'?'selected':''}>Account</option>
       <option value="contact" ${r.type==='contact'?'selected':''}>Contact</option>
+      <option value="transfer" ${r.type==='transfer'?'selected':''}>Transfer</option>
+      <option value="vat" ${r.type==='vat'?'selected':''}>VAT</option>
     </select></td>
     <td>${cashbookSelectionCell(r)}</td>
     <td><input type="text" value="${escapeHtml(r.reference)}" placeholder="Reference" onchange="updateCashbookField('${r.id}','reference',this.value)"></td>
-    <td><select onchange="updateCashbookField('${r.id}','vatRate', Number(this.value))">
-      <option value="0" ${r.vatRate===0?'selected':''}>No VAT</option>
-      <option value="${S.settings.taxRate}" ${r.vatRate>0?'selected':''}>${S.settings.taxLabel} (${S.settings.taxRate}%)</option>
-    </select></td>
+    <td>${(r.type==='transfer'||r.type==='vat')
+      ? `<span class="hint" style="margin:0;">—</span>`
+      : `<select onchange="updateCashbookField('${r.id}','vatType', this.value)">${vatTypeOptions(cbVatTypeId(r))}</select>`}</td>
     <td><input type="number" class="num cb-spent" min="0" step="0.01" value="${r.spent||''}" placeholder="0.00" onchange="setCashbookAmount('${r.id}','spent',this.value,this)"></td>
     <td><input type="number" class="num cb-received" min="0" step="0.01" value="${r.received||''}" placeholder="0.00" onchange="setCashbookAmount('${r.id}','received',this.value,this)"></td>
     <td class="cb-actions">
@@ -3296,8 +3624,17 @@ function renderCashbook(){
   }
   if(!CASHBOOK_ACCOUNT || !bankAccounts.find(a=>a.id===CASHBOOK_ACCOUNT)) CASHBOOK_ACCOUNT = bankAccounts[0].id;
   const tab = CASHBOOK_TAB;
-  const newRows = (S.cashbookDrafts||[]).filter(r=>r.accountId===CASHBOOK_ACCOUNT);
-  const reviewed = (S.cashbookReviewed||[]).filter(r=>r.accountId===CASHBOOK_ACCOUNT);
+  const q = (CASHBOOK_SEARCH||'').trim().toLowerCase();
+  const matchRow = r => {
+    if(!q) return true;
+    const hay = [r.payee, r.description, r.reference, selectionLabel(r), cbTypeLabel(r.type),
+      r.spent?String(r.spent):'', r.received?String(r.received):'', fmtDateShort(r.date)]
+      .filter(Boolean).join(' ').toLowerCase();
+    return hay.includes(q);
+  };
+  const newRows = (S.cashbookDrafts||[]).filter(r=>r.accountId===CASHBOOK_ACCOUNT).filter(matchRow);
+  const reviewed = (S.cashbookReviewed||[]).filter(r=>r.accountId===CASHBOOK_ACCOUNT).filter(matchRow);
+  const newTotalUnfiltered = (S.cashbookDrafts||[]).filter(r=>r.accountId===CASHBOOK_ACCOUNT).length;
   setTopbar('Cashbook', 'Quick-capture and process bank transactions row by row',
     tab==='new' ? `
       <button class="btn btn-ghost" onclick="openCsvImportForm()">⇪ Import CSV</button>
@@ -3321,8 +3658,13 @@ function renderCashbook(){
         <div style="font-size:11px; color:var(--text-muted);">Bank balance</div>
       </div>
       <div>
-        <div style="font-size:20px; font-weight:700;">${newRows.length}</div>
+        <div style="font-size:20px; font-weight:700;">${newTotalUnfiltered}</div>
         <div style="font-size:11px; color:var(--text-muted);">To be reviewed</div>
+      </div>
+      <div style="margin-left:auto; display:flex; align-items:center; gap:8px;">
+        <input type="search" id="cb-search" placeholder="Search transactions…" value="${escapeHtml(CASHBOOK_SEARCH)}"
+          oninput="setCashbookSearch(this.value)" style="min-width:220px;">
+        ${CASHBOOK_SEARCH? `<button class="btn btn-ghost btn-sm" onclick="setCashbookSearch('')">Clear</button>`:''}
       </div>
     </div></div>`;
 
@@ -3335,17 +3677,18 @@ function renderCashbook(){
   if(tab==='new'){
     html += `<div class="card">`;
     if(newRows.length){
+      const sortedNew = sortCashbookRows(newRows, 'new');
       const size = CASHBOOK_PAGE_SIZE.new;
-      const pages = Math.max(1, Math.ceil(newRows.length/size));
+      const pages = Math.max(1, Math.ceil(sortedNew.length/size));
       if(CASHBOOK_PAGE.new > pages) CASHBOOK_PAGE.new = pages;
       const start = (CASHBOOK_PAGE.new-1)*size;
-      const pageRows = newRows.slice(start, start+size);
+      const pageRows = sortedNew.slice(start, start+size);
       html += `<div class="card-body" style="display:flex; justify-content:flex-end; border-bottom:1px solid var(--border); padding:10px 18px;">${cashbookPageSizeControl('new', newRows.length)}</div>`;
       html += `<div style="overflow-x:auto;"><table class="cashbook-table"><thead><tr>
         <th style="width:32px; text-align:center;"><input type="checkbox" title="Select all on this page" onchange="toggleAllCashbookTicks('cb-new-body', this.checked)"></th>
-        <th>Date</th><th>Payee</th><th>Description</th><th>Type</th>
-        <th>Selection</th><th>Reference</th><th>VAT</th>
-        <th class="amt">Spent</th><th class="amt">Received</th><th></th>
+        ${cbSortTh('new','date','Date')}${cbSortTh('new','payee','Payee')}${cbSortTh('new','description','Description')}${cbSortTh('new','type','Type')}
+        ${cbSortTh('new','selection','Selection')}${cbSortTh('new','reference','Reference')}${cbSortTh('new','vat','VAT')}
+        ${cbSortTh('new','spent','Spent','amt')}${cbSortTh('new','received','Received','amt')}<th></th>
       </tr></thead><tbody id="cb-new-body">${pageRows.map(cashbookRowHtml).join('')}</tbody></table></div>`;
       html += cashbookPager('new', newRows.length);
       html += `<div class="card-body" style="display:flex; justify-content:space-between; align-items:center; gap:10px; border-top:1px solid var(--border); flex-wrap:wrap;">
@@ -3353,7 +3696,8 @@ function renderCashbook(){
         <button class="btn btn-primary btn-sm" onclick="markSelectedCashbookReviewed()">✓ Mark as reviewed</button>
       </div>`;
     } else {
-      html += emptyState('No new transactions', 'Insert a row or import a CSV to start capturing transactions into the cashbook.', 'insertCashbookRow()', '+ Insert row');
+      if(q) html += emptyState('No matches', `No new transactions match “${escapeHtml(CASHBOOK_SEARCH)}”.`, "setCashbookSearch('')", 'Clear search');
+      else html += emptyState('No new transactions', 'Insert a row or import a CSV to start capturing transactions into the cashbook.', 'insertCashbookRow()', '+ Insert row');
     }
     html += `</div>
     <div class="hint" style="margin-top:12px;">Rows marked <strong style="color:var(--gold);">Unallocated Income / Unallocated Expense</strong> post to a holding account so your bank balance stays accurate — recode them properly any time from the Journal Entries or Chart of Accounts. Set Type to "Contact" to allocate a transaction straight to an open invoice or bill instead. Once added, transactions move to the <strong>Reviewed</strong> tab.</div>`;
@@ -3372,6 +3716,14 @@ function selectionLabel(meta){
     const doc = (isIn?S.invoices:S.bills).find(d=>d.id===meta.matchDocId);
     return (c?escapeHtml(c.name):'Contact') + (doc? ' · '+doc.number : '');
   }
+  if(meta.type==='transfer'){
+    const a = S.accounts.find(x=>x.id===meta.transferAccountId);
+    return (meta.received>0?'From ':'To ') + (a? escapeHtml(a.code+' '+a.name) : 'account');
+  }
+  if(meta.type==='vat'){
+    const a = S.accounts.find(x=>x.id===(meta.accountSelection||'acc_vatp'));
+    return a ? escapeHtml(a.code+' '+a.name) : 'VAT account';
+  }
   const isIn = meta.received>0;
   const accId = meta.accountSelection || (isIn ? 'acc_unalloc_inc' : 'acc_unalloc_exp');
   const a = S.accounts.find(x=>x.id===accId);
@@ -3379,9 +3731,10 @@ function selectionLabel(meta){
 }
 function renderCashbookReviewed(reviewed){
   if(!reviewed.length){
+    if((CASHBOOK_SEARCH||'').trim()) return `<div class="card">${emptyState('No matches', `No reviewed transactions match “${escapeHtml(CASHBOOK_SEARCH)}”.`, "setCashbookSearch('')", 'Clear search')}</div>`;
     return `<div class="card">${emptyState('Nothing reviewed yet', 'Transactions you add from the New Transactions tab will appear here.', null)}</div>`;
   }
-  const allRows = reviewed.slice().sort((a,b)=> (b.date||'').localeCompare(a.date||''));
+  const allRows = sortCashbookRows(reviewed, 'reviewed');
   const total = allRows.length;
   const size = CASHBOOK_PAGE_SIZE.reviewed;
   const pages = Math.max(1, Math.ceil(total/size));
@@ -3395,18 +3748,18 @@ function renderCashbookReviewed(reviewed){
     <div class="card-body" style="display:flex; justify-content:flex-end; border-bottom:1px solid var(--border); padding:10px 18px;">${cashbookPageSizeControl('reviewed', total)}</div>
     <div style="overflow-x:auto;"><table class="cashbook-table"><thead><tr>
       <th style="width:32px; text-align:center;"><input type="checkbox" title="Select all on this page" onchange="toggleAllCashbookTicks('cb-rev-body', this.checked)"></th>
-      <th>Date</th><th>Payee</th><th>Description</th><th>Type</th><th>Selection</th>
-      <th>Reference</th><th>VAT</th><th class="amt">Spent</th><th class="amt">Received</th><th></th>
+      ${cbSortTh('reviewed','date','Date')}${cbSortTh('reviewed','payee','Payee')}${cbSortTh('reviewed','description','Description')}${cbSortTh('reviewed','type','Type')}${cbSortTh('reviewed','selection','Selection')}
+      ${cbSortTh('reviewed','reference','Reference')}${cbSortTh('reviewed','vat','VAT')}${cbSortTh('reviewed','spent','Spent','amt')}${cbSortTh('reviewed','received','Received','amt')}<th></th>
     </tr></thead><tbody id="cb-rev-body">
       ${rows.map(r=>{ const locked = isDateInClosedVatPeriod(r.date); return `<tr data-ref="${r.cashbookRef}" class="${locked?'cb-locked-row':''}">
         <td style="text-align:center;">${locked? `<span class="cb-lock" title="Locked — in a closed VAT period">🔒</span>` : `<input type="checkbox" class="cb-tick">`}</td>
         <td>${fmtDateShort(r.date)}</td>
         <td>${escapeHtml(r.payee||'—')}</td>
         <td>${escapeHtml(r.description||'—')}</td>
-        <td>${r.type==='contact'?'Contact':'Account'}</td>
+        <td>${cbTypeLabel(r.type)}</td>
         <td>${selectionLabel(r)}</td>
         <td>${escapeHtml(r.reference||'—')}</td>
-        <td>${r.vatRate>0? (S.settings.taxLabel):'No VAT'}</td>
+        <td>${vatTypeLabel(cbVatTypeId(r))}</td>
         <td class="amt num">${r.spent? fmt(r.spent):''}</td>
         <td class="amt num">${r.received? fmt(r.received):''}</td>
         <td class="cb-actions">${locked? `<span style="font-size:11px; color:var(--text-muted);">Locked</span>` : `<button class="cb-undo-btn" onclick="undoReviewedCashbook('${r.cashbookRef}')" title="Move back to New Transactions">↩ Move back</button>`}</td>
@@ -3442,7 +3795,7 @@ function undoReviewedCashbook(cashbookRef, silent){
   S.cashbookDrafts.push({
     id:uid('cb'), accountId:meta.accountId, date:meta.date, payee:meta.payee||'', description:meta.description||'',
     type:meta.type, accountSelection:meta.accountSelection||null, contactSelection:meta.contactSelection||null,
-    matchDocId:meta.matchDocId||null, reference:meta.reference||'', vatRate:meta.vatRate||0,
+    matchDocId:meta.matchDocId||null, transferAccountId:meta.transferAccountId||null, reference:meta.reference||'', vatType:meta.vatType||(meta.vatRate>0?'standard':'none'), vatRate:meta.vatRate||0,
     spent:meta.spent||0, received:meta.received||0,
   });
   S.cashbookReviewed = S.cashbookReviewed.filter(m=>m.cashbookRef!==cashbookRef);
@@ -4368,6 +4721,7 @@ function renderReports(){
       <div class="tab ${REPORT_TAB==='pl'?'active':''}" onclick="navigate('rep-pl')">Profit &amp; Loss</div>
       <div class="tab ${REPORT_TAB==='bs'?'active':''}" onclick="navigate('rep-bs')">Balance Sheet</div>
       <div class="tab ${REPORT_TAB==='tb'?'active':''}" onclick="navigate('rep-tb')">Trial Balance</div>
+      <div class="tab ${REPORT_TAB==='gl'?'active':''}" onclick="navigate('rep-gl')">General Ledger</div>
       <div class="tab ${REPORT_TAB==='vat'?'active':''}" onclick="navigate('rep-vat')">VAT</div>
     </div>
     <div id="report-body"></div>
@@ -4375,15 +4729,35 @@ function renderReports(){
   if(REPORT_TAB==='pl') renderPL(from, to);
   else if(REPORT_TAB==='bs') renderBS(to);
   else if(REPORT_TAB==='vat') renderVatReport();
+  else if(REPORT_TAB==='gl') renderGL(from, to);
   else renderTB(to);
 }
-function dateRangeControls(from,to,fn){
-  return `<div class="card-head" style="gap:10px;"><h3>Period</h3>
-    <div style="display:flex; gap:8px; align-items:center;">
+function dateRangeControls(from,to,fn,actionsHtml){
+  return `<div class="card-head" style="gap:10px; flex-wrap:wrap;"><h3>Period</h3>
+    <div style="display:flex; gap:8px; align-items:center; margin-left:auto;">
       <input type="date" value="${from}" style="width:150px;" onchange="window._rFrom=this.value; ${fn}">
       <span style="color:var(--text-muted);">to</span>
       <input type="date" value="${to}" style="width:150px;" onchange="window._rTo=this.value; ${fn}">
+      ${actionsHtml||''}
     </div></div>`;
+}
+// Model builder for P&L (reads current window._rFrom/_rTo).
+function plReportModel(){
+  const from = window._rFrom, to = window._rTo;
+  const income = S.accounts.filter(a=>a.type==='Income');
+  const expense = S.accounts.filter(a=>a.type==='Expense');
+  const incTotal = income.reduce((s,a)=>s+periodMovement(a.id,from,to),0);
+  const expTotal = expense.reduce((s,a)=>s+periodMovement(a.id,from,to),0);
+  const rows = [], rowClasses = [];
+  const push = (label,val,cls)=>{ rows.push([label, val==null?'':val]); rowClasses.push(cls||''); };
+  push('INCOME','','section');
+  income.forEach(a=> push(a.name, round2(periodMovement(a.id,from,to))));
+  push('Total income', round2(incTotal), 'total');
+  push('EXPENSES','','section');
+  expense.forEach(a=> push(a.name, round2(periodMovement(a.id,from,to))));
+  push('Total expenses', round2(expTotal), 'total');
+  push('Net profit', round2(incTotal-expTotal), 'grand');
+  return { title:'Profit & Loss', meta:[{label:'Period',value:fmtDateShort(from)+' to '+fmtDateShort(to)}], columns:['Account', S.settings.currency+' Amount'], rows, rowClasses };
 }
 function renderPL(from,to){
   const income = S.accounts.filter(a=>a.type==='Income');
@@ -4391,7 +4765,7 @@ function renderPL(from,to){
   const incTotal = income.reduce((s,a)=>s+periodMovement(a.id,from,to),0);
   const expTotal = expense.reduce((s,a)=>s+periodMovement(a.id,from,to),0);
   document.getElementById('report-body').innerHTML = `<div class="card">
-    ${dateRangeControls(from,to,"renderReports()")}
+    ${dateRangeControls(from,to,"renderReports()", reportExportButtons('plReportModel'))}
     <div class="card-body">
       <div class="section-title">Income</div>
       ${income.map(a=>`<div class="report-row indent"><span>${a.name}</span><span class="num">${fmt(periodMovement(a.id,from,to))}</span></div>`).join('')}
@@ -4402,6 +4776,32 @@ function renderPL(from,to){
       <div class="report-row total" style="font-size:15px;"><span>Net profit</span><span class="num ${(incTotal-expTotal)>=0?'pos':'neg'}">${fmt(incTotal-expTotal)}</span></div>
     </div>
   </div>`;
+}
+function bsReportModel(){
+  const asOf = window._rTo;
+  const assets = S.accounts.filter(a=>a.type==='Asset');
+  const liabilities = S.accounts.filter(a=>a.type==='Liability');
+  const equity = S.accounts.filter(a=>a.type==='Equity');
+  const assetsTotal = assets.reduce((s,a)=>s+getAccountBalance(a.id,asOf),0);
+  const liabTotal = liabilities.reduce((s,a)=>s+getAccountBalance(a.id,asOf),0);
+  const equityTotal = equity.reduce((s,a)=>s+getAccountBalance(a.id,asOf),0);
+  const netProfitToDate = S.accounts.filter(a=>a.type==='Income').reduce((s,a)=>s+getAccountBalance(a.id,asOf),0)
+    - S.accounts.filter(a=>a.type==='Expense').reduce((s,a)=>s+getAccountBalance(a.id,asOf),0);
+  const totalEquity = equityTotal + netProfitToDate;
+  const rows=[], rowClasses=[];
+  const push=(l,v,c)=>{ rows.push([l, v==null?'':v]); rowClasses.push(c||''); };
+  push('ASSETS','','section');
+  assets.forEach(a=> push(a.name, round2(getAccountBalance(a.id,asOf))));
+  push('Total assets', round2(assetsTotal), 'total');
+  push('LIABILITIES','','section');
+  liabilities.forEach(a=> push(a.name, round2(getAccountBalance(a.id,asOf))));
+  push('Total liabilities', round2(liabTotal), 'total');
+  push('EQUITY','','section');
+  equity.forEach(a=> push(a.name, round2(getAccountBalance(a.id,asOf))));
+  push('Retained earnings (net profit to date)', round2(netProfitToDate));
+  push('Total equity', round2(totalEquity), 'total');
+  push('Liabilities + Equity', round2(liabTotal+totalEquity), 'grand');
+  return { title:'Balance Sheet', meta:[{label:'As at',value:fmtDateShort(asOf)}], columns:['Account', S.settings.currency+' Balance'], rows, rowClasses };
 }
 function renderBS(asOf){
   const assets = S.accounts.filter(a=>a.type==='Asset');
@@ -4415,7 +4815,7 @@ function renderBS(asOf){
   const totalEquity = equityTotal + netProfitToDate;
   document.getElementById('content').querySelector('#report-body');
   document.getElementById('report-body').innerHTML = `<div class="card">
-    <div class="card-head"><h3>As of</h3><input type="date" value="${asOf}" style="width:150px;" onchange="window._rTo=this.value; renderReports();"></div>
+    <div class="card-head" style="flex-wrap:wrap;"><h3>As of</h3><div style="display:flex; gap:8px; align-items:center; margin-left:auto;"><input type="date" value="${asOf}" style="width:150px;" onchange="window._rTo=this.value; renderReports();">${reportExportButtons('bsReportModel')}</div></div>
     <div class="card-body">
       <div class="section-title">Assets</div>
       ${assets.map(a=>`<div class="report-row indent"><span>${a.name}</span><span class="num">${fmt(getAccountBalance(a.id,asOf))}</span></div>`).join('')}
@@ -4433,6 +4833,23 @@ function renderBS(asOf){
     </div>
   </div>`;
 }
+function tbReportModel(){
+  const asOf = window._rTo;
+  const includeOpening = window._rIncludeOpening !== false;
+  const rows = S.accounts.map(a=>{
+    const bal = getAccountBalance(a.id, asOf, !includeOpening);
+    const isDebitNormal = accountNormalIsDebit(a.type);
+    const debit = (isDebitNormal && bal>=0) || (!isDebitNormal && bal<0) ? Math.abs(bal) : 0;
+    const credit = (!isDebitNormal && bal>=0) || (isDebitNormal && bal<0) ? Math.abs(bal) : 0;
+    return {a, debit, credit};
+  }).filter(r=>Math.abs(r.debit)>0.001 || Math.abs(r.credit)>0.001);
+  const totalD = rows.reduce((s,r)=>s+r.debit,0);
+  const totalC = rows.reduce((s,r)=>s+r.credit,0);
+  const outRows=[], rowClasses=[];
+  rows.forEach(r=>{ outRows.push([r.a.code, r.a.name, r.debit?round2(r.debit):'', r.credit?round2(r.credit):'']); rowClasses.push(''); });
+  outRows.push(['','Total', round2(totalD), round2(totalC)]); rowClasses.push('total');
+  return { title:'Trial Balance', meta:[{label:'As at',value:fmtDateShort(asOf)},{label:'Opening balances',value:includeOpening?'Included':'Excluded'}], columns:['Code','Account', S.settings.currency+' Debit', S.settings.currency+' Credit'], rows:outRows, rowClasses };
+}
 function renderTB(asOf){
   const includeOpening = window._rIncludeOpening !== false; // default true
   const rows = S.accounts.map(a=>{
@@ -4447,7 +4864,7 @@ function renderTB(asOf){
   const obEntries = S.journal.filter(e=>e.isOpeningBalance && (!asOf || e.date<=asOf));
   const obCount = obEntries.length;
   document.getElementById('report-body').innerHTML = `<div class="card">
-    <div class="card-head"><h3>As of</h3><input type="date" value="${asOf}" style="width:150px;" onchange="window._rTo=this.value; renderReports();"></div>
+    <div class="card-head" style="flex-wrap:wrap;"><h3>As of</h3><div style="display:flex; gap:8px; align-items:center; margin-left:auto;"><input type="date" value="${asOf}" style="width:150px;" onchange="window._rTo=this.value; renderReports();">${reportExportButtons('tbReportModel')}</div></div>
     <div class="card-body" style="padding-bottom:0;">
       <label style="display:flex; align-items:center; gap:8px; cursor:pointer; text-transform:none; letter-spacing:normal; font-weight:500; color:var(--text); font-size:13px;">
         <input type="checkbox" style="width:auto;" ${includeOpening?'checked':''} onchange="window._rIncludeOpening=this.checked; renderReports();">
@@ -4460,6 +4877,132 @@ function renderTB(asOf){
       <tr class="li-total-row"><td></td><td>Total</td><td class="amt num">${fmt(totalD)}</td><td class="amt num">${fmt(totalC)}</td></tr>
     </tbody></table>
   </div>`;
+}
+
+/* ============================= GENERAL LEDGER ============================= */
+let GL_ACCOUNT = 'all';           // 'all' or an account id
+let GL_INCLUDE_OPENING = true;    // include opening-balance entries in the opening figure
+// Build ledger data for one account over [from,to]: opening balance + dated lines + running balance.
+function glAccountData(accId, from, to){
+  const acct = S.accounts.find(a=>a.id===accId);
+  if(!acct) return null;
+  const debitNormal = accountNormalIsDebit(acct.type);
+  // Opening balance = balance up to the day before 'from'.
+  const dayBefore = from ? isoAddDays(from, -1) : null;
+  let opening = dayBefore ? getAccountBalance(accId, dayBefore, !GL_INCLUDE_OPENING) : 0;
+  // Collect this account's transaction lines within the range.
+  const txns = [];
+  S.journal.forEach(e=>{
+    if(from && e.date<from) return;
+    if(to && e.date>to) return;
+    if(!GL_INCLUDE_OPENING && e.isOpeningBalance) return;
+    e.lines.forEach(l=>{
+      if(l.accountId!==accId) return;
+      txns.push({ date:e.date, ref:e.ref||'', desc:e.description||'', debit:l.debit||0, credit:l.credit||0, isOpening:!!e.isOpeningBalance });
+    });
+  });
+  txns.sort((a,b)=> (a.date||'').localeCompare(b.date||''));
+  // Running balance in the account's natural sign.
+  let running = opening;
+  const rows = txns.map(t=>{
+    running += debitNormal ? (t.debit - t.credit) : (t.credit - t.debit);
+    return { ...t, balance: round2(running) };
+  });
+  const totalDebit = round2(txns.reduce((s,t)=>s+t.debit,0));
+  const totalCredit = round2(txns.reduce((s,t)=>s+t.credit,0));
+  return { acct, opening:round2(opening), rows, totalDebit, totalCredit, closing:round2(running), debitNormal };
+}
+// list of accounts that actually have activity in-range (for "All accounts")
+function glActiveAccounts(from, to){
+  return S.accounts.filter(a=>{
+    const d = glAccountData(a.id, from, to);
+    return d && (d.rows.length>0 || Math.abs(d.opening)>0.001 || Math.abs(d.closing)>0.001);
+  });
+}
+function renderGL(from, to){
+  const accounts = S.accounts.slice().sort((a,b)=>(a.code||'').localeCompare(b.code||''));
+  const targetAccounts = GL_ACCOUNT==='all' ? glActiveAccounts(from,to) : accounts.filter(a=>a.id===GL_ACCOUNT);
+
+  const controls = `<div class="card-head" style="gap:10px; flex-wrap:wrap;"><h3>General Ledger</h3>
+    <div style="display:flex; gap:8px; align-items:center; flex-wrap:wrap; margin-left:auto;">
+      <select style="max-width:280px;" onchange="GL_ACCOUNT=this.value; renderReports();">
+        <option value="all" ${GL_ACCOUNT==='all'?'selected':''}>All accounts</option>
+        ${accounts.map(a=>`<option value="${a.id}" ${a.id===GL_ACCOUNT?'selected':''}>${escapeHtml(a.code+' '+a.name)}</option>`).join('')}
+      </select>
+      <input type="date" value="${from}" style="width:150px;" onchange="window._rFrom=this.value; renderReports();">
+      <span style="color:var(--text-muted);">to</span>
+      <input type="date" value="${to}" style="width:150px;" onchange="window._rTo=this.value; renderReports();">
+      ${reportExportButtons('glReportModel')}
+    </div></div>`;
+
+  const openingToggle = `<div class="card-body" style="padding-bottom:0;">
+    <label style="display:flex; align-items:center; gap:8px; cursor:pointer; text-transform:none; letter-spacing:normal; font-weight:500; color:var(--text); font-size:13px;">
+      <input type="checkbox" style="width:auto;" ${GL_INCLUDE_OPENING?'checked':''} onchange="GL_INCLUDE_OPENING=this.checked; renderReports();">
+      Include opening balances
+    </label>
+    <div class="hint">The opening balance is each account's balance as at the day before ${fmtDateShort(from)}${GL_INCLUDE_OPENING?'':', excluding entries tagged as opening balances'}.</div>
+  </div>`;
+
+  let sections = '';
+  if(!targetAccounts.length){
+    sections = `<div class="card-body"><p style="color:var(--text-muted); font-size:13px; margin:0;">No ledger activity in this range.</p></div>`;
+  } else {
+    targetAccounts.forEach(a=>{
+      const d = glAccountData(a.id, from, to);
+      if(!d) return;
+      if(GL_ACCOUNT==='all' && d.rows.length===0 && Math.abs(d.opening)<0.001 && Math.abs(d.closing)<0.001) return;
+      sections += `<div style="margin-top:8px;">
+        <div style="display:flex; justify-content:space-between; align-items:baseline; padding:12px 18px 6px; border-bottom:2px solid var(--border-strong);">
+          <strong class="mono" style="font-size:13.5px;">${escapeHtml(d.acct.code)} · ${escapeHtml(d.acct.name)}</strong>
+          <span style="font-size:11px; color:var(--text-muted);">${d.acct.type}${d.acct.isBank?' · Bank':''}</span>
+        </div>
+        <div style="overflow-x:auto;"><table><thead><tr>
+          <th>Date</th><th>Reference</th><th>Description</th><th class="amt">Debit</th><th class="amt">Credit</th><th class="amt">Balance</th>
+        </tr></thead><tbody>
+          <tr class="li-total-row"><td colspan="5">Opening balance — ${fmtDateShort(from)}</td><td class="amt num">${fmt(d.opening)}</td></tr>
+          ${d.rows.map(t=>`<tr>
+            <td>${fmtDateShort(t.date)}</td>
+            <td class="mono">${escapeHtml(t.ref||'—')}</td>
+            <td>${escapeHtml(t.desc||'—')}${t.isOpening?' <span class="badge badge-ob">OB</span>':''}</td>
+            <td class="amt num">${t.debit?fmt(t.debit):''}</td>
+            <td class="amt num">${t.credit?fmt(t.credit):''}</td>
+            <td class="amt num">${fmt(t.balance)}</td>
+          </tr>`).join('')}
+          <tr class="li-total-row"><td colspan="3">Period movement &amp; closing balance</td>
+            <td class="amt num">${fmt(d.totalDebit)}</td><td class="amt num">${fmt(d.totalCredit)}</td>
+            <td class="amt num">${fmt(d.closing)}</td></tr>
+        </tbody></table></div>
+      </div>`;
+    });
+  }
+
+  document.getElementById('report-body').innerHTML = `<div class="card">
+    ${controls}
+    ${openingToggle}
+    ${sections}
+  </div>`;
+}
+// Export model — flattens all shown accounts into one sheet with opening/closing rows.
+function glReportModel(){
+  const from = window._rFrom, to = window._rTo;
+  const accounts = S.accounts.slice().sort((a,b)=>(a.code||'').localeCompare(b.code||''));
+  const targetAccounts = GL_ACCOUNT==='all' ? glActiveAccounts(from,to) : accounts.filter(a=>a.id===GL_ACCOUNT);
+  const rows=[], rowClasses=[];
+  const push=(cells,c)=>{ rows.push(cells); rowClasses.push(c||''); };
+  targetAccounts.forEach(a=>{
+    const d = glAccountData(a.id, from, to);
+    if(!d) return;
+    if(GL_ACCOUNT==='all' && d.rows.length===0 && Math.abs(d.opening)<0.001 && Math.abs(d.closing)<0.001) return;
+    push([d.acct.code+' '+d.acct.name,'','','','',''],'section');
+    push(['Opening balance','','','','', round2(d.opening)],'total');
+    d.rows.forEach(t=> push([fmtDateShort(t.date), t.ref||'', t.desc||'', t.debit||'', t.credit||'', round2(t.balance)]));
+    push(['Closing balance','','', round2(d.totalDebit), round2(d.totalCredit), round2(d.closing)],'total');
+  });
+  const acctLabel = GL_ACCOUNT==='all' ? 'All accounts' : ((S.accounts.find(a=>a.id===GL_ACCOUNT)||{}).code+' '+(S.accounts.find(a=>a.id===GL_ACCOUNT)||{}).name);
+  return { title:'General Ledger',
+    meta:[{label:'Period',value:fmtDateShort(from)+' to '+fmtDateShort(to)},{label:'Account',value:acctLabel},{label:'Opening balances',value:GL_INCLUDE_OPENING?'Included':'Excluded'}],
+    columns:['Date','Reference','Description', S.settings.currency+' Debit', S.settings.currency+' Credit', S.settings.currency+' Balance'],
+    rows, rowClasses };
 }
 
 /* ============================= VAT REPORT & PERIODS ============================= */
@@ -4480,6 +5023,68 @@ function computeVatReturn(from, to){
     outputVat: round2(outputVat), inputVat: round2(inputVat),
     salesExcl: round2(salesExcl), purchasesExcl: round2(purchasesExcl),
     net, payable: net>0 ? net : 0, refundable: net<0 ? -net : 0,
+  };
+}
+// Break the VAT return down BY TYPE, with the detailed transactions making up each figure.
+// Returns { output:{ typeId:{type, net, vat, lines:[...]} }, input:{...}, outputTotals, inputTotals, net }.
+function computeVatBreakdown(from, to){
+  const inRange = d => d && d>=from && d<=to;
+  const output = {}; // customer-side: invoices + supplier credit notes are inputs... keep it simple: sales docs
+  const input = {};
+  const ensure = (bucket, tId) => { if(!bucket[tId]) bucket[tId] = {type:vatTypeById(tId), net:0, vat:0, lines:[]}; return bucket[tId]; };
+  const add = (bucket, tId, net, vat, line) => { const b = ensure(bucket, tId); b.net=round2(b.net+net); b.vat=round2(b.vat+vat); b.lines.push(line); };
+
+  // OUTPUT VAT — customer invoices (issued/open/partial/paid, not draft/void)
+  (S.invoices||[]).forEach(inv=>{
+    if(!inRange(inv.date)) return;
+    const st = docStatus(inv); if(st==='draft'||st==='void') return;
+    const tId = docVatTypeId(inv); const net = docSubtotal(inv); const vat = docTax(inv);
+    add(output, tId, net, vat, {date:inv.date, ref:inv.number, name:contactName(inv.contactId), net, vat});
+  });
+  // Customer credit notes REDUCE output VAT
+  (S.creditNotes||[]).forEach(cn=>{
+    if(!inRange(cn.date)) return; if(cn.status==='void'||cn.status==='draft') return;
+    const tId = docVatTypeId(cn); const net = -docSubtotal(cn); const vat = -docTax(cn);
+    add(output, tId, net, vat, {date:cn.date, ref:cn.number, name:contactName(cn.contactId)+' (credit)', net, vat});
+  });
+
+  // INPUT VAT — supplier bills
+  (S.bills||[]).forEach(bill=>{
+    if(!inRange(bill.date)) return;
+    const st = docStatus(bill); if(st==='draft'||st==='void') return;
+    const tId = docVatTypeId(bill); const net = docSubtotal(bill); const vat = docTax(bill);
+    add(input, tId, net, vat, {date:bill.date, ref:bill.number, name:contactName(bill.contactId), net, vat});
+  });
+  // Supplier credit notes REDUCE input VAT
+  (S.suppCreditNotes||[]).forEach(cn=>{
+    if(!inRange(cn.date)) return; if(cn.status==='void'||cn.status==='draft') return;
+    const tId = docVatTypeId(cn); const net = -docSubtotal(cn); const vat = -docTax(cn);
+    add(input, tId, net, vat, {date:cn.date, ref:cn.number, name:contactName(cn.contactId)+' (credit)', net, vat});
+  });
+
+  // Cashbook reviewed transactions coded to an account (not contact-allocated, which already sit in the docs above)
+  (S.cashbookReviewed||[]).forEach(m=>{
+    if(!inRange(m.date)) return;
+    if(m.type==='contact') return; // those are invoice/bill payments, VAT already captured on the doc
+    const tId = m.vatType || (m.vatRate>0?'standard':'none');
+    const rate = vatTypeRate(tId);
+    const gross = (m.received||0)>0 ? m.received : m.spent;
+    if(!gross) return;
+    const net = rate>0 ? round2(gross/(1+rate/100)) : gross;
+    const vat = round2(gross-net);
+    const isIn = (m.received||0)>0;
+    const line = {date:m.date, ref:m.reference||'Cashbook', name:m.payee||m.description||'Cashbook entry', net, vat};
+    if(isIn) add(output, tId, net, vat, line); else add(input, tId, net, vat, line);
+  });
+
+  const sumBucket = b => Object.values(b).reduce((a,x)=>({net:a.net+x.net, vat:a.vat+x.vat}), {net:0,vat:0});
+  const outputTotals = sumBucket(output);
+  const inputTotals = sumBucket(input);
+  return {
+    output, input,
+    outputTotals:{net:round2(outputTotals.net), vat:round2(outputTotals.vat)},
+    inputTotals:{net:round2(inputTotals.net), vat:round2(inputTotals.vat)},
+    net: round2(outputTotals.vat - inputTotals.vat),
   };
 }
 function fmtPeriodLabel(from, to){ return fmtDateShort(from)+' – '+fmtDateShort(to); }
@@ -4612,13 +5217,70 @@ function openVatDetail(id){ VAT_DETAIL_ID = id; VAT_VIEW = 'detail'; renderRepor
 function backToVatList(){ VAT_VIEW = 'list'; VAT_DETAIL_ID = null; renderReports(); }
 
 // Detailed VAT return breakdown (SARS VAT201-style boxes)
+function vatReturnModel(){
+  const p = (S.vatPeriods||[]).find(x=>x.id===VAT_DETAIL_ID);
+  if(!p) return {title:'VAT Return', rows:[]};
+  const biz = S.settings;
+  const bd = computeVatBreakdown(p.from, p.to);
+  const order = ['standard','zero','exempt','capital','none'];
+  const rows=[], rowClasses=[];
+  const push=(cells,c)=>{ rows.push(cells); rowClasses.push(c||''); };
+  push(['OUTPUT TAX — SALES & INCOME','','',''],'section');
+  order.forEach(id=>{ const b=bd.output[id]; if(!b||!b.lines.length) return;
+    push([`${b.type.name} — ${b.type.rate}%`,'','',''],'section');
+    b.lines.slice().sort((x,y)=>(x.date||'').localeCompare(y.date||'')).forEach(l=> push([fmtDateShort(l.date), (l.ref||'')+' '+(l.name||''), round2(l.net), round2(l.vat)]));
+    push([b.type.name+' subtotal','', round2(b.net), round2(b.vat)],'total');
+  });
+  push(['Total output '+biz.taxLabel+' (Box 4)','','', round2(bd.outputTotals.vat)],'total');
+  push(['INPUT TAX — PURCHASES & EXPENSES','','',''],'section');
+  order.forEach(id=>{ const b=bd.input[id]; if(!b||!b.lines.length) return;
+    push([`${b.type.name} — ${b.type.rate}%`,'','',''],'section');
+    b.lines.slice().sort((x,y)=>(x.date||'').localeCompare(y.date||'')).forEach(l=> push([fmtDateShort(l.date), (l.ref||'')+' '+(l.name||''), round2(l.net), round2(l.vat)]));
+    push([b.type.name+' subtotal','', round2(b.net), round2(b.vat)],'total');
+  });
+  push(['Total input '+biz.taxLabel+' (Box 14)','','', round2(bd.inputTotals.vat)],'total');
+  push([(bd.net>=0?'Net '+biz.taxLabel+' payable (Box 20)':'Net '+biz.taxLabel+' refundable (Box 20)'),'','', round2(Math.abs(bd.net))],'grand');
+  return { title:'VAT Return', meta:[{label:'Period',value:fmtPeriodLabel(p.from,p.to)},{label:'Ref',value:vatPeriodRef(p.from)},biz.businessVatNo?{label:'VAT No.',value:biz.businessVatNo}:null].filter(Boolean),
+    columns:['Date','Ref / Name', S.settings.currency+' Net', S.settings.currency+' '+biz.taxLabel], rows, rowClasses };
+}
 function renderVatDetail(){
   const p = (S.vatPeriods||[]).find(x=>x.id===VAT_DETAIL_ID);
   const body = document.getElementById('report-body');
   if(!p){ backToVatList(); return; }
-  const r = computeVatReturn(p.from, p.to);
-  const rate = S.settings.taxRate;
   const biz = S.settings;
+  const bd = computeVatBreakdown(p.from, p.to);
+  const net = bd.net;
+
+  // Render one VAT type's block: heading at its rate, detail lines, subtotal.
+  function typeBlock(bucketEntry){
+    if(!bucketEntry || (!bucketEntry.lines.length)) return '';
+    const t = bucketEntry.type;
+    const rows = bucketEntry.lines
+      .slice().sort((a,b)=>(a.date||'').localeCompare(b.date||''))
+      .map(l=>`<tr>
+        <td>${fmtDateShort(l.date)}</td>
+        <td class="mono">${escapeHtml(l.ref||'')}</td>
+        <td>${escapeHtml(l.name||'')}</td>
+        <td class="amt num">${fmt(l.net)}</td>
+        <td class="amt num">${fmt(l.vat)}</td>
+      </tr>`).join('');
+    return `<div style="margin-top:14px;">
+      <div style="display:flex; justify-content:space-between; align-items:baseline; border-bottom:2px solid var(--border-strong); padding-bottom:4px; margin-bottom:2px;">
+        <strong>${t.name} — ${t.rate}%</strong>
+        <span style="font-size:11px; color:var(--text-muted);">${bucketEntry.lines.length} transaction${bucketEntry.lines.length===1?'':'s'}</span>
+      </div>
+      <table style="margin:0;"><thead><tr><th>Date</th><th>Ref</th><th>Name</th><th class="amt">Net (excl.)</th><th class="amt">${biz.taxLabel}</th></tr></thead>
+        <tbody>${rows}
+          <tr class="li-total-row"><td colspan="3">${t.name} subtotal</td><td class="amt num">${fmt(bucketEntry.net)}</td><td class="amt num">${fmt(bucketEntry.vat)}</td></tr>
+        </tbody></table>
+    </div>`;
+  }
+  // order the types consistently
+  const order = ['standard','zero','exempt','capital','none'];
+  const orderedBlocks = bucket => order.map(id=>typeBlock(bucket[id])).join('');
+  const anyOutput = Object.keys(bd.output).length>0;
+  const anyInput = Object.keys(bd.input).length>0;
+
   body.innerHTML = `
     <div class="card">
       <div class="card-head" style="gap:10px;">
@@ -4628,27 +5290,136 @@ function renderVatDetail(){
         </div>
         <div style="display:flex; gap:8px;">
           <button class="btn btn-ghost btn-sm" onclick="backToVatList()">← Back</button>
-          <button class="btn btn-ghost btn-sm" onclick="window.print()">🖶 Print</button>
+          <button class="btn btn-ghost btn-sm" onclick="exportReportCsv(vatReturnModel())" title="Export to Excel (CSV)">⊞ Excel</button>
+          <button class="btn btn-ghost btn-sm" onclick="exportReportPdf(vatReturnModel())" title="Export to PDF">⎙ PDF</button>
         </div>
       </div>
       <div class="card-body">
-        <div class="section-title">Output tax — sales &amp; income</div>
-        <div class="report-row"><span>Standard-rated sales (excl. ${biz.taxLabel})</span><span class="num">${fmt(r.salesExcl)}</span></div>
-        <div class="report-row total"><span>Output ${biz.taxLabel} charged (Box 4)</span><span class="num">${fmt(r.outputVat)}</span></div>
+        <div class="section-title">Output tax — sales &amp; income, by VAT type</div>
+        ${anyOutput ? orderedBlocks(bd.output) : '<div class="hint" style="margin:6px 0;">No output transactions in this period.</div>'}
+        <div class="report-row total" style="margin-top:10px;"><span>Total output ${biz.taxLabel} (Box 4)</span><span class="num">${fmt(bd.outputTotals.vat)}</span></div>
 
-        <div class="section-title" style="margin-top:18px;">Input tax — purchases &amp; expenses</div>
-        <div class="report-row"><span>Purchases &amp; expenses (excl. ${biz.taxLabel})</span><span class="num">${fmt(r.purchasesExcl)}</span></div>
-        <div class="report-row total"><span>Input ${biz.taxLabel} claimed (Box 14)</span><span class="num">${fmt(r.inputVat)}</span></div>
+        <div class="section-title" style="margin-top:22px;">Input tax — purchases &amp; expenses, by VAT type</div>
+        ${anyInput ? orderedBlocks(bd.input) : '<div class="hint" style="margin:6px 0;">No input transactions in this period.</div>'}
+        <div class="report-row total" style="margin-top:10px;"><span>Total input ${biz.taxLabel} (Box 14)</span><span class="num">${fmt(bd.inputTotals.vat)}</span></div>
 
-        <div class="report-row total" style="font-size:15px; margin-top:18px; border-top:2px solid var(--border-strong); padding-top:12px;">
-          <span>${r.net>=0? `Net ${biz.taxLabel} payable to SARS` : `Net ${biz.taxLabel} refundable`} (Box 20)</span>
-          <span class="num ${r.net>0?'neg':(r.net<0?'pos':'')}">${fmt(Math.abs(r.net))}</span>
+        <div class="report-row total" style="font-size:15px; margin-top:20px; border-top:2px solid var(--border-strong); padding-top:12px;">
+          <span>${net>=0? `Net ${biz.taxLabel} payable to SARS` : `Net ${biz.taxLabel} refundable`} (Box 20)</span>
+          <span class="num ${net>0?'neg':(net<0?'pos':'')}">${fmt(Math.abs(net))}</span>
         </div>
       </div>
       <div class="card-body" style="border-top:1px solid var(--border);">
-        <div class="hint" style="margin:0;">Figures are calculated live from ledger entries dated within the period, at the current ${rate}% ${biz.taxLabel} rate. Output ${biz.taxLabel} comes from the VAT Payable (Output) account; input ${biz.taxLabel} from VAT Receivable (Input). Box numbers mirror the SARS VAT201 layout for reference.</div>
+        <div class="hint" style="margin:0;">Grouped by VAT type at each type's rate. Standard &amp; Capital Goods are 15%; Zero-rated and Exempt are 0% (zero-rated is a taxable supply, exempt is not). Figures come live from invoices, bills, credit notes and account-coded cashbook transactions dated within the period. Box numbers mirror the SARS VAT201 layout for reference.</div>
       </div>
     </div>`;
+}
+
+/* ============================= YEAR-END CLOSE ============================= */
+// Compute the net profit for a financial year (income - expenses over the FY period),
+// EXCLUDING any year-end closing entries so the true trading result still shows after closing.
+function periodMovementExclClose(accountId, from, to){
+  let debit=0, credit=0;
+  S.journal.forEach(e=>{
+    if(e.isYearEndClose) return;
+    if(from && e.date<from) return;
+    if(to && e.date>to) return;
+    e.lines.forEach(l=>{ if(l.accountId===accountId){ debit+=l.debit||0; credit+=l.credit||0; } });
+  });
+  const type = accountType(accountId);
+  return accountNormalIsDebit(type) ? (debit-credit) : (credit-debit);
+}
+function yearProfit(labelYear){
+  const b = fyBounds(labelYear);
+  const income = S.accounts.filter(a=>a.type==='Income').reduce((s,a)=>s+periodMovementExclClose(a.id, b.from, b.to), 0);
+  const expense = S.accounts.filter(a=>a.type==='Expense').reduce((s,a)=>s+periodMovementExclClose(a.id, b.from, b.to), 0);
+  return { from:b.from, to:b.to, income:round2(income), expense:round2(expense), net:round2(income-expense) };
+}
+function yearEndCloseFor(labelYear){ return (S.yearEndCloses||[]).find(c=>c.fy===labelYear); }
+// Post the closing entry: zero out each P&L account into Retained Income, dated the FY close date.
+function runYearEndClose(labelYear){
+  if(yearEndCloseFor(labelYear)){ showToast('That year is already closed'); return; }
+  const b = fyBounds(labelYear);
+  const income = S.accounts.filter(a=>a.type==='Income');
+  const expense = S.accounts.filter(a=>a.type==='Expense');
+  const lines = [];
+  // For each income account (credit-normal), its period balance is a credit; debit it to zero, and vice-versa.
+  income.forEach(a=>{ const bal = round2(periodMovementExclClose(a.id, b.from, b.to)); if(Math.abs(bal)>0.001) lines.push({accountId:a.id, debit:bal>0?bal:0, credit:bal<0?-bal:0}); });
+  expense.forEach(a=>{ const bal = round2(periodMovementExclClose(a.id, b.from, b.to)); if(Math.abs(bal)>0.001) lines.push({accountId:a.id, debit:bal<0?-bal:0, credit:bal>0?bal:0}); });
+  const prof = yearProfit(labelYear);
+  if(lines.length===0){ if(!confirm('This year has no income or expense movement to close. Post a nil close anyway?')) return; }
+  // Balancing line to Retained Income: net profit is credited to equity (loss debited).
+  if(Math.abs(prof.net)>0.001){
+    lines.push({accountId:'acc_equity', debit: prof.net<0? -prof.net:0, credit: prof.net>0? prof.net:0});
+  }
+  if(lines.length===0){ showToast('Nothing to close for this year'); return; }
+  const entry = postJournal(`Year-end close ${labelYear} — net ${prof.net>=0?'profit':'loss'} to Retained Income`, b.to, lines);
+  const ref = 'yec-'+uid('r'); entry.ref = ref; entry.manual = true; entry.isYearEndClose = true;
+  S.yearEndCloses = S.yearEndCloses || [];
+  S.yearEndCloses.push({ id:uid('yec'), fy:labelYear, ref, date:b.to, closedAt:todayStr(), net:prof.net, income:prof.income, expense:prof.expense });
+  showToast(`FY${labelYear} closed — ${fmt(Math.abs(prof.net))} ${prof.net>=0?'profit':'loss'} moved to Retained Income`);
+  saveState(true);
+  renderYearEnd();
+}
+// Reverse a year-end close: remove the closing journal entry and the record.
+function reverseYearEndClose(labelYear){
+  const rec = yearEndCloseFor(labelYear);
+  if(!rec) return;
+  if(!confirm(`Reopen FY${labelYear}? The closing entry will be reversed out, moving the profit back onto the P&L accounts.`)) return;
+  S.journal = S.journal.filter(e=> e.ref!==rec.ref);
+  S.yearEndCloses = S.yearEndCloses.filter(c=>c.fy!==labelYear);
+  showToast(`FY${labelYear} reopened — closing entry reversed`);
+  saveState(true);
+  renderYearEnd();
+}
+function renderYearEnd(){
+  setTopbar('Year-End Close', 'Roll a financial year’s profit into Retained Income', '');
+  // Offer the years that have activity, plus a window — reuse the FY selector's list.
+  const labels = availableFyLabels();
+  const curFy = currentFyLabel();
+  const retainedName = (S.accounts.find(a=>a.id==='acc_equity')||{}).name || 'Retained Income';
+
+  const rows = labels.map(y=>{
+    const closed = yearEndCloseFor(y);
+    const prof = yearProfit(y);
+    const b = fyBounds(y);
+    const isCurrent = y===curFy;
+    return `<tr>
+      <td><strong>FY${y}</strong><div style="font-size:11px; color:var(--text-muted);">${fmtDateShort(b.from)} – ${fmtDateShort(b.to)}</div></td>
+      <td class="amt num">${fmt(prof.income)}</td>
+      <td class="amt num">${fmt(prof.expense)}</td>
+      <td class="amt num ${prof.net>=0?'pos':'neg'}">${fmt(prof.net)}</td>
+      <td>${closed
+        ? `<span class="badge badge-void">Closed</span> <span style="font-size:11px; color:var(--text-muted);">${fmtDateShort(closed.date)}</span>`
+        : (isCurrent? `<span class="badge badge-open">Current — open</span>` : `<span class="badge badge-draft">Open</span>`)}</td>
+      <td style="text-align:right;">${closed
+        ? `<button class="btn btn-ghost btn-sm" onclick="reverseYearEndClose(${y})">↩ Reopen</button>`
+        : `<button class="btn btn-primary btn-sm" onclick="confirmRunYearEndClose(${y})">Close year →</button>`}</td>
+    </tr>`;
+  }).join('');
+
+  document.getElementById('content').innerHTML = `
+    <div class="card" style="margin-bottom:16px;">
+      <div class="card-body">
+        <div class="hint" style="margin:0;">Closing a financial year posts a journal entry dated the year-end date that moves every income and expense balance to zero and rolls the net result into <strong>${escapeHtml(retainedName)} (5200)</strong>. This starts the new year’s Profit &amp; Loss from a clean slate. Nothing is locked — you can still edit transactions, and you can reopen a year to reverse its close.</div>
+      </div>
+    </div>
+    <div class="card">
+      <div class="card-head"><h3>Financial years</h3></div>
+      <table><thead><tr><th>Year</th><th class="amt">Income</th><th class="amt">Expenses</th><th class="amt">Net profit</th><th>Status</th><th></th></tr></thead>
+        <tbody>${rows || `<tr><td colspan="6" style="color:var(--text-muted);">No financial years to show yet.</td></tr>`}</tbody>
+      </table>
+    </div>`;
+}
+function confirmRunYearEndClose(labelYear){
+  const prof = yearProfit(labelYear);
+  const b = fyBounds(labelYear);
+  const curFy = currentFyLabel();
+  let warn = '';
+  if(labelYear===curFy) warn = '\n\nNote: this is the CURRENT financial year and it may not be complete yet. You can reopen it later if you close it early.';
+  const msg = `Close FY${labelYear} (${fmtDateShort(b.from)} – ${fmtDateShort(b.to)})?\n\n`+
+    `Income: ${fmt(prof.income)}\nExpenses: ${fmt(prof.expense)}\nNet ${prof.net>=0?'profit':'loss'}: ${fmt(Math.abs(prof.net))}\n\n`+
+    `This will move the net ${prof.net>=0?'profit':'loss'} into Retained Income and zero the P&L accounts, dated ${fmtDateShort(b.to)}.`+warn;
+  if(confirm(msg)) runYearEndClose(labelYear);
 }
 
 /* ============================= SETTINGS ============================= */
@@ -4691,6 +5462,21 @@ function renderSettings(){
           </div>
           <div class="field"><label>Invoice footer note</label><textarea id="s-invnote" rows="2" placeholder="e.g. Thank you for your business. Payment due within 14 days.">${S.settings.invoiceFooterNote||''}</textarea></div>
           <button class="btn btn-primary" onclick="saveSettings()">Save settings</button>
+        </div></div>
+        <div class="card" style="margin-bottom:14px;"><div class="card-head"><h3>Auto-coding mappings</h3><button class="btn btn-ghost btn-sm" onclick="openMappingForm()">+ Add mapping</button></div><div class="card-body">
+          <p style="font-size:12px; color:var(--text-muted); margin-top:0;">When a cashbook transaction's description contains a phrase below, it's automatically coded to that account. You can still change any row after it's applied.</p>
+          ${(S.accountMappings||[]).length? `
+            <table><thead><tr><th>If description contains…</th><th>Code to account</th><th></th></tr></thead><tbody>
+              ${S.accountMappings.map(m=>{ const a=S.accounts.find(x=>x.id===m.accountId); return `<tr>
+                <td><strong>${escapeHtml(m.phrase)}</strong></td>
+                <td>${a? escapeHtml(a.code+' '+a.name) : '<span class="neg">(account removed)</span>'}</td>
+                <td style="text-align:right; white-space:nowrap;">
+                  <button class="btn btn-ghost btn-sm" onclick="openMappingForm('${m.id}')">Edit</button>
+                  <button class="btn btn-ghost btn-sm" onclick="removeMapping('${m.id}')">Delete</button>
+                </td>
+              </tr>`; }).join('')}
+            </tbody></table>
+          ` : `<p style="font-size:13px; color:var(--text-muted);">No mappings yet. They're created when you allocate a description to an account in the Cashbook (it'll ask), or add one here.</p>`}
         </div></div>
         <div class="card" style="margin-bottom:14px;"><div class="card-head"><h3>Banking details</h3></div><div class="card-body">
           <p style="font-size:12px; color:var(--text-muted); margin-top:0;">Shown on printed invoices so customers know where to pay.</p>
