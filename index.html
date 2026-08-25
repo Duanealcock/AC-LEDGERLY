@@ -370,7 +370,10 @@
           <div class="sub" id="page-sub"></div>
         </div>
       </div>
-      <div id="topbar-actions"></div>
+      <div style="display:flex; align-items:center; gap:12px;">
+        <div id="fy-selector"></div>
+        <div id="topbar-actions"></div>
+      </div>
     </div>
     <div id="content"></div>
   </div>
@@ -438,25 +441,26 @@ function defaultData(){
     settings:{ businessName:'My Business', currency:'R', taxLabel:'VAT', taxRate:15, nextInvoiceNo:1001, nextBillNo:2001,
       nextQuoteNo:3001, nextSuppQuoteNo:3501, nextCreditNoteNo:4001, nextSuppCreditNoteNo:4501,
       businessVatNo:'', businessAddress:'', bankName:'', bankBranch:'', bankAccountNumber:'',
-      invoiceLogoDataUrl:'', invoiceFooterNote:'' },
+      invoiceLogoDataUrl:'', invoiceFooterNote:'', fyStartMonth:3, fyStartDate:'', fyCloseDate:'' },
     accounts:[
-      {id:'acc_bank', code:'1000', name:'Business Bank Account', type:'Asset', isBank:true, system:true},
-      {id:'acc_ar', code:'1100', name:'Accounts Receivable', type:'Asset', system:true},
-      {id:'acc_vatr', code:'1200', name:'VAT Receivable (Input)', type:'Asset', system:true},
-      {id:'acc_ap', code:'2000', name:'Accounts Payable', type:'Liability', system:true},
-      {id:'acc_vatp', code:'2100', name:'VAT Payable (Output)', type:'Liability', system:true},
-      {id:'acc_equity', code:'3000', name:"Owner's Equity", type:'Equity', system:true},
-      {id:'acc_sales', code:'4000', name:'Sales Income', type:'Income', system:true},
-      {id:'acc_other_inc', code:'4100', name:'Other Income', type:'Income'},
-      {id:'acc_cos', code:'5000', name:'Cost of Sales', type:'Expense'},
-      {id:'acc_office', code:'6000', name:'Office Expenses', type:'Expense'},
-      {id:'acc_rent', code:'6010', name:'Rent', type:'Expense'},
-      {id:'acc_utilities', code:'6020', name:'Utilities', type:'Expense'},
-      {id:'acc_software', code:'6030', name:'Software & Subscriptions', type:'Expense'},
-      {id:'acc_travel', code:'6040', name:'Travel', type:'Expense'},
-      {id:'acc_bankfees', code:'6050', name:'Bank Charges', type:'Expense'},
-      {id:'acc_unalloc_inc', code:'4900', name:'Unallocated Income', type:'Income', system:true},
-      {id:'acc_unalloc_exp', code:'6900', name:'Unallocated Expense', type:'Expense', system:true},
+      {id:'acc_sales', code:'1000', name:'Sales Income', type:'Income', system:true},
+      {id:'acc_other_inc', code:'1100', name:'Other Income', type:'Income'},
+      {id:'acc_unalloc_inc', code:'1900', name:'Unallocated Income', type:'Income', system:true},
+      {id:'acc_cos', code:'2000', name:'Cost of Sales', type:'Expense'},
+      {id:'acc_office', code:'3000', name:'Office Expenses', type:'Expense'},
+      {id:'acc_rent', code:'3010', name:'Rent', type:'Expense'},
+      {id:'acc_utilities', code:'3020', name:'Utilities', type:'Expense'},
+      {id:'acc_software', code:'3030', name:'Software & Subscriptions', type:'Expense'},
+      {id:'acc_travel', code:'3040', name:'Travel', type:'Expense'},
+      {id:'acc_bankfees', code:'3050', name:'Bank Charges', type:'Expense'},
+      {id:'acc_unalloc_exp', code:'3900', name:'Unallocated Expense', type:'Expense', system:true},
+      {id:'acc_share_capital', code:'5000', name:'Share Capital', type:'Equity', system:true},
+      {id:'acc_equity', code:'5200', name:'Retained Income', type:'Equity', system:true},
+      {id:'acc_bank', code:'5010', name:'Business Bank Account', type:'Asset', isBank:true, system:true},
+      {id:'acc_ar', code:'5100', name:'Accounts Receivable', type:'Asset', system:true},
+      {id:'acc_ap', code:'6000', name:'Accounts Payable', type:'Liability', system:true},
+      {id:'acc_vatr', code:'9500', name:'VAT Receivable (Input)', type:'Asset', system:true},
+      {id:'acc_vatp', code:'9600', name:'VAT Payable (Output)', type:'Liability', system:true},
     ],
     contacts:[],
     invoices:[],
@@ -523,6 +527,33 @@ function migrateCompanyShape(co){
   if(s.nextSuppQuoteNo==null) s.nextSuppQuoteNo = 3501;
   if(s.nextCreditNoteNo==null) s.nextCreditNoteNo = 4001;
   if(s.nextSuppCreditNoteNo==null) s.nextSuppCreditNoteNo = 4501;
+  if(s.fyStartMonth==null) s.fyStartMonth = 3;
+  if(s.fyStartDate==null) s.fyStartDate = '';
+  if(s.fyCloseDate==null) s.fyCloseDate = '';
+  // Renumber system accounts to the new ranges (P&L 1000–4999, Balance Sheet 5000–9999) if still on the old scheme.
+  if(!co._renumberedV2 && Array.isArray(co.accounts)){
+    const newCodes = {
+      acc_sales:'1000', acc_other_inc:'1100', acc_unalloc_inc:'1900',
+      acc_cos:'2000', acc_office:'3000', acc_rent:'3010', acc_utilities:'3020',
+      acc_software:'3030', acc_travel:'3040', acc_bankfees:'3050', acc_unalloc_exp:'3900',
+      acc_bank:'5000', acc_ar:'5100', acc_vatr:'5200', acc_ap:'6000', acc_vatp:'6100', acc_equity:'7000',
+    };
+    co.accounts.forEach(a=>{ if(newCodes[a.id]) a.code = newCodes[a.id]; });
+    co._renumberedV2 = true;
+  }
+  // V3: reserve 5000 = Share Capital, 5200 = Retained Income; move bank/VAT accounts clear.
+  if(!co._renumberedV3 && Array.isArray(co.accounts)){
+    const move = { acc_bank:'5010', acc_vatr:'9500', acc_vatp:'9600', acc_equity:'5200' };
+    co.accounts.forEach(a=>{ if(move[a.id]) a.code = move[a.id]; });
+    // rename Owner's Equity -> Retained Income (same account/id, preserves postings)
+    const eq = co.accounts.find(a=>a.id==='acc_equity');
+    if(eq){ eq.name = 'Retained Income'; eq.type='Equity'; eq.system=true; }
+    // add Share Capital at 5000 if it doesn't exist yet
+    if(!co.accounts.some(a=>a.id==='acc_share_capital')){
+      co.accounts.push({id:'acc_share_capital', code:'5000', name:'Share Capital', type:'Equity', system:true});
+    }
+    co._renumberedV3 = true;
+  }
 }
 async function loadState(){
   try{
@@ -1278,6 +1309,7 @@ function showToast(msg){
 function render(){
   renderCompanySwitcher();
   renderNav();
+  renderFySelector();
   const map = {
     dashboard: renderDashboard,
     sales: renderSales,
@@ -1314,27 +1346,36 @@ function render(){
 
 /* ============================= DASHBOARD ============================= */
 function renderDashboard(){
-  setTopbar('Dashboard', S.settings.businessName, '');
-  const bank = getAccountBalance('acc_bank');
-  const ar = getAccountBalance('acc_ar');
-  const ap = getAccountBalance('acc_ap');
-  const monthStart = todayStr().slice(0,8)+'01';
-  const incomeMTD = S.accounts.filter(a=>a.type==='Income').reduce((s,a)=>s+periodMovement(a.id, monthStart, todayStr()),0);
-  const expenseMTD = S.accounts.filter(a=>a.type==='Expense').reduce((s,a)=>s+periodMovement(a.id, monthStart, todayStr()),0);
+  const fy = activeFyBounds();
+  setTopbar('Dashboard', S.settings.businessName + (fy? ` · FY${ACTIVE_FY}`:''), '');
+  // balances: as-of the FY end when a year is selected, else current
+  const asOf = fy ? fy.to : undefined;
+  const bank = getAccountBalance('acc_bank', asOf);
+  const ar = getAccountBalance('acc_ar', asOf);
+  const ap = getAccountBalance('acc_ap', asOf);
+  // profit: over the active FY (start→end), else month-to-date
+  const profFrom = fy ? fy.from : todayStr().slice(0,8)+'01';
+  const profTo = fy ? fy.to : todayStr();
+  const profLabel = fy ? `FY${ACTIVE_FY}` : 'MTD';
+  const incomeMTD = S.accounts.filter(a=>a.type==='Income').reduce((s,a)=>s+periodMovement(a.id, profFrom, profTo),0);
+  const expenseMTD = S.accounts.filter(a=>a.type==='Expense').reduce((s,a)=>s+periodMovement(a.id, profFrom, profTo),0);
 
   const totalDebits = S.journal.reduce((s,e)=>s+e.lines.reduce((a,l)=>a+(l.debit||0),0),0);
   const totalCredits = S.journal.reduce((s,e)=>s+e.lines.reduce((a,l)=>a+(l.credit||0),0),0);
   const balanced = Math.abs(totalDebits-totalCredits) < 0.01;
 
-  const recentInvoices = [...S.invoices].filter(i=>i.status!=='draft').sort((a,b)=>b.date.localeCompare(a.date)).slice(0,5);
+  // recent/overdue: within FY when active
+  const invPool = fy ? S.invoices.filter(i=> i.date>=fy.from && i.date<=fy.to) : S.invoices;
+  const recentInvoices = [...invPool].filter(i=>i.status!=='draft').sort((a,b)=>b.date.localeCompare(a.date)).slice(0,5);
   const overdue = S.invoices.filter(i=>docStatus(i)!=='paid' && i.status==='open' && i.dueDate < todayStr());
 
   document.getElementById('content').innerHTML = `
+    ${fy? `<div class="hint" style="margin-bottom:14px;">Showing <strong>FY${ACTIVE_FY}</strong> (${fmtDateShort(fy.from)} – ${fmtDateShort(fy.to)}). Balances are as at ${fmtDateShort(fy.to)}. Switch years in the top bar; you can still edit any transaction.</div>`:''}
     <div class="grid-4">
-      <div class="kpi"><div class="label">Bank Balance</div><div class="value num">${fmt(bank)}</div><div class="delta">Business Bank Account</div></div>
+      <div class="kpi"><div class="label">Bank Balance</div><div class="value num">${fmt(bank)}</div><div class="delta">${fy? 'As at '+fmtDateShort(fy.to):'Business Bank Account'}</div></div>
       <div class="kpi"><div class="label">Owed to you</div><div class="value num">${fmt(ar)}</div><div class="delta">Accounts Receivable</div></div>
       <div class="kpi"><div class="label">You owe</div><div class="value num">${fmt(ap)}</div><div class="delta">Accounts Payable</div></div>
-      <div class="kpi"><div class="label">Net profit (MTD)</div><div class="value num ${(incomeMTD-expenseMTD)>=0?'pos':'neg'}">${fmt(incomeMTD-expenseMTD)}</div><div class="delta">Income ${fmt(incomeMTD)} · Expenses ${fmt(expenseMTD)}</div></div>
+      <div class="kpi"><div class="label">Net profit (${profLabel})</div><div class="value num ${(incomeMTD-expenseMTD)>=0?'pos':'neg'}">${fmt(incomeMTD-expenseMTD)}</div><div class="delta">Income ${fmt(incomeMTD)} · Expenses ${fmt(expenseMTD)}</div></div>
     </div>
     <div class="grid-2">
       <div class="card">
@@ -3712,9 +3753,103 @@ function resolvePeriod(p){
   }
 }
 
+/* ============================= FINANCIAL YEAR ============================= */
+// ACTIVE_FY is the label year of the financial year currently being worked on.
+// A financial year is labelled by the calendar year in which it ENDS.
+// e.g. fyStartMonth=3 (March): FY2026 = 01 Mar 2025 – 28/29 Feb 2026.
+let ACTIVE_FY = null; // number, or null = "All years"
+// FY start is defined by the configured start date's month & day (repeating each year).
+// Falls back to fyStartMonth (day 1) for older data without dates.
+function fyStartMonth(){
+  if(S.settings.fyStartDate){ return parseInt(S.settings.fyStartDate.slice(5,7),10); }
+  const m = S.settings.fyStartMonth; return (m>=1 && m<=12) ? m : 3;
+}
+function fyStartDay(){
+  if(S.settings.fyStartDate){ return parseInt(S.settings.fyStartDate.slice(8,10),10); }
+  return 1;
+}
+// Returns {from,to} ISO dates for the financial year that ENDS in labelYear,
+// repeating the configured start month-day pattern.
+function fyBounds(labelYear){
+  const sm = fyStartMonth(), sd = fyStartDay();
+  // Start year is labelYear-1 unless the year starts on 1 Jan (then it's labelYear).
+  const startsJan1 = (sm===1 && sd===1);
+  const startYear = startsJan1 ? labelYear : labelYear-1;
+  const from = `${startYear}-${String(sm).padStart(2,'0')}-${String(sd).padStart(2,'0')}`;
+  // End is the day before the next start (start date in labelYear, minus one day).
+  const nextStart = new Date(`${labelYear}-${String(sm).padStart(2,'0')}-${String(sd).padStart(2,'0')}T00:00:00`);
+  nextStart.setDate(nextStart.getDate()-1);
+  return {from, to:nextStart.toISOString().slice(0,10)};
+}
+// Which financial-year label does a given ISO date fall into?
+function fyOfDate(date){
+  const sm = fyStartMonth(), sd = fyStartDay();
+  const y = parseInt(date.slice(0,4),10);
+  const startsJan1 = (sm===1 && sd===1);
+  if(startsJan1) return y;
+  // if the date is on/after this year's start date, it belongs to FY(y+1), else FY(y)
+  const thisYearStart = `${y}-${String(sm).padStart(2,'0')}-${String(sd).padStart(2,'0')}`;
+  return date >= thisYearStart ? y+1 : y;
+}
+// The FY label for today.
+function currentFyLabel(){ return fyOfDate(todayStr()); }
+// Suggested date-picker defaults when the user hasn't set them yet.
+function defaultFyStartValue(){
+  const cur = currentFyLabel();
+  return fyBounds(cur).from;
+}
+function defaultFyCloseValue(){
+  const cur = currentFyLabel();
+  return fyBounds(cur).to;
+}
+// All FY labels that have activity, plus a sensible window around today.
+function availableFyLabels(){
+  const labels = new Set();
+  const push = d => { if(d) labels.add(fyOfDate(d)); };
+  (S.journal||[]).forEach(e=>push(e.date));
+  (S.invoices||[]).forEach(d=>push(d.date));
+  (S.bills||[]).forEach(d=>push(d.date));
+  const cur = currentFyLabel();
+  // always offer current and a couple on either side
+  for(let y=cur-2; y<=cur+1; y++) labels.add(y);
+  return Array.from(labels).filter(Boolean).sort((a,b)=>b-a);
+}
+// Active FY bounds, or null when "All years".
+function activeFyBounds(){ return ACTIVE_FY==null ? null : fyBounds(ACTIVE_FY); }
+function fyLabelText(labelYear){
+  const b = fyBounds(labelYear);
+  return `FY${labelYear} (${fmtDateShort(b.from)} – ${fmtDateShort(b.to)})`;
+}
+function setActiveFy(val){
+  ACTIVE_FY = (val===''||val==null) ? null : Number(val);
+  // reset report/date-scoped caches so views recompute within the year
+  if(ACTIVE_FY!=null){
+    const b = fyBounds(ACTIVE_FY);
+    window._rFrom = b.from; window._rTo = b.to;
+  } else {
+    window._rFrom = null; window._rTo = null;
+  }
+  renderFySelector();
+  render();
+}
+function renderFySelector(){
+  const el = document.getElementById('fy-selector');
+  if(!el) return;
+  const labels = availableFyLabels();
+  if(ACTIVE_FY==null){ /* default handled elsewhere */ }
+  el.innerHTML = `
+    <div style="display:flex; align-items:center; gap:6px;">
+      <span style="font-size:11px; color:var(--text-muted); text-transform:uppercase; letter-spacing:.5px;">Year</span>
+      <select id="fy-select" onchange="setActiveFy(this.value)" title="Financial year to work in" style="min-width:200px;">
+        <option value="" ${ACTIVE_FY==null?'selected':''}>All years</option>
+        ${labels.map(y=>`<option value="${y}" ${ACTIVE_FY===y?'selected':''}>${fyLabelText(y)}</option>`).join('')}
+      </select>
+    </div>`;
+}
+
+
 // A single statement rendered as a card (used in single view, run, and print)
-function statementCardHtml(contact, kind, compact, fromDate, toDate){
-  const isCust = kind==='customer';
+function statementCardHtml(contact, kind, compact, fromDate, toDate){  const isCust = kind==='customer';
   const st = buildStatement(contact, kind, fromDate||null, toDate||null);
   const openDocs = (isCust?S.invoices:S.bills).filter(d=>d.contactId===contact.id && d.status!=='draft' && docStatus(d)!=='void' && docBalanceDue(d)>0);
   const aging = agingForDocs(openDocs, todayStr());
@@ -4084,13 +4219,27 @@ function renderAccounts(){
 function openAccountForm(){
   const body = `
     <div class="field-row">
-      <div class="field"><label>Code</label><input type="text" id="a-code" placeholder="e.g. 6060"></div>
-      <div class="field"><label>Type</label><select id="a-type"><option>Asset</option><option>Liability</option><option>Equity</option><option>Income</option><option>Expense</option></select></div>
+      <div class="field"><label>Code</label><input type="text" id="a-code" placeholder="e.g. 3060"></div>
+      <div class="field"><label>Type</label><select id="a-type" onchange="updateAccountRangeHint()">
+        <optgroup label="Income Statement (1000–4999)"><option>Income</option><option>Expense</option></optgroup>
+        <optgroup label="Balance Sheet (5000–9999)"><option>Asset</option><option>Liability</option><option>Equity</option></optgroup>
+      </select></div>
     </div>
+    <div id="a-range-hint" class="hint" style="margin-top:-4px;"></div>
     <div class="field"><label>Account name</label><input type="text" id="a-name" placeholder="e.g. Marketing"></div>
     <div class="field"><label><input type="checkbox" id="a-isbank" style="width:auto; display:inline-block; margin-right:6px;"> This is a bank account</label></div>
   `;
   openModal('New account', body, [{label:'Create account', cls:'btn-primary', onclick:'submitAccountForm()'}]);
+  updateAccountRangeHint();
+}
+function updateAccountRangeHint(){
+  const type = document.getElementById('a-type').value;
+  const r = accountRangeFor(type);
+  const hint = document.getElementById('a-range-hint');
+  if(hint) hint.innerHTML = `<strong>${type}</strong> is a <strong>${r.label}</strong> account — its code must be between <strong>${r.min}</strong> and <strong>${r.max}</strong>.`;
+  // suggest a code in-range if the field is empty
+  const codeEl = document.getElementById('a-code');
+  if(codeEl && !codeEl.value){ codeEl.placeholder = 'e.g. '+(r.min+ (accountGroupOf(type)==='pl'?60:60)); }
 }
 function submitAccountForm(){
   const code = document.getElementById('a-code').value.trim();
@@ -4099,6 +4248,17 @@ function submitAccountForm(){
   const isBank = document.getElementById('a-isbank').checked;
   if(!code || !name){ showToast('Enter a code and name'); return; }
   if(S.accounts.some(a=>a.code===code)){ showToast('That code is already used'); return; }
+  // enforce the number-range rule: P&L items 1000–4999, Balance Sheet items 5000–9999
+  if(!codeInRange(code, type)){
+    const r = accountRangeFor(type);
+    showToast(`${type} is a ${r.label} account — code must be ${r.min}–${r.max}`);
+    return;
+  }
+  // bank accounts must be Assets (Balance Sheet)
+  if(isBank && accountGroupOf(type)!=='bs'){
+    showToast('A bank account must be an Asset (Balance Sheet, 5000–9999)');
+    return;
+  }
   S.accounts.push({id:uid('acc'), code, name, type, isBank});
   closeModal(); showToast('Account created'); navigate('accounts');
 }
@@ -4109,13 +4269,23 @@ function deleteAccount(id){
 }
 
 /* ============================= REPORTS ============================= */
+// Account-number ranges: Income Statement (Income/Expense) 1000–4999, Balance Sheet (Asset/Liability/Equity) 5000–9999.
+function accountGroupOf(type){ return (type==='Income'||type==='Expense') ? 'pl' : 'bs'; }
+function accountRangeFor(type){ return accountGroupOf(type)==='pl' ? {min:1000, max:4999, label:'Income Statement'} : {min:5000, max:9999, label:'Balance Sheet'}; }
+function codeInRange(code, type){
+  const n = parseInt(String(code).replace(/\D/g,''),10);
+  if(isNaN(n)) return false;
+  const r = accountRangeFor(type);
+  return n>=r.min && n<=r.max;
+}
 let REPORT_TAB = 'pl';
 function renderReports(){
   setTopbar('Reports', 'Profit & loss, balance sheet, trial balance, and VAT', '');
-  const monthStart = todayStr().slice(0,8)+'01';
-  const yearStart = todayStr().slice(0,4)+'-01-01';
+  const fy = activeFyBounds();
+  const yearStart = fy ? fy.from : todayStr().slice(0,4)+'-01-01';
+  const defaultTo = fy ? fy.to : todayStr();
   const from = window._rFrom || yearStart;
-  const to = window._rTo || todayStr();
+  const to = window._rTo || defaultTo;
   window._rFrom = from; window._rTo = to;
 
   document.getElementById('content').innerHTML = `
@@ -4418,6 +4588,11 @@ function renderSettings(){
           <div class="field"><label>Tax label</label><input type="text" id="s-taxlabel" value="${S.settings.taxLabel}"></div>
         </div>
         <div class="field"><label>Default tax rate (%)</label><input type="number" id="s-taxrate" value="${S.settings.taxRate}" step="0.1"></div>
+        <div class="field-row">
+          <div class="field"><label>Financial year start</label><input type="date" id="s-fystart" value="${S.settings.fyStartDate||defaultFyStartValue()}"></div>
+          <div class="field"><label>Financial year close</label><input type="date" id="s-fyclose" value="${S.settings.fyCloseDate||defaultFyCloseValue()}"></div>
+        </div>
+        <span style="font-size:11px; color:var(--text-muted); display:block; margin-top:-6px;">Set the current year's start and close dates. The same month &amp; day repeat for every year and drive the year selector in the top bar. (SA default: 1 March – 28/29 February.)</span>
         <div class="field"><label>VAT / tax number</label><input type="text" id="s-vatno" value="${S.settings.businessVatNo||''}" placeholder="Shown on printed invoices"></div>
         <div class="field"><label>Business address</label><textarea id="s-address" rows="3" placeholder="One line per address line">${S.settings.businessAddress||''}</textarea></div>
         <button class="btn btn-primary" onclick="saveSettings()">Save settings</button>
@@ -4511,6 +4686,21 @@ function saveSettings(){
   S.settings.currency = document.getElementById('s-currency').value.trim() || 'R';
   S.settings.taxLabel = document.getElementById('s-taxlabel').value.trim() || 'Tax';
   S.settings.taxRate = Number(document.getElementById('s-taxrate').value)||0;
+  const fyStart = document.getElementById('s-fystart'); const fyClose = document.getElementById('s-fyclose');
+  if(fyStart && fyClose){
+    const sv = fyStart.value, cv = fyClose.value;
+    if(sv && cv){
+      if(cv <= sv){ showToast('Financial year close must be after the start date'); return; }
+      // sanity: close should be roughly a year after start (within ~13 months)
+      const days = Math.round((new Date(cv)-new Date(sv))/86400000);
+      if(days < 300 || days > 400){
+        if(!confirm('The start and close dates aren’t about a year apart. Use them anyway?')) return;
+      }
+      S.settings.fyStartDate = sv;
+      S.settings.fyCloseDate = cv;
+      S.settings.fyStartMonth = parseInt(sv.slice(5,7),10); // keep legacy field in sync
+    }
+  }
   S.settings.businessVatNo = document.getElementById('s-vatno').value.trim();
   S.settings.businessAddress = document.getElementById('s-address').value.trim();
   S.settings.bankName = document.getElementById('s-bankname').value.trim();
