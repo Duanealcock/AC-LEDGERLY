@@ -221,6 +221,9 @@
   .report-row.total{font-weight:700; border-bottom:none; border-top:1.5px solid var(--border-strong); margin-top:4px; padding-top:9px;}
   .report-row .lbl{color:var(--text);}
   .indent{padding-left:14px; color:var(--text-muted);}
+  .tb-section-row td{ font-weight:700; text-transform:uppercase; font-size:10.5px; letter-spacing:.6px; color:var(--text-muted); background:var(--surface-2); border-bottom:1.5px solid var(--border-strong); padding-top:12px; }
+  .tb-net-row td{ font-weight:700; }
+  .tb-spacer td{ height:16px; border:none; background:transparent; }
 
   .toolbar{display:flex; align-items:center; justify-content:space-between; margin-bottom:16px; gap:10px; flex-wrap:wrap;}
   .filter-pills{display:flex; gap:6px;}
@@ -4833,36 +4836,74 @@ function renderBS(asOf){
     </div>
   </div>`;
 }
-function tbReportModel(){
+// Shared computation for the Trial Balance's grouped layout (income statement + balance sheet).
+function tbGroupedData(){
   const asOf = window._rTo;
   const includeOpening = window._rIncludeOpening !== false;
-  const rows = S.accounts.map(a=>{
+  const rowFor = a => {
     const bal = getAccountBalance(a.id, asOf, !includeOpening);
     const isDebitNormal = accountNormalIsDebit(a.type);
     const debit = (isDebitNormal && bal>=0) || (!isDebitNormal && bal<0) ? Math.abs(bal) : 0;
     const credit = (!isDebitNormal && bal>=0) || (isDebitNormal && bal<0) ? Math.abs(bal) : 0;
     return {a, debit, credit};
-  }).filter(r=>Math.abs(r.debit)>0.001 || Math.abs(r.credit)>0.001);
-  const totalD = rows.reduce((s,r)=>s+r.debit,0);
-  const totalC = rows.reduce((s,r)=>s+r.credit,0);
+  };
+  const nonZero = r => Math.abs(r.debit)>0.001 || Math.abs(r.credit)>0.001;
+  const bySortCode = (x,y)=> (x.a.code||'').localeCompare(y.a.code||'');
+  const isPL = a => a.type==='Income' || a.type==='Expense';
+  const plRows = S.accounts.filter(isPL).map(rowFor).filter(nonZero).sort(bySortCode);
+  const bsRows = S.accounts.filter(a=>!isPL(a)).map(rowFor).filter(nonZero).sort(bySortCode);
+  const plDebit = round2(plRows.reduce((s,r)=>s+r.debit,0));
+  const plCredit = round2(plRows.reduce((s,r)=>s+r.credit,0));
+  // Net profit = credit (income) minus debit (expenses). Positive => profit.
+  const netProfit = round2(plCredit - plDebit);
+  const bsDebit = round2(bsRows.reduce((s,r)=>s+r.debit,0));
+  const bsCredit = round2(bsRows.reduce((s,r)=>s+r.credit,0));
+  return { asOf, includeOpening, plRows, bsRows, plDebit, plCredit, netProfit, bsDebit, bsCredit };
+}
+function tbReportModel(){
+  const d = tbGroupedData();
+  const cur = S.settings.currency;
   const outRows=[], rowClasses=[];
-  rows.forEach(r=>{ outRows.push([r.a.code, r.a.name, r.debit?round2(r.debit):'', r.credit?round2(r.credit):'']); rowClasses.push(''); });
-  outRows.push(['','Total', round2(totalD), round2(totalC)]); rowClasses.push('total');
-  return { title:'Trial Balance', meta:[{label:'As at',value:fmtDateShort(asOf)},{label:'Opening balances',value:includeOpening?'Included':'Excluded'}], columns:['Code','Account', S.settings.currency+' Debit', S.settings.currency+' Credit'], rows:outRows, rowClasses };
+  const push=(cells,c)=>{ outRows.push(cells); rowClasses.push(c||''); };
+  // Income statement
+  push(['INCOME STATEMENT','','',''],'section');
+  d.plRows.forEach(r=> push([r.a.code, r.a.name, r.debit?round2(r.debit):'', r.credit?round2(r.credit):'']));
+  push(['','Total income statement', round2(d.plDebit), round2(d.plCredit)],'total');
+  // Net profit as the balancing figure (put it on the side that makes the two columns equal)
+  const netIsProfit = d.netProfit>=0;
+  push(['', netIsProfit?'Net profit':'Net loss',
+    netIsProfit? round2(d.netProfit):'', netIsProfit? '' : round2(-d.netProfit)],'total');
+  // blank line
+  push(['','','',''],'');
+  // Balance sheet — carry the net profit in as the opening line
+  push(['BALANCE SHEET','','',''],'section');
+  push(['', netIsProfit?'Net profit (from income statement)':'Net loss (from income statement)',
+    netIsProfit? '' : round2(-d.netProfit), netIsProfit? round2(d.netProfit):''],'');
+  d.bsRows.forEach(r=> push([r.a.code, r.a.name, r.debit?round2(r.debit):'', r.credit?round2(r.credit):'']));
+  // Grand totals — include the net profit so both sides balance
+  const grandD = round2(d.bsDebit + (netIsProfit?0:-d.netProfit));
+  const grandC = round2(d.bsCredit + (netIsProfit?d.netProfit:0));
+  push(['','Total', grandD, grandC],'grand');
+  return { title:'Trial Balance',
+    meta:[{label:'As at',value:fmtDateShort(d.asOf)},{label:'Opening balances',value:d.includeOpening?'Included':'Excluded'}],
+    columns:['Code','Account', cur+' Debit', cur+' Credit'], rows:outRows, rowClasses };
 }
 function renderTB(asOf){
-  const includeOpening = window._rIncludeOpening !== false; // default true
-  const rows = S.accounts.map(a=>{
-    const bal = getAccountBalance(a.id, asOf, !includeOpening);
-    const isDebitNormal = accountNormalIsDebit(a.type);
-    const debit = (isDebitNormal && bal>=0) || (!isDebitNormal && bal<0) ? Math.abs(bal) : 0;
-    const credit = (!isDebitNormal && bal>=0) || (isDebitNormal && bal<0) ? Math.abs(bal) : 0;
-    return {a, debit, credit};
-  }).filter(r=>Math.abs(r.debit)>0.001 || Math.abs(r.credit)>0.001);
-  const totalD = rows.reduce((s,r)=>s+r.debit,0);
-  const totalC = rows.reduce((s,r)=>s+r.credit,0);
+  const d = tbGroupedData();
+  const includeOpening = d.includeOpening;
   const obEntries = S.journal.filter(e=>e.isOpeningBalance && (!asOf || e.date<=asOf));
   const obCount = obEntries.length;
+  const netIsProfit = d.netProfit>=0;
+  const netLabel = netIsProfit? 'Net profit' : 'Net loss';
+  const netAbs = Math.abs(d.netProfit);
+  // grand totals across the balance-sheet block including the net result
+  const grandD = round2(d.bsDebit + (netIsProfit?0:netAbs));
+  const grandC = round2(d.bsCredit + (netIsProfit?netAbs:0));
+  const balanced = Math.abs(grandD-grandC)<0.01;
+
+  const acctRow = r => `<tr><td class="mono">${escapeHtml(r.a.code)}</td><td>${escapeHtml(r.a.name)}</td>
+    <td class="amt num">${r.debit?fmt(r.debit):''}</td><td class="amt num">${r.credit?fmt(r.credit):''}</td></tr>`;
+
   document.getElementById('report-body').innerHTML = `<div class="card">
     <div class="card-head" style="flex-wrap:wrap;"><h3>As of</h3><div style="display:flex; gap:8px; align-items:center; margin-left:auto;"><input type="date" value="${asOf}" style="width:150px;" onchange="window._rTo=this.value; renderReports();">${reportExportButtons('tbReportModel')}</div></div>
     <div class="card-body" style="padding-bottom:0;">
@@ -4873,9 +4914,27 @@ function renderTB(asOf){
       <div class="hint">${obCount? `${obCount} journal ${obCount===1?'entry is':'entries are'} marked as an opening balance.` : 'No journal entries are currently marked as an opening balance — tag one when posting a manual journal entry.'}</div>
     </div>
     <table><thead><tr><th>Code</th><th>Account</th><th class="amt">Debit</th><th class="amt">Credit</th></tr></thead><tbody>
-      ${rows.map(r=>`<tr><td class="mono">${r.a.code}</td><td>${r.a.name}</td><td class="amt num">${r.debit?fmt(r.debit):''}</td><td class="amt num">${r.credit?fmt(r.credit):''}</td></tr>`).join('')}
-      <tr class="li-total-row"><td></td><td>Total</td><td class="amt num">${fmt(totalD)}</td><td class="amt num">${fmt(totalC)}</td></tr>
+      <tr class="tb-section-row"><td colspan="4">Income Statement</td></tr>
+      ${d.plRows.map(acctRow).join('') || `<tr><td colspan="4" style="color:var(--text-muted);">No income statement activity.</td></tr>`}
+      <tr class="li-total-row"><td></td><td>Total income statement</td><td class="amt num">${fmt(d.plDebit)}</td><td class="amt num">${fmt(d.plCredit)}</td></tr>
+      <tr class="tb-net-row"><td></td><td>${netLabel}</td>
+        <td class="amt num ${netIsProfit?'pos':''}">${netIsProfit?fmt(netAbs):''}</td>
+        <td class="amt num ${netIsProfit?'':'neg'}">${netIsProfit?'':fmt(netAbs)}</td></tr>
+
+      <tr class="tb-spacer"><td colspan="4"></td></tr>
+
+      <tr class="tb-section-row"><td colspan="4">Balance Sheet</td></tr>
+      <tr><td></td><td>${netLabel} (from income statement)</td>
+        <td class="amt num">${netIsProfit?'':fmt(netAbs)}</td>
+        <td class="amt num">${netIsProfit?fmt(netAbs):''}</td></tr>
+      ${d.bsRows.map(acctRow).join('') || `<tr><td colspan="4" style="color:var(--text-muted);">No balance sheet activity.</td></tr>`}
+      <tr class="li-total-row" style="border-top:2px solid var(--border-strong);"><td></td><td>Total</td>
+        <td class="amt num">${fmt(grandD)}</td><td class="amt num">${fmt(grandC)}</td></tr>
     </tbody></table>
+    <div class="card-body" style="border-top:1px solid var(--border);">
+      <div class="balance-check" style="margin:0;"><span class="dot" style="background:${balanced?'var(--money-pos)':'var(--red)'}"></span>
+        ${balanced? 'Balanced ✓ — total debits equal total credits' : 'Out of balance'}</div>
+    </div>
   </div>`;
 }
 
