@@ -44,15 +44,24 @@
   #sidebar{
     width:228px; flex:0 0 228px; background:var(--ink); color:var(--text-inverse);
     display:flex; flex-direction:column; padding:20px 0;
-    position:sticky; top:0; height:100vh;
+    position:sticky; top:0; height:100vh; overflow:hidden;
   }
+  .brand{ flex:0 0 auto; }
+  #company-switcher{ flex:0 0 auto; }
+  .sidebar-foot{ flex:0 0 auto; }
   .brand{ padding:0 20px 18px 20px; border-bottom:1px solid rgba(237,243,238,.12); margin-bottom:10px;}
   .brand-mark{ display:flex; align-items:center; gap:9px;}
   .brand-mark .glyph{ width:30px; height:30px; flex:0 0 30px; display:flex; align-items:center; justify-content:center;}
   .brand-mark .glyph svg{ width:100%; height:100%; }
   .brand-mark .name{font-size:17px; font-weight:600; letter-spacing:.2px;}
   .brand-sub{font-size:10.5px; color:rgba(237,243,238,.5); text-transform:uppercase; letter-spacing:1.4px; margin-top:6px; margin-left:34px;}
-  nav{flex:1; padding:10px 12px;}
+  nav{flex:1 1 auto; padding:10px 12px; overflow-y:auto; overflow-x:hidden; min-height:0;}
+  /* slim, subtle scrollbar that suits the dark ribbon */
+  nav::-webkit-scrollbar{ width:8px; }
+  nav::-webkit-scrollbar-track{ background:transparent; }
+  nav::-webkit-scrollbar-thumb{ background:rgba(237,243,238,.16); border-radius:4px; }
+  nav::-webkit-scrollbar-thumb:hover{ background:rgba(237,243,238,.28); }
+  nav{ scrollbar-width:thin; scrollbar-color:rgba(237,243,238,.22) transparent; }
   .nav-item{
     display:flex; align-items:center; gap:10px; padding:9px 12px; margin-bottom:2px;
     border-radius:6px; color:rgba(237,243,238,.72); text-decoration:none; cursor:pointer;
@@ -249,18 +258,31 @@
   }
 
   /* Cashbook grid */
-  .cashbook-table{ width:100%; border-collapse:collapse; min-width:1080px; }
+  .cashbook-table{ width:100%; border-collapse:collapse; min-width:1080px; table-layout:fixed; }
   .cashbook-table thead th{ text-align:left; font-size:10px; text-transform:uppercase; letter-spacing:.6px; color:var(--text-muted); padding:8px 6px; border-bottom:1px solid var(--border); font-weight:700; background:var(--surface-2); white-space:nowrap; }
   .cashbook-table tbody td{ padding:5px 6px; border-bottom:1px solid var(--border); vertical-align:top; }
   .cashbook-table input, .cashbook-table select{ font-size:12.5px; padding:6px 7px; width:100%; }
   .cashbook-table input[type=number]{ text-align:right; }
   .cashbook-table select{ color:var(--text); }
   .cashbook-table .cb-actions{ display:flex; gap:4px; padding-top:8px; }
-  .cb-add-btn, .cb-del-btn{ width:24px; height:24px; border-radius:50%; border:none; cursor:pointer; color:#fff; font-size:16px; font-weight:700; display:inline-flex; align-items:center; justify-content:center; line-height:1; }
+  /* compact, square summary tiles */
+  .cb-stats{ display:flex; gap:8px; }
+  .cb-stat{ min-width:88px; height:64px; padding:8px 12px; border:1px solid var(--border); border-radius:8px; background:var(--surface-2);
+    display:flex; flex-direction:column; align-items:flex-start; justify-content:center; }
+  .cb-stat-val{ font-size:19px; font-weight:700; line-height:1.1; }
+  .cb-stat-lbl{ font-size:10.5px; color:var(--text-muted); margin-top:3px; text-transform:uppercase; letter-spacing:.4px; }
+  /* resizable column headers */
+  .cashbook-table th{ position:relative; }
+  .cb-col-resizer{ position:absolute; top:0; right:-3px; width:7px; height:100%; cursor:col-resize; user-select:none; z-index:2; }
+  .cb-col-resizer:hover, .cb-col-resizer.dragging{ background:linear-gradient(90deg, transparent 40%, var(--accent) 40%, var(--accent) 60%, transparent 60%); }
+  .cb-add-btn, .cb-del-btn, .cb-map-btn{ width:24px; height:24px; border-radius:50%; border:none; cursor:pointer; color:#fff; font-size:16px; font-weight:700; display:inline-flex; align-items:center; justify-content:center; line-height:1; }
   .cb-add-btn{ background:var(--money-pos); }
   .cb-add-btn:hover{ background:#155943; }
   .cb-del-btn{ background:var(--red); }
   .cb-del-btn:hover{ filter:brightness(0.9); }
+  .cb-map-btn{ background:var(--ink); font-size:13px; }
+  .cb-map-btn:hover{ background:var(--accent-dark); }
+  .cb-recon-dot{ width:9px; height:9px; border-radius:50%; display:inline-block; flex:0 0 auto; }
   .cb-undo-btn{ padding:4px 10px; border-radius:6px; border:1px solid var(--border-strong); background:#fff; color:var(--text-muted); cursor:pointer; font-size:11.5px; font-weight:600; font-family:inherit; white-space:nowrap; }
   .cb-undo-btn:hover{ border-color:var(--red); color:var(--red); }
   .cb-page-btn{ min-width:30px; padding:5px 9px; border-radius:6px; border:1px solid var(--border-strong); background:#fff; color:var(--text); cursor:pointer; font-size:12.5px; font-weight:600; font-family:inherit; }
@@ -420,6 +442,7 @@ const NAV = [
   {sec:'Records'},
   {id:'contacts', label:'All Contacts', ic:'☰'},
   {id:'accounts', label:'Chart of Accounts', ic:'≡'},
+  {id:'assets', label:'Asset Register', ic:'◆'},
   {sec:'Insights'},
   {group:'reports', label:'Reports', ic:'▦', children:[
     {id:'rep-tb', label:'Trial Balance'},
@@ -457,12 +480,22 @@ function defaultData(){
       {id:'acc_other_inc', code:'1100', name:'Other Income', type:'Income'},
       {id:'acc_unalloc_inc', code:'1900', name:'Unallocated Income', type:'Income', system:true},
       {id:'acc_cos', code:'2000', name:'Cost of Sales', type:'Expense'},
-      {id:'acc_office', code:'3000', name:'Office Expenses', type:'Expense'},
+      {id:'acc_office', code:'3000', name:'Accounting fees', type:'Expense'},
       {id:'acc_rent', code:'3010', name:'Rent', type:'Expense'},
       {id:'acc_utilities', code:'3020', name:'Utilities', type:'Expense'},
       {id:'acc_software', code:'3030', name:'Software & Subscriptions', type:'Expense'},
       {id:'acc_travel', code:'3040', name:'Travel', type:'Expense'},
       {id:'acc_bankfees', code:'3050', name:'Bank Charges', type:'Expense'},
+      {id:'acc_advertising', code:'3250', name:'Advertising', type:'Expense'},
+      {id:'acc_computer_exp', code:'3300', name:'Computer expenses', type:'Expense'},
+      {id:'acc_computer_sw', code:'3310', name:'Computer software', type:'Expense'},
+      {id:'acc_insurance', code:'3850', name:'Insurance', type:'Expense'},
+      {id:'acc_mv_fuel', code:'4150', name:'Motor Vehicle Expenses - Fuel & Oil', type:'Expense'},
+      {id:'acc_mv_rm', code:'4151', name:'Motor Vehicle Expenses - R & M', type:'Expense'},
+      {id:'acc_mv_toll', code:'4152', name:'Motor Vehicle Expenses - Toll and Parking', type:'Expense'},
+      {id:'acc_mv_license', code:'4153', name:'Motor Vehicle Expenses - License', type:'Expense'},
+      {id:'acc_staff_welfare', code:'4500', name:'Staff welfare', type:'Expense'},
+      {id:'acc_subscriptions', code:'4550', name:'Subscriptions', type:'Expense'},
       {id:'acc_unalloc_exp', code:'3900', name:'Unallocated Expense', type:'Expense', system:true},
       {id:'acc_share_capital', code:'5000', name:'Share Capital', type:'Equity', system:true},
       {id:'acc_equity', code:'5200', name:'Retained Income', type:'Equity', system:true},
@@ -488,6 +521,7 @@ function defaultData(){
     vatPeriods:[],
     yearEndCloses:[],
     accountMappings:[],
+    assets:[],
     seeded:false,
   };
 }
@@ -536,6 +570,7 @@ function migrateCompanyShape(co){
   co.vatPeriods = co.vatPeriods || [];
   co.yearEndCloses = co.yearEndCloses || [];
   co.accountMappings = co.accountMappings || [];
+  co.assets = co.assets || [];
   const s = co.settings || (co.settings={});
   if(s.nextQuoteNo==null) s.nextQuoteNo = 3001;
   if(s.nextSuppQuoteNo==null) s.nextSuppQuoteNo = 3501;
@@ -567,6 +602,38 @@ function migrateCompanyShape(co){
       co.accounts.push({id:'acc_share_capital', code:'5000', name:'Share Capital', type:'Equity', system:true});
     }
     co._renumberedV3 = true;
+  }
+  // V4: add default Motor Vehicle expense accounts, and rename 3000 to "Accounting fees".
+  if(!co._defaultsV4 && Array.isArray(co.accounts)){
+    const mvAccounts = [
+      {id:'acc_mv_fuel', code:'4150', name:'Motor Vehicle Expenses - Fuel & Oil', type:'Expense'},
+      {id:'acc_mv_rm', code:'4151', name:'Motor Vehicle Expenses - R & M', type:'Expense'},
+      {id:'acc_mv_toll', code:'4152', name:'Motor Vehicle Expenses - Toll and Parking', type:'Expense'},
+      {id:'acc_mv_license', code:'4153', name:'Motor Vehicle Expenses - License', type:'Expense'},
+    ];
+    mvAccounts.forEach(na=>{
+      // only add if neither the id nor the code already exists
+      if(!co.accounts.some(a=>a.id===na.id || a.code===na.code)) co.accounts.push(na);
+    });
+    // rename 3000 to "Accounting fees" only if it's still the original default name
+    const off = co.accounts.find(a=>a.id==='acc_office');
+    if(off && off.name==='Office Expenses') off.name = 'Accounting fees';
+    co._defaultsV4 = true;
+  }
+  // V5: add further default expense accounts.
+  if(!co._defaultsV5 && Array.isArray(co.accounts)){
+    const extra = [
+      {id:'acc_advertising', code:'3250', name:'Advertising', type:'Expense'},
+      {id:'acc_computer_exp', code:'3300', name:'Computer expenses', type:'Expense'},
+      {id:'acc_computer_sw', code:'3310', name:'Computer software', type:'Expense'},
+      {id:'acc_insurance', code:'3850', name:'Insurance', type:'Expense'},
+      {id:'acc_staff_welfare', code:'4500', name:'Staff welfare', type:'Expense'},
+      {id:'acc_subscriptions', code:'4550', name:'Subscriptions', type:'Expense'},
+    ];
+    extra.forEach(na=>{
+      if(!co.accounts.some(a=>a.id===na.id || a.code===na.code)) co.accounts.push(na);
+    });
+    co._defaultsV5 = true;
   }
 }
 async function loadState(){
@@ -733,16 +800,21 @@ function safeFileStem(s){ return (s||'report').toLowerCase().replace(/[^a-z0-9]+
 // A "report model" is { title, meta:[{label,value}], columns:[...], rows:[[...cells]] }.
 // Cells may be strings/numbers; number cells export raw (unformatted) to Excel.
 function exportReportCsv(model){
+  const s = S.settings||{};
   const lines = [];
-  lines.push([model.title]);
-  lines.push([S.settings.businessName||'']);
+  lines.push([s.businessName || 'Company']);           // company name first, prominent
+  if(s.businessVatNo) lines.push(['VAT No', s.businessVatNo]);
+  if(s.businessAddress) lines.push(['Address', String(s.businessAddress).replace(/\r?\n/g,', ')]);
+  lines.push([model.title]);                            // then the report title
   (model.meta||[]).forEach(m=> lines.push([m.label, m.value]));
+  lines.push(['Generated', new Date().toLocaleString()]);
   lines.push([]); // blank row
   if(model.columns) lines.push(model.columns);
   (model.rows||[]).forEach(r=> lines.push(r));
   const csv = lines.map(row=> (row||[]).map(csvCell).join(',')).join('\r\n');
-  // BOM so Excel reads UTF-8 (R symbol etc.) correctly
-  downloadBlob('\uFEFF'+csv, `${safeFileStem(model.title)}-${todayStr()}.csv`, 'text/csv;charset=utf-8;');
+  // BOM so Excel reads UTF-8 (R symbol etc.) correctly. Filename includes the company name.
+  const stem = safeFileStem(`${s.businessName||'Company'} ${model.title}`);
+  downloadBlob('\uFEFF'+csv, `${stem}-${todayStr()}.csv`, 'text/csv;charset=utf-8;');
   showToast('Exported for Excel (CSV)');
 }
 function exportReportPdf(model){
@@ -754,14 +826,21 @@ function exportReportPdf(model){
     return `<tr class="${cls}">${r.map((c,i)=>`<td class="${i===0?'':'r'}">${money(c)}</td>`).join('')}</tr>`;
   }).join('');
   const metaHtml = (model.meta||[]).map(m=>`<div><span class="k">${escapeHtml(m.label)}:</span> ${escapeHtml(String(m.value))}</div>`).join('');
-  const logo = S.settings.invoiceLogoDataUrl ? `<img src="${S.settings.invoiceLogoDataUrl}" style="max-height:54px; max-width:180px; object-fit:contain;">` : '';
+  const s = S.settings||{};
+  const logo = s.invoiceLogoDataUrl ? `<img src="${s.invoiceLogoDataUrl}" style="max-height:54px; max-width:180px; object-fit:contain;">` : '';
+  const companyName = s.businessName || 'Company';
+  const companyExtra = [
+    s.businessVatNo ? `VAT No: ${escapeHtml(s.businessVatNo)}` : '',
+    s.businessAddress ? escapeHtml(String(s.businessAddress).replace(/\r?\n/g,', ')) : ''
+  ].filter(Boolean).join(' · ');
   const win = window.open('', '_blank');
   if(!win){ showToast('Allow pop-ups to export PDF'); return; }
-  win.document.write(`<!doctype html><html><head><meta charset="utf-8"><title>${escapeHtml(model.title)}</title>
+  win.document.write(`<!doctype html><html><head><meta charset="utf-8"><title>${escapeHtml(companyName)} — ${escapeHtml(model.title)}</title>
     <style>
       *{ box-sizing:border-box; } body{ font-family:-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif; color:#0B0F1D; margin:32px; font-size:12.5px; }
       .head{ display:flex; justify-content:space-between; align-items:flex-start; border-bottom:2px solid #0B0F1D; padding-bottom:12px; margin-bottom:6px; }
-      h1{ font-size:19px; margin:0 0 4px; } .sub{ color:#5b6270; font-size:12px; }
+      .company{ font-size:20px; font-weight:800; margin:0 0 2px; } .company-extra{ color:#5b6270; font-size:11px; margin-bottom:8px; }
+      h1{ font-size:15px; margin:6px 0 0; font-weight:600; } .sub{ color:#5b6270; font-size:12px; }
       .meta{ color:#5b6270; font-size:11.5px; margin:10px 0 16px; display:flex; gap:18px; flex-wrap:wrap; } .meta .k{ font-weight:600; color:#0B0F1D; }
       table{ width:100%; border-collapse:collapse; margin-top:6px; } th,td{ padding:6px 8px; text-align:left; border-bottom:1px solid #e6e8ee; }
       th{ font-size:10.5px; text-transform:uppercase; letter-spacing:.4px; color:#5b6270; border-bottom:1.5px solid #cfd3dc; }
@@ -771,10 +850,14 @@ function exportReportPdf(model){
       .foot{ margin-top:20px; color:#8a909c; font-size:10.5px; border-top:1px solid #e6e8ee; padding-top:8px; }
       @media print{ body{ margin:14mm; } .noprint{ display:none; } }
     </style></head><body>
-    <div class="head"><div><h1>${escapeHtml(model.title)}</h1><div class="sub">${escapeHtml(S.settings.businessName||'')}</div></div>${logo}</div>
+    <div class="head"><div>
+      <div class="company">${escapeHtml(companyName)}</div>
+      ${companyExtra? `<div class="company-extra">${companyExtra}</div>`:''}
+      <h1>${escapeHtml(model.title)}</h1>
+    </div>${logo}</div>
     <div class="meta">${metaHtml}</div>
     <table>${headRow? '<thead>'+headRow+'</thead>':''}<tbody>${bodyRows}</tbody></table>
-    <div class="foot">Generated by Ledgerly · ${new Date().toLocaleString()}</div>
+    <div class="foot">${escapeHtml(companyName)} · Generated by Ledgerly · ${new Date().toLocaleString()}</div>
     <div class="noprint" style="margin-top:18px;"><button onclick="window.print()" style="padding:8px 16px; font-size:13px; cursor:pointer;">Print / Save as PDF</button></div>
     </body></html>`);
   win.document.close();
@@ -1165,6 +1248,63 @@ function isoAddDays(iso, n){ const d=new Date(iso+'T00:00:00'); d.setDate(d.getD
 
 function accountType(id){ const a=S.accounts.find(x=>x.id===id); return a?a.type:null; }
 function accountNormalIsDebit(type){ return type==='Asset'||type==='Expense'; }
+function isFixedAssetAccount(id){ const a=S.accounts.find(x=>x.id===id); return !!(a && a.type==='Asset' && a.isFixedAsset); }
+
+/* ============================= FIXED ASSETS ============================= */
+// Straight-line depreciation. Each asset: {id, name, accountId, cost, date, category, method,
+//   usefulLifeYears, residual, sourceRef, disposed}. Book value = cost - accumulated dep (>= residual).
+function assetAnnualDep(asset){
+  const life = Number(asset.usefulLifeYears)||0;
+  if(life<=0) return 0;
+  const depreciable = Math.max(0, (Number(asset.cost)||0) - (Number(asset.residual)||0));
+  return round2(depreciable / life);
+}
+// Accumulated depreciation up to a given date (default today), capped so book value >= residual.
+function assetAccumulatedDep(asset, asOf){
+  asOf = asOf || todayStr();
+  if(!asset.date || asset.date>asOf) return 0;
+  const annual = assetAnnualDep(asset);
+  if(annual<=0) return 0;
+  // months elapsed from purchase to asOf (straight-line, monthly)
+  const start = new Date(asset.date+'T00:00:00');
+  const end = new Date(asOf+'T00:00:00');
+  let months = (end.getFullYear()-start.getFullYear())*12 + (end.getMonth()-start.getMonth());
+  if(end.getDate() >= start.getDate()) months += 0; // whole months elapsed
+  months = Math.max(0, months);
+  const monthly = annual/12;
+  const depreciable = Math.max(0, (Number(asset.cost)||0) - (Number(asset.residual)||0));
+  return round2(Math.min(depreciable, monthly*months));
+}
+function assetBookValue(asset, asOf){
+  return round2((Number(asset.cost)||0) - assetAccumulatedDep(asset, asOf));
+}
+function addAsset(a){
+  S.assets = S.assets || [];
+  const asset = Object.assign({ id:uid('as'), method:'straight-line', usefulLifeYears:5, residual:0, category:'', disposed:false }, a);
+  S.assets.push(asset);
+  saveState(true);
+  return asset;
+}
+function deleteAsset(id){ S.assets = (S.assets||[]).filter(a=>a.id!==id); saveState(true); }
+// Auto-detect: after posting, if any line debits a fixed-asset account, offer to register it (once per source ref).
+function maybeOfferAssetFromEntry(entry){
+  if(!entry || !entry.lines) return;
+  const ref = entry.ref || entry.id;
+  entry.lines.forEach(l=>{
+    if(!(l.debit>0)) return;
+    if(!isFixedAssetAccount(l.accountId)) return;
+    // don't double-offer for a ref already registered
+    if((S.assets||[]).some(a=>a.sourceRef===ref && a.accountId===l.accountId)) return;
+    const acct = S.accounts.find(x=>x.id===l.accountId);
+    setTimeout(()=>{
+      if(confirm(`Add this to the Fixed Asset Register?\n\n${entry.description||acct.name}\nCost: ${fmt(l.debit)} · ${acct.code} ${acct.name}\n\nYou can set depreciation details after.`)){
+        const asset = addAsset({ name: entry.description || acct.name, accountId:l.accountId, cost:round2(l.debit), date:entry.date, sourceRef:ref, category:acct.name });
+        showToast('Added to asset register — set its depreciation');
+        VIEW='assets'; ASSET_EDIT_ID=asset.id; render();
+      }
+    }, 60);
+  });
+}
 
 function getAccountBalance(accountId, asOfDate, excludeOpening){
   let debit=0, credit=0;
@@ -1517,6 +1657,7 @@ function render(){
     cashbook: renderCashbook,
     contacts: renderContacts,
     accounts: renderAccounts,
+    assets: renderAssets,
     reports: renderReports,
     'rep-tb': ()=>{ REPORT_TAB='tb'; renderReports(); },
     'rep-pl': ()=>{ REPORT_TAB='pl'; renderReports(); },
@@ -2411,7 +2552,7 @@ function submitBankTxn(){
 }
 
 /* ============================= BANK RECONCILIATION ============================= */
-let RECON = null; // {accountId, opening, closing, statementDate, ticks:{lineId:bool}}
+let RECON = null; // {accountId, opening, closing, statementDate, from, to, ticks:{lineId:bool}}
 function openReconcile(accountId){
   const last = lastReconciliation(accountId);
   RECON = {
@@ -2419,13 +2560,21 @@ function openReconcile(accountId){
     opening: last ? last.closingBalance : 0,
     closing: last ? last.closingBalance : 0,
     statementDate: todayStr(),
+    from: last && last.date ? isoAddDays(last.date, 1) : '',  // default: day after last reconciliation
+    to: '',
     ticks: {},
   };
   VIEW = 'reconcile';
   render();
 }
 function reconUnclearedLines(){
-  return getBankLinesForAccount(RECON.accountId).filter(l=>!l.reconciled);
+  const df = RECON.from||'', dt = RECON.to||'';
+  return getBankLinesForAccount(RECON.accountId).filter(l=>{
+    if(l.reconciled) return false;
+    if(df && (l.date||'') < df) return false;
+    if(dt && (l.date||'') > dt) return false;
+    return true;
+  });
 }
 function reconTotals(){
   const lines = reconUnclearedLines();
@@ -2439,7 +2588,8 @@ function renderReconcilePage(){
   const acc = S.accounts.find(a=>a.id===(RECON&&RECON.accountId));
   if(!acc){ navigate('banking'); return; }
   setTopbar('Reconcile — '+acc.name, 'Tick off every transaction that appears on your bank statement',
-    `<button class="btn btn-ghost" onclick="RECON=null; navigate('banking');">← Back to banking</button>`);
+    `<button class="btn btn-ghost" onclick="printReconciliation()">⎙ Print</button>
+     <button class="btn btn-ghost" onclick="RECON=null; navigate('banking');">← Back to banking</button>`);
   const lines = reconUnclearedLines();
   document.getElementById('content').innerHTML = `
     <div class="card" style="margin-bottom:16px;">
@@ -2449,7 +2599,12 @@ function renderReconcilePage(){
           <div class="field"><label>Statement opening balance</label><input type="number" id="rc-open" value="${RECON.opening}" step="0.01" onchange="RECON.opening=Number(this.value)||0; recalcRecon();"></div>
           <div class="field"><label>Statement closing balance</label><input type="number" id="rc-close" value="${RECON.closing}" step="0.01" onchange="RECON.closing=Number(this.value)||0; recalcRecon();"></div>
         </div>
-        <div class="hint">Book balance right now: <strong class="num">${fmt(getAccountBalance(acc.id))}</strong></div>
+        <div class="field-row3" style="margin-top:4px;">
+          <div class="field"><label>Show transactions from</label><input type="date" id="rc-from" value="${RECON.from||''}" onchange="RECON.from=this.value; renderReconcilePage();"></div>
+          <div class="field"><label>to</label><input type="date" id="rc-to" value="${RECON.to||''}" onchange="RECON.to=this.value; renderReconcilePage();"></div>
+          <div class="field" style="display:flex; align-items:flex-end;">${(RECON.from||RECON.to)? `<button class="btn btn-ghost btn-sm" onclick="RECON.from=''; RECON.to=''; renderReconcilePage();">Clear date range</button>`:''}</div>
+        </div>
+        <div class="hint">Book balance right now: <strong class="num">${fmt(getAccountBalance(acc.id))}</strong>${(RECON.from||RECON.to)? ` · showing ${lines.length} uncleared transaction${lines.length===1?'':'s'} in range` : ''}</div>
       </div>
     </div>
     <div class="card" style="margin-bottom:16px;">
@@ -2524,12 +2679,90 @@ function finishReconciliation(){
   });
   S.reconciliations.push({
     id: reconId, accountId: RECON.accountId, date: RECON.statementDate,
+    fromDate: RECON.from||'', toDate: RECON.to||'',
     openingBalance: RECON.opening, closingBalance: RECON.closing, clearedCount: tickedIds.length,
   });
   const cleared = tickedIds.length;
   RECON = null;
   showToast(`Reconciliation complete — ${cleared} transaction${cleared===1?'':'s'} cleared`);
   navigate('banking');
+}
+// Print a reconciliation statement (works mid-reconcile: cleared = ticked, outstanding = unticked).
+function printReconciliation(){
+  if(!RECON){ showToast('Open a reconciliation first'); return; }
+  const acc = S.accounts.find(a=>a.id===RECON.accountId);
+  if(!acc) return;
+  const s = S.settings||{};
+  const lines = reconUnclearedLines();
+  const t = reconTotals();
+  const ticked = lines.filter(l=>RECON.ticks[l.lineId]);
+  const outstanding = lines.filter(l=>!RECON.ticks[l.lineId]);
+  const balanced = Math.abs(t.diff) < 0.005;
+  const rangeLabel = (RECON.from||RECON.to)
+    ? `${RECON.from?fmtDateShort(RECON.from):'start'} to ${RECON.to?fmtDateShort(RECON.to):fmtDateShort(RECON.statementDate)}`
+    : 'All uncleared';
+  const rowsHtml = list => list.length
+    ? list.map(l=>`<tr><td>${fmtDateShort(l.date)}</td><td>${escapeHtml(l.desc)}</td>
+        <td class="r">${l.debit?fmt(l.debit):''}</td><td class="r">${l.credit?fmt(l.credit):''}</td></tr>`).join('')
+    : `<tr><td colspan="4" style="color:#8a909c;">None</td></tr>`;
+  const companyExtra = [ s.businessVatNo?`VAT No: ${escapeHtml(s.businessVatNo)}`:'',
+    s.businessAddress?escapeHtml(String(s.businessAddress).replace(/\r?\n/g,', ')):'' ].filter(Boolean).join(' · ');
+  const logo = s.invoiceLogoDataUrl ? `<img src="${s.invoiceLogoDataUrl}" style="max-height:54px; max-width:180px; object-fit:contain;">` : '';
+  const win = window.open('', '_blank');
+  if(!win){ showToast('Allow pop-ups to print'); return; }
+  win.document.write(`<!doctype html><html><head><meta charset="utf-8"><title>${escapeHtml(s.businessName||'Company')} — Bank Reconciliation</title>
+    <style>
+      *{box-sizing:border-box;} body{font-family:-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif; color:#0B0F1D; margin:32px; font-size:12.5px;}
+      .head{display:flex; justify-content:space-between; align-items:flex-start; border-bottom:2px solid #0B0F1D; padding-bottom:12px; margin-bottom:6px;}
+      .company{font-size:20px; font-weight:800; margin:0 0 2px;} .company-extra{color:#5b6270; font-size:11px; margin-bottom:8px;}
+      h1{font-size:15px; margin:6px 0 0; font-weight:600;}
+      .meta{color:#5b6270; font-size:11.5px; margin:10px 0 16px; display:flex; gap:18px; flex-wrap:wrap;} .meta .k{font-weight:600; color:#0B0F1D;}
+      h2{font-size:12px; text-transform:uppercase; letter-spacing:.5px; color:#5b6270; margin:20px 0 6px;}
+      table{width:100%; border-collapse:collapse; margin-top:4px;} th,td{padding:6px 8px; text-align:left; border-bottom:1px solid #e6e8ee;}
+      th{font-size:10.5px; text-transform:uppercase; letter-spacing:.4px; color:#5b6270; border-bottom:1.5px solid #cfd3dc;}
+      td.r,th.r{text-align:right; font-variant-numeric:tabular-nums;}
+      .summary{margin-top:18px; max-width:380px; margin-left:auto;} .summary .row{display:flex; justify-content:space-between; padding:5px 0; border-bottom:1px dashed #e6e8ee;}
+      .summary .row.total{font-weight:700; border-top:1.5px solid #0B0F1D; border-bottom:none; margin-top:4px; padding-top:8px;}
+      .status{margin-top:14px; padding:10px 14px; border-radius:8px; font-weight:700; ${balanced?'background:#e7f6ef; color:#12674a;':'background:#fdecec; color:#b42318;'}}
+      .foot{margin-top:24px; color:#8a909c; font-size:10.5px; border-top:1px solid #e6e8ee; padding-top:8px;}
+      .sign{margin-top:40px; display:flex; gap:60px;} .sign div{flex:1; border-top:1px solid #0B0F1D; padding-top:6px; font-size:11px; color:#5b6270;}
+      @media print{ body{margin:14mm;} .noprint{display:none;} }
+    </style></head><body>
+    <div class="head"><div>
+      <div class="company">${escapeHtml(s.businessName||'Company')}</div>
+      ${companyExtra?`<div class="company-extra">${companyExtra}</div>`:''}
+      <h1>Bank Reconciliation Statement</h1>
+    </div>${logo}</div>
+    <div class="meta">
+      <div><span class="k">Account:</span> ${escapeHtml(acc.code+' '+acc.name)}</div>
+      <div><span class="k">Statement date:</span> ${fmtDateShort(RECON.statementDate)}</div>
+      <div><span class="k">Period:</span> ${rangeLabel}</div>
+    </div>
+
+    <h2>Cleared transactions (on statement)</h2>
+    <table><thead><tr><th>Date</th><th>Description</th><th class="r">Money in</th><th class="r">Money out</th></tr></thead>
+      <tbody>${rowsHtml(ticked)}</tbody></table>
+
+    <h2>Outstanding transactions (not yet on statement)</h2>
+    <table><thead><tr><th>Date</th><th>Description</th><th class="r">Money in</th><th class="r">Money out</th></tr></thead>
+      <tbody>${rowsHtml(outstanding)}</tbody></table>
+
+    <div class="summary">
+      <div class="row"><span>Statement opening balance</span><span>${fmt(RECON.opening)}</span></div>
+      <div class="row"><span>+ Money in cleared</span><span>${fmt(t.inTotal)}</span></div>
+      <div class="row"><span>− Money out cleared</span><span>${fmt(t.outTotal)}</span></div>
+      <div class="row total"><span>Calculated closing balance</span><span>${fmt(t.calcClosing)}</span></div>
+      <div class="row"><span>Statement closing balance</span><span>${fmt(RECON.closing)}</span></div>
+      <div class="row"><span>Difference</span><span>${fmt(Math.abs(t.diff))}</span></div>
+    </div>
+    <div class="status">${balanced? 'Balanced ✓ — the reconciliation agrees with the statement' : 'Out of balance by '+fmt(Math.abs(t.diff))}</div>
+
+    <div class="sign"><div>Prepared by / date</div><div>Reviewed by / date</div></div>
+    <div class="foot">${escapeHtml(s.businessName||'Company')} · Generated by Ledgerly · ${new Date().toLocaleString()}</div>
+    <div class="noprint" style="margin-top:18px;"><button onclick="window.print()" style="padding:8px 16px; font-size:13px; cursor:pointer;">Print / Save as PDF</button></div>
+    </body></html>`);
+  win.document.close();
+  setTimeout(()=>{ try{ win.focus(); win.print(); }catch(e){} }, 350);
 }
 
 /* ============================= BANK FEEDS (simulated) ============================= */
@@ -2800,6 +3033,7 @@ function handleCsvFile(event){
       amountIdx: guessColumn(h, ['amount','value','net amount']),
       debitIdx: guessColumn(h, ['debit','money out','withdrawal','paid out','out']),
       creditIdx: guessColumn(h, ['credit','money in','deposit','paid in','in']),
+      balanceIdx: guessColumn(h, ['balance','running balance','closing balance','bal']),
       mode: 'signed',
     };
     if(CSV_IMPORT.mapping.amountIdx===-1 && (CSV_IMPORT.mapping.debitIdx>-1 || CSV_IMPORT.mapping.creditIdx>-1)){
@@ -2838,6 +3072,13 @@ function renderCsvMapping(){
       </div>
     `}
     <div id="csv-preview-wrap"></div>
+    <div class="field" style="max-width:260px; margin-top:10px;"><label>Statement balance column (optional)</label>
+      <select id="map-balance" onchange="CSV_IMPORT.mapping.balanceIdx=Number(this.value); updateCsvPreview();">
+        <option value="-1" ${map.balanceIdx===-1||map.balanceIdx==null?'selected':''}>— none —</option>
+        ${CSV_IMPORT.headers.map((hh,i)=>`<option value="${i}" ${i===map.balanceIdx?'selected':''}>${hh||'(column '+(i+1)+')'}</option>`).join('')}
+      </select>
+      <div class="hint">If your statement has a running balance column, map it here and Ledgerly will flag each row green when its own running balance agrees, red when it drifts.</div>
+    </div>
   `;
   updateCsvPreview();
 }
@@ -2857,8 +3098,13 @@ function computeCsvParsedRows(){
       amount = cr - dr;
     }
     const existing = prev[i];
+    let stmtBalance = null;
+    if(map.balanceIdx!=null && map.balanceIdx>-1){
+      const raw = String(row[map.balanceIdx]||'').replace(/[, ]/g,'');
+      if(raw!=='' && !isNaN(parseFloat(raw))) stmtBalance = parseFloat(raw);
+    }
     return {
-      idx:i, date, desc, amount,
+      idx:i, date, desc, amount, stmtBalance,
       allocType: existing ? existing.allocType : 'account',   // 'account' | 'contact'
       categoryId: existing ? existing.categoryId : defCat,     // nominal account when allocType==='account'
       contactId: existing ? existing.contactId : null,         // chosen customer/supplier
@@ -2961,6 +3207,7 @@ function confirmCsvImport(){
     const draft = blankCashbookRow(bank);
     draft.date = r.date;
     draft.description = r.desc;
+    if(r.stmtBalance!=null) draft.stmtBalance = r.stmtBalance; // statement running balance for auto-recon flag
     // preserve any allocation already chosen in the preview
     draft.type = r.allocType || 'account';
     if(r.amount>0) draft.received = Math.abs(r.amount);
@@ -3099,7 +3346,9 @@ function submitJournalEntryForm(){
   entry.manual = true;
   entry.ref = 'manual-'+entry.id;
   if(isOpening) entry.isOpeningBalance = true;
-  closeModal(); showToast(isOpening? 'Opening balance entry posted' : 'Journal entry posted'); navigate('journal');
+  closeModal(); showToast(isOpening? 'Opening balance entry posted' : 'Journal entry posted');
+  if(!isOpening) maybeOfferAssetFromEntry(entry); // offer to register if it bought a fixed asset
+  navigate('journal');
 }
 function openJournalEntryDetail(id){
   const e = S.journal.find(x=>x.id===id);
@@ -3139,6 +3388,68 @@ function reverseJournalEntry(id){
 /* ============================= CASHBOOK (quick-capture grid) ============================= */
 let CASHBOOK_ACCOUNT = null;
 let CASHBOOK_SEARCH = '';
+let CB_RUN_NEW = {};   // rowId -> {balance, matches} for New tab
+let CB_RUN_REV = {};   // cashbookRef -> {balance, matches} for Reviewed tab
+let CASHBOOK_FROM = '';   // date-range filter (inclusive) applied to both tabs
+let CASHBOOK_TO = '';
+function setCashbookDateFilter(which, v){
+  if(which==='from') CASHBOOK_FROM = v; else CASHBOOK_TO = v;
+  CASHBOOK_PAGE.new = 1; CASHBOOK_PAGE.reviewed = 1;
+  renderCashbook();
+}
+function clearCashbookDateFilter(){
+  CASHBOOK_FROM = ''; CASHBOOK_TO = '';
+  CASHBOOK_PAGE.new = 1; CASHBOOK_PAGE.reviewed = 1;
+  renderCashbook();
+}
+function clearCashbookFilters(){
+  CASHBOOK_SEARCH = ''; CASHBOOK_FROM = ''; CASHBOOK_TO = '';
+  CASHBOOK_PAGE.new = 1; CASHBOOK_PAGE.reviewed = 1;
+  renderCashbook();
+}
+// Saved per-column widths (px) for the cashbook grid. Keyed by column key.
+let CASHBOOK_COLW = {};
+const CASHBOOK_COLS = ['sel','date','payee','description','type','selection','reference','vat','spent','received','balance','act'];
+const CASHBOOK_COLW_DEFAULT = { sel:32, date:110, payee:130, description:180, type:96, selection:150, reference:110, vat:120, spent:96, received:96, balance:120, act:96 };
+function cashbookColW(key){
+  const saved = (WORKSPACE && WORKSPACE.uiPrefs && WORKSPACE.uiPrefs.cashbookColW) || CASHBOOK_COLW;
+  return saved[key] || CASHBOOK_COLW[key] || CASHBOOK_COLW_DEFAULT[key] || 110;
+}
+function cashbookColgroup(){
+  return `<colgroup>${CASHBOOK_COLS.map(k=>`<col style="width:${cashbookColW(k)}px;">`).join('')}</colgroup>`;
+}
+// Attach drag-to-resize handlers to the current cashbook table headers.
+function attachColumnResizers(tableId){
+  const table = document.getElementById(tableId);
+  if(!table) return;
+  const cols = table.querySelectorAll('colgroup col');
+  table.querySelectorAll('th .cb-col-resizer').forEach(h=>{
+    h.addEventListener('mousedown', e=>{
+      e.preventDefault(); e.stopPropagation();
+      const idx = Number(h.getAttribute('data-col'));
+      const key = CASHBOOK_COLS[idx];
+      const startX = e.clientX;
+      const startW = cols[idx] ? parseInt(cols[idx].style.width,10) : cashbookColW(key);
+      h.classList.add('dragging');
+      const onMove = ev=>{
+        const w = Math.max(40, startW + (ev.clientX - startX));
+        if(cols[idx]) cols[idx].style.width = w+'px';
+        CASHBOOK_COLW[key] = w;
+      };
+      const onUp = ()=>{
+        document.removeEventListener('mousemove', onMove);
+        document.removeEventListener('mouseup', onUp);
+        h.classList.remove('dragging');
+        // persist widths at workspace level so they survive reloads and apply across companies
+        WORKSPACE.uiPrefs = WORKSPACE.uiPrefs || {};
+        WORKSPACE.uiPrefs.cashbookColW = Object.assign({}, WORKSPACE.uiPrefs.cashbookColW, CASHBOOK_COLW);
+        saveState();
+      };
+      document.addEventListener('mousemove', onMove);
+      document.addEventListener('mouseup', onUp);
+    });
+  });
+}
 // Per-tab sort: key + direction. null key = natural order (as entered).
 let CASHBOOK_SORT = { new:{key:null, dir:1}, reviewed:{key:'date', dir:-1} };
 function setCashbookSort(tab, key){
@@ -3159,6 +3470,7 @@ function cbSortValue(r, key){
     case 'vat': return vatTypeLabel(cbVatTypeId(r)).toLowerCase();
     case 'spent': return Number(r.spent)||0;
     case 'received': return Number(r.received)||0;
+    case 'balance': { const m = CB_RUN_REV[r.cashbookRef] || CB_RUN_NEW[r.id]; return m? m.balance : 0; }
     default: return '';
   }
 }
@@ -3177,7 +3489,9 @@ function cbSortTh(tab, key, label, extraClass){
   const s = CASHBOOK_SORT[tab];
   const active = s && s.key===key;
   const arrow = active ? (s.dir>0? ' ▲':' ▼') : '';
-  return `<th class="cb-sort-th ${extraClass||''} ${active?'sorted':''}" onclick="setCashbookSort('${tab}','${key}')" title="Sort by ${label}">${label}<span class="cb-sort-arrow">${arrow}</span></th>`;
+  const colIdx = CASHBOOK_COLS.indexOf(key);
+  const resizer = colIdx>=0 ? `<span class="cb-col-resizer" data-col="${colIdx}" onclick="event.stopPropagation()" title="Drag to resize"></span>` : '';
+  return `<th class="cb-sort-th ${extraClass||''} ${active?'sorted':''}" onclick="setCashbookSort('${tab}','${key}')" title="Sort by ${label}">${label}<span class="cb-sort-arrow">${arrow}</span>${resizer}</th>`;
 }
 function setCashbookSearch(v){
   CASHBOOK_SEARCH = v;
@@ -3190,11 +3504,49 @@ function setCashbookSearch(v){
 function blankCashbookRow(accountId){
   return { id:uid('cb'), accountId, date:todayStr(), payee:'', description:'', type:'account',
     accountSelection:null, contactSelection:null, matchDocId:null, transferAccountId:null, reference:'',
-    vatType:'none', vatRate:0, spent:0, received:0 };
+    vatType:'none', vatRate:0, spent:0, received:0, stmtBalance:null };
 }
 // Resolve a cashbook row's VAT type id (new field, or legacy from vatRate).
 function cbVatTypeId(row){ if(row.vatType) return row.vatType; return row.vatRate>0 ? 'standard' : 'none'; }
 function cbTypeLabel(t){ return t==='contact'?'Contact': t==='transfer'?'Transfer': t==='vat'?'VAT':'Account'; }
+
+/* ---- Running balance + auto-reconcile flags for the cashbook ----
+   Walks a set of rows in date order (stable by original index) from a starting balance,
+   adding received (credit) and subtracting spent (debit). Returns a map of rowKey -> {balance, matches}.
+   If a row carries a statement balance (stmtBalance, e.g. from an imported CSV), matches is
+   true/false depending on whether the computed running balance agrees; otherwise matches is null. */
+function computeCashbookRunning(rows, startBalance, keyFn){
+  const ordered = rows.map((r,i)=>({r,i})).sort((a,b)=>
+    (a.r.date||'').localeCompare(b.r.date||'') || (a.i-b.i));
+  let bal = round2(startBalance||0);
+  const out = {};
+  ordered.forEach(({r})=>{
+    bal = round2(bal + (Number(r.received)||0) - (Number(r.spent)||0));
+    let matches = null;
+    if(r.stmtBalance!=null && r.stmtBalance!==''){
+      matches = Math.abs(round2(Number(r.stmtBalance)) - bal) < 0.005;
+    }
+    out[keyFn(r)] = { balance: bal, matches };
+  });
+  return out;
+}
+// The starting balance for the running column = account balance BEFORE the shown cashbook rows'
+// own contribution, so the running column ends at the true book balance for reviewed rows.
+function cashbookRunningBase(accountId, reviewedRows){
+  // current posted book balance for the account
+  const bookBal = getAccountBalance(accountId);
+  // subtract the net effect already contributed by the reviewed cashbook rows we're about to walk,
+  // so walking them forward reproduces the book balance exactly.
+  const net = (reviewedRows||[]).reduce((s,r)=> s + (Number(r.received)||0) - (Number(r.spent)||0), 0);
+  return round2(bookBal - net);
+}
+// Cell renderer for the running balance + match flag.
+function cbBalanceCell(info){
+  if(!info) return `<td class="amt num" style="color:var(--text-muted);">—</td>`;
+  const dot = info.matches===null ? ''
+    : `<span class="cb-recon-dot" style="background:${info.matches?'var(--money-pos)':'var(--red)'};" title="${info.matches?'Running balance matches statement':'Running balance differs from statement'}"></span>`;
+  return `<td class="amt num"><span style="display:inline-flex; align-items:center; gap:6px; justify-content:flex-end;">${dot}${fmt(info.balance)}</span></td>`;
+}
 
 /* ---- Description → account mappings (auto-coding) ---- */
 // Find the first mapping whose phrase is contained in the description (case-insensitive).
@@ -3219,16 +3571,18 @@ function deleteAccountMapping(id){
   saveState(true);
 }
 // Settings UI: add/edit a mapping via modal.
-function openMappingForm(id){
+function openMappingForm(id, seed){
   const m = id ? (S.accountMappings||[]).find(x=>x.id===id) : null;
+  const selectedAcct = m ? m.accountId : (seed && seed.accountId ? seed.accountId : null);
+  const phraseVal = m ? m.phrase : (seed && seed.phrase ? seed.phrase : '');
   const accountOpts = S.accounts.slice().sort((a,b)=>(a.code||'').localeCompare(b.code||''))
-    .map(a=>`<option value="${a.id}" ${m&&m.accountId===a.id?'selected':''}>${escapeHtml(a.code+' '+a.name)}</option>`).join('');
+    .map(a=>`<option value="${a.id}" ${selectedAcct===a.id?'selected':''}>${escapeHtml(a.code+' '+a.name)}</option>`).join('');
   const body = `
     <div class="field"><label>If description contains</label>
-      <input type="text" id="map-phrase" placeholder="e.g. Vodacom" value="${m?escapeHtml(m.phrase):''}"></div>
+      <input type="text" id="map-phrase" placeholder="e.g. Vodacom" value="${escapeHtml(phraseVal)}"></div>
     <div class="field"><label>Code to account</label>
       <select id="map-acct">${accountOpts}</select></div>
-    <div class="hint">Matching is case-insensitive and matches anywhere in the description.</div>
+    <div class="hint">Matching is case-insensitive and matches anywhere in the description. Manage all mappings under Settings.</div>
   `;
   openModal(m?'Edit mapping':'Add mapping', body, [{label:m?'Save changes':'Add mapping', cls:'btn-primary', onclick:`submitMappingForm(${id?`'${id}'`:'null'})`}]);
 }
@@ -3245,7 +3599,10 @@ function submitMappingForm(id){
     if((S.accountMappings||[]).some(x=>x.phrase.toLowerCase()===phrase.toLowerCase())){ showToast('A mapping with that phrase already exists'); return; }
     addAccountMapping(phrase, accountId);
   }
-  closeModal(); showToast('Mapping saved'); renderSettings();
+  closeModal(); showToast('Mapping saved');
+  // re-render wherever we are (Settings shows the list; Cashbook may now auto-apply the new rule)
+  if(VIEW==='settings') renderSettings();
+  else if(VIEW==='cashbook'){ applyMappingsToDrafts(); renderCashbook(); }
 }
 function removeMapping(id){
   const m = (S.accountMappings||[]).find(x=>x.id===id);
@@ -3295,10 +3652,7 @@ function updateCashbookField(id, field, value){
   }
   if(field==='accountSelection'){
     if(!value){ row._mapDismissed = true; } // user cleared it — don't re-apply automatically
-    else if(row.type==='account' && (row.description||'').trim()){
-      // offer to remember this description→account rule (only if none matches yet)
-      maybeOfferMapping(row);
-    }
+    // Note: mappings are now created only via the ⇄ button on a row, not by an automatic prompt.
   }
   saveState();
 }
@@ -3358,6 +3712,7 @@ function postCashbookRow(row){
     type:row.type, accountSelection:row.accountSelection||null,
     contactSelection:row.contactSelection||null, matchDocId:row.matchDocId||null,
     vatType:cbVatTypeId(row), vatRate:row.vatRate||0, spent:row.spent||0, received:row.received||0,
+    stmtBalance: (row.stmtBalance!=null? row.stmtBalance : null),
   };
 
   if(row.type==='contact'){
@@ -3417,6 +3772,7 @@ function postCashbookRow(row){
   entry.cashbookMeta = meta;
   S.cashbookReviewed = S.cashbookReviewed || [];
   S.cashbookReviewed.push(meta);
+  maybeOfferAssetFromEntry(entry); // offer to register if this bought a fixed asset
   return {ok:true};
 }
 function commitCashbookRow(id){
@@ -3502,6 +3858,7 @@ function cashbookRowHtml(r){
       <td>${vatTypeLabel(cbVatTypeId(r))}</td>
       <td class="amt num">${r.spent? fmt(r.spent):''}</td>
       <td class="amt num">${r.received? fmt(r.received):''}</td>
+      ${cbBalanceCell(CB_RUN_NEW[r.id])}
       <td class="cb-actions"></td>
     </tr>`;
   }
@@ -3523,11 +3880,21 @@ function cashbookRowHtml(r){
       : `<select onchange="updateCashbookField('${r.id}','vatType', this.value)">${vatTypeOptions(cbVatTypeId(r))}</select>`}</td>
     <td><input type="number" class="num cb-spent" min="0" step="0.01" value="${r.spent||''}" placeholder="0.00" onchange="setCashbookAmount('${r.id}','spent',this.value,this)"></td>
     <td><input type="number" class="num cb-received" min="0" step="0.01" value="${r.received||''}" placeholder="0.00" onchange="setCashbookAmount('${r.id}','received',this.value,this)"></td>
+    ${cbBalanceCell(CB_RUN_NEW[r.id])}
     <td class="cb-actions">
       <button class="cb-add-btn" onclick="insertCashbookRow()" title="Add a transaction (new row)">+</button>
       <button class="cb-del-btn" onclick="deleteCashbookRow('${r.id}')" title="Delete this transaction">−</button>
+      <button class="cb-map-btn" onclick="openMappingFromRow('${r.id}')" title="Create a description→account mapping from this row">⇄</button>
     </td>
   </tr>`;
+}
+// Open the mapping form pre-filled from a cashbook row (its description + current account allocation).
+function openMappingFromRow(id){
+  const row = (S.cashbookDrafts||[]).find(r=>r.id===id);
+  if(!row){ openMappingForm(); return; }
+  const phrase = (row.description||'').trim();
+  const acctId = row.type==='account' ? (row.accountSelection||'') : '';
+  openMappingForm(null, {phrase, accountId:acctId});
 }
 // Ticking a New Transactions checkbox commits that row straight to the books.
 function tickCommitCashbookRow(id){
@@ -3633,7 +4000,12 @@ function renderCashbook(){
   if(!CASHBOOK_ACCOUNT || !bankAccounts.find(a=>a.id===CASHBOOK_ACCOUNT)) CASHBOOK_ACCOUNT = bankAccounts[0].id;
   const tab = CASHBOOK_TAB;
   const q = (CASHBOOK_SEARCH||'').trim().toLowerCase();
+  const df = CASHBOOK_FROM || '', dt = CASHBOOK_TO || '';
+  const hasDateFilter = !!(df || dt);
   const matchRow = r => {
+    // date range (inclusive)
+    if(df && (r.date||'') < df) return false;
+    if(dt && (r.date||'') > dt) return false;
     if(!q) return true;
     const hay = [r.payee, r.description, r.reference, selectionLabel(r), cbTypeLabel(r.type),
       r.spent?String(r.spent):'', r.received?String(r.received):'', fmtDateShort(r.date)]
@@ -3643,8 +4015,23 @@ function renderCashbook(){
   const newRows = (S.cashbookDrafts||[]).filter(r=>r.accountId===CASHBOOK_ACCOUNT).filter(matchRow);
   const reviewed = (S.cashbookReviewed||[]).filter(r=>r.accountId===CASHBOOK_ACCOUNT).filter(matchRow);
   const newTotalUnfiltered = (S.cashbookDrafts||[]).filter(r=>r.accountId===CASHBOOK_ACCOUNT).length;
+  // Running balance for both tabs. Reviewed rows are posted, so their running column ends at the
+  // account's current book balance. New rows are drafts, projected forward from the book balance.
+  const allReviewedForAcct = (S.cashbookReviewed||[]).filter(r=>r.accountId===CASHBOOK_ACCOUNT);
+  const revBase = cashbookRunningBase(CASHBOOK_ACCOUNT, allReviewedForAcct);
+  CB_RUN_REV = computeCashbookRunning(allReviewedForAcct, revBase, r=>r.cashbookRef);
+  const allNewForAcct = (S.cashbookDrafts||[]).filter(r=>r.accountId===CASHBOOK_ACCOUNT);
+  // new drafts start from the current book balance (what the account is now) and project forward
+  CB_RUN_NEW = computeCashbookRunning(allNewForAcct, getAccountBalance(CASHBOOK_ACCOUNT), r=>r.id);
+  // When filtering (text or date), make sure the visible tab is one that actually has matches,
+  // so results aren't hidden on the other tab. If only one tab matches, switch to it.
+  if(q || hasDateFilter){
+    if(tab==='new' && newRows.length===0 && reviewed.length>0) CASHBOOK_TAB = 'reviewed';
+    else if(tab==='reviewed' && reviewed.length===0 && newRows.length>0) CASHBOOK_TAB = 'new';
+  }
+  const activeTab = CASHBOOK_TAB;
   setTopbar('Cashbook', 'Quick-capture and process bank transactions row by row',
-    tab==='new' ? `
+    activeTab==='new' ? `
       <button class="btn btn-ghost" onclick="openCsvImportForm()">⇪ Import CSV</button>
       <button class="btn btn-ghost" onclick="insertCashbookRow()">+ Insert row</button>
       <button class="btn btn-primary" onclick="addAllCashbookRows()">✓ Add all valid rows</button>
@@ -3653,36 +4040,55 @@ function renderCashbook(){
     `);
 
   const bankBal = getAccountBalance(CASHBOOK_ACCOUNT);
-  // header strip: bank picker + balance + to-review count (mirrors the review screen)
-  let html = `<div class="card" style="margin-bottom:14px;"><div class="card-body" style="display:flex; align-items:center; gap:22px; padding:14px 18px; flex-wrap:wrap;">
+  // header strip: bank picker + compact square stat tiles + search
+  let html = `<div class="card" style="margin-bottom:14px;"><div class="card-body" style="display:flex; align-items:center; gap:14px; padding:12px 16px; flex-wrap:wrap;">
       <div style="display:flex; align-items:center; gap:10px;">
         <label style="margin:0;">Bank or Credit Card</label>
         <select style="max-width:280px;" onchange="CASHBOOK_ACCOUNT=this.value; renderCashbook();">
           ${bankAccounts.map(a=>`<option value="${a.id}" ${a.id===CASHBOOK_ACCOUNT?'selected':''}>${a.name}</option>`).join('')}
         </select>
       </div>
-      <div style="border-left:1px solid var(--border); padding-left:22px;">
-        <div class="num" style="font-size:20px; font-weight:700; color:var(--accent-dark);">${fmt(bankBal)}</div>
-        <div style="font-size:11px; color:var(--text-muted);">Bank balance</div>
+      <div class="cb-stats">
+        <div class="cb-stat">
+          <div class="cb-stat-val num" style="color:var(--accent-dark);">${fmt(bankBal)}</div>
+          <div class="cb-stat-lbl">Bank balance</div>
+        </div>
+        <div class="cb-stat">
+          <div class="cb-stat-val">${newTotalUnfiltered}</div>
+          <div class="cb-stat-lbl">To be reviewed</div>
+        </div>
       </div>
-      <div>
-        <div style="font-size:20px; font-weight:700;">${newTotalUnfiltered}</div>
-        <div style="font-size:11px; color:var(--text-muted);">To be reviewed</div>
-      </div>
-      <div style="margin-left:auto; display:flex; align-items:center; gap:8px;">
+      <div style="margin-left:auto; display:flex; align-items:center; gap:8px; flex-wrap:wrap;">
+        <div style="display:flex; align-items:center; gap:6px;">
+          <label style="margin:0; font-size:11px;">From</label>
+          <input type="date" id="cb-from" value="${CASHBOOK_FROM}" onchange="setCashbookDateFilter('from', this.value)" style="width:145px;" title="Show transactions on or after this date">
+          <label style="margin:0; font-size:11px;">To</label>
+          <input type="date" id="cb-to" value="${CASHBOOK_TO}" onchange="setCashbookDateFilter('to', this.value)" style="width:145px;" title="Show transactions on or before this date">
+          ${(CASHBOOK_FROM||CASHBOOK_TO)? `<button class="btn btn-ghost btn-sm" onclick="clearCashbookDateFilter()">Clear dates</button>`:''}
+        </div>
         <input type="search" id="cb-search" placeholder="Search transactions…" value="${escapeHtml(CASHBOOK_SEARCH)}"
-          oninput="setCashbookSearch(this.value)" style="min-width:220px;">
+          oninput="setCashbookSearch(this.value)" style="min-width:200px;">
         ${CASHBOOK_SEARCH? `<button class="btn btn-ghost btn-sm" onclick="setCashbookSearch('')">Clear</button>`:''}
       </div>
     </div></div>`;
 
-  // tab bar
+  // tab bar — when searching, show how many matches are in each tab so results elsewhere are visible
   html += `<div class="tabs">
-    <div class="tab ${tab==='new'?'active':''}" onclick="CASHBOOK_TAB='new'; renderCashbook();">New Transactions${newRows.length? ` (${newRows.length})`:''}</div>
-    <div class="tab ${tab==='reviewed'?'active':''}" onclick="CASHBOOK_TAB='reviewed'; renderCashbook();">Reviewed${reviewed.length? ` (${reviewed.length})`:''}</div>
+    <div class="tab ${activeTab==='new'?'active':''}" onclick="CASHBOOK_TAB='new'; renderCashbook();">New Transactions${q? ` (${newRows.length} match${newRows.length===1?'':'es'})` : (newRows.length? ` (${newRows.length})`:'')}</div>
+    <div class="tab ${activeTab==='reviewed'?'active':''}" onclick="CASHBOOK_TAB='reviewed'; renderCashbook();">Reviewed${q? ` (${reviewed.length} match${reviewed.length===1?'':'es'})` : (reviewed.length? ` (${reviewed.length})`:'')}</div>
   </div>`;
 
-  if(tab==='new'){
+  if((q || hasDateFilter) && (newRows.length || reviewed.length)){
+    const acctName = escapeHtml((bankAccounts.find(a=>a.id===CASHBOOK_ACCOUNT)||{}).name||'this account');
+    const bits = [];
+    if(q) bits.push(`matching “${escapeHtml(CASHBOOK_SEARCH)}”`);
+    if(df && dt) bits.push(`dated ${fmtDateShort(df)} to ${fmtDateShort(dt)}`);
+    else if(df) bits.push(`dated from ${fmtDateShort(df)}`);
+    else if(dt) bits.push(`dated up to ${fmtDateShort(dt)}`);
+    html += `<div class="hint" style="margin:-4px 0 10px;">Showing transactions ${bits.join(', ')} in <strong>${acctName}</strong> — ${newRows.length} in New, ${reviewed.length} in Reviewed.</div>`;
+  }
+
+  if(activeTab==='new'){
     html += `<div class="card">`;
     if(newRows.length){
       const sortedNew = sortCashbookRows(newRows, 'new');
@@ -3692,11 +4098,11 @@ function renderCashbook(){
       const start = (CASHBOOK_PAGE.new-1)*size;
       const pageRows = sortedNew.slice(start, start+size);
       html += `<div class="card-body" style="display:flex; justify-content:flex-end; border-bottom:1px solid var(--border); padding:10px 18px;">${cashbookPageSizeControl('new', newRows.length)}</div>`;
-      html += `<div style="overflow-x:auto;"><table class="cashbook-table"><thead><tr>
-        <th style="width:32px; text-align:center;"><input type="checkbox" title="Select all on this page" onchange="toggleAllCashbookTicks('cb-new-body', this.checked)"></th>
+      html += `<div style="overflow-x:auto;"><table class="cashbook-table" id="cb-new-table">${cashbookColgroup()}<thead><tr>
+        <th style="text-align:center;"><input type="checkbox" title="Select all on this page" onchange="toggleAllCashbookTicks('cb-new-body', this.checked)"></th>
         ${cbSortTh('new','date','Date')}${cbSortTh('new','payee','Payee')}${cbSortTh('new','description','Description')}${cbSortTh('new','type','Type')}
         ${cbSortTh('new','selection','Selection')}${cbSortTh('new','reference','Reference')}${cbSortTh('new','vat','VAT')}
-        ${cbSortTh('new','spent','Spent','amt')}${cbSortTh('new','received','Received','amt')}<th></th>
+        ${cbSortTh('new','spent','Spent','amt')}${cbSortTh('new','received','Received','amt')}${cbSortTh('new','balance','Balance','amt')}<th></th>
       </tr></thead><tbody id="cb-new-body">${pageRows.map(cashbookRowHtml).join('')}</tbody></table></div>`;
       html += cashbookPager('new', newRows.length);
       html += `<div class="card-body" style="display:flex; justify-content:space-between; align-items:center; gap:10px; border-top:1px solid var(--border); flex-wrap:wrap;">
@@ -3704,7 +4110,7 @@ function renderCashbook(){
         <button class="btn btn-primary btn-sm" onclick="markSelectedCashbookReviewed()">✓ Mark as reviewed</button>
       </div>`;
     } else {
-      if(q) html += emptyState('No matches', `No new transactions match “${escapeHtml(CASHBOOK_SEARCH)}”.`, "setCashbookSearch('')", 'Clear search');
+      if(q || hasDateFilter) html += emptyState('No matches', `No new transactions match the current filter.`, "clearCashbookFilters()", 'Clear filters');
       else html += emptyState('No new transactions', 'Insert a row or import a CSV to start capturing transactions into the cashbook.', 'insertCashbookRow()', '+ Insert row');
     }
     html += `</div>
@@ -3713,6 +4119,8 @@ function renderCashbook(){
     html += renderCashbookReviewed(reviewed);
   }
   document.getElementById('content').innerHTML = html;
+  attachColumnResizers('cb-new-table');
+  attachColumnResizers('cb-rev-table');
 }
 function toggleAllCashbookTicks(bodyId, checked){
   document.querySelectorAll('#'+bodyId+' .cb-tick').forEach(cb=>{ cb.checked = checked; });
@@ -3739,7 +4147,7 @@ function selectionLabel(meta){
 }
 function renderCashbookReviewed(reviewed){
   if(!reviewed.length){
-    if((CASHBOOK_SEARCH||'').trim()) return `<div class="card">${emptyState('No matches', `No reviewed transactions match “${escapeHtml(CASHBOOK_SEARCH)}”.`, "setCashbookSearch('')", 'Clear search')}</div>`;
+    if((CASHBOOK_SEARCH||'').trim() || CASHBOOK_FROM || CASHBOOK_TO) return `<div class="card">${emptyState('No matches', `No reviewed transactions match the current filter.`, "clearCashbookFilters()", 'Clear filters')}</div>`;
     return `<div class="card">${emptyState('Nothing reviewed yet', 'Transactions you add from the New Transactions tab will appear here.', null)}</div>`;
   }
   const allRows = sortCashbookRows(reviewed, 'reviewed');
@@ -3754,10 +4162,10 @@ function renderCashbookReviewed(reviewed){
   const totalRecv = allRows.reduce((s,r)=>s+(r.received||0),0);
   return `<div class="card">
     <div class="card-body" style="display:flex; justify-content:flex-end; border-bottom:1px solid var(--border); padding:10px 18px;">${cashbookPageSizeControl('reviewed', total)}</div>
-    <div style="overflow-x:auto;"><table class="cashbook-table"><thead><tr>
-      <th style="width:32px; text-align:center;"><input type="checkbox" title="Select all on this page" onchange="toggleAllCashbookTicks('cb-rev-body', this.checked)"></th>
+    <div style="overflow-x:auto;"><table class="cashbook-table" id="cb-rev-table">${cashbookColgroup()}<thead><tr>
+      <th style="text-align:center;"><input type="checkbox" title="Select all on this page" onchange="toggleAllCashbookTicks('cb-rev-body', this.checked)"></th>
       ${cbSortTh('reviewed','date','Date')}${cbSortTh('reviewed','payee','Payee')}${cbSortTh('reviewed','description','Description')}${cbSortTh('reviewed','type','Type')}${cbSortTh('reviewed','selection','Selection')}
-      ${cbSortTh('reviewed','reference','Reference')}${cbSortTh('reviewed','vat','VAT')}${cbSortTh('reviewed','spent','Spent','amt')}${cbSortTh('reviewed','received','Received','amt')}<th></th>
+      ${cbSortTh('reviewed','reference','Reference')}${cbSortTh('reviewed','vat','VAT')}${cbSortTh('reviewed','spent','Spent','amt')}${cbSortTh('reviewed','received','Received','amt')}${cbSortTh('reviewed','balance','Balance','amt')}<th></th>
     </tr></thead><tbody id="cb-rev-body">
       ${rows.map(r=>{ const locked = isDateInClosedVatPeriod(r.date); return `<tr data-ref="${r.cashbookRef}" class="${locked?'cb-locked-row':''}">
         <td style="text-align:center;">${locked? `<span class="cb-lock" title="Locked — in a closed VAT period">🔒</span>` : `<input type="checkbox" class="cb-tick">`}</td>
@@ -3770,10 +4178,11 @@ function renderCashbookReviewed(reviewed){
         <td>${vatTypeLabel(cbVatTypeId(r))}</td>
         <td class="amt num">${r.spent? fmt(r.spent):''}</td>
         <td class="amt num">${r.received? fmt(r.received):''}</td>
+        ${cbBalanceCell(CB_RUN_REV[r.cashbookRef])}
         <td class="cb-actions">${locked? `<span style="font-size:11px; color:var(--text-muted);">Locked</span>` : `<button class="cb-undo-btn" onclick="undoReviewedCashbook('${r.cashbookRef}')" title="Move back to New Transactions">↩ Move back</button>`}</td>
       </tr>`; }).join('')}
       <tr class="li-total-row"><td colspan="8">Total — ${total} reviewed</td>
-        <td class="amt num">${fmt(totalSpent)}</td><td class="amt num">${fmt(totalRecv)}</td><td></td></tr>
+        <td class="amt num">${fmt(totalSpent)}</td><td class="amt num">${fmt(totalRecv)}</td><td></td><td></td></tr>
     </tbody></table></div>
     ${cashbookPager('reviewed', total)}
     <div class="card-body" style="display:flex; justify-content:space-between; align-items:center; gap:10px; border-top:1px solid var(--border); flex-wrap:wrap;">
@@ -4645,12 +5054,160 @@ function renderAccounts(){
     if(!accs.length) return;
     html += `<div class="section-title">${t}s</div><div class="card" style="margin-bottom:16px;">
       <table><thead><tr><th style="width:70px;">Code</th><th>Name</th><th class="amt">Balance</th><th></th></tr></thead><tbody>
-      ${accs.map(a=>`<tr><td class="mono">${a.code}</td><td>${a.name}${a.isBank?' <span class="badge badge-open">Bank</span>':''}</td>
+      ${accs.map(a=>`<tr><td class="mono">${a.code}</td><td>${a.name}${a.isBank?' <span class="badge badge-open">Bank</span>':''}${a.isFixedAsset?' <span class="badge badge-draft">Fixed asset</span>':''}</td>
         <td class="amt num">${fmt(getAccountBalance(a.id))}</td>
-        <td style="text-align:right;">${a.system?'':`<button class="icon-btn" onclick="deleteAccount('${a.id}')">Delete</button>`}</td></tr>`).join('')}
+        <td style="text-align:right; white-space:nowrap;">${a.type==='Asset' && !a.isBank ? `<button class="icon-btn" onclick="toggleFixedAsset('${a.id}')" title="Mark whether purchases to this account are fixed assets">${a.isFixedAsset?'Unmark fixed':'Mark fixed asset'}</button>`:''} ${a.system?'':`<button class="icon-btn" onclick="deleteAccount('${a.id}')">Delete</button>`}</td></tr>`).join('')}
       </tbody></table></div>`;
   });
   document.getElementById('content').innerHTML = html;
+}
+function toggleFixedAsset(id){
+  const a = S.accounts.find(x=>x.id===id);
+  if(!a || a.type!=='Asset'){ showToast('Only Asset accounts can be fixed-asset accounts'); return; }
+  a.isFixedAsset = !a.isFixedAsset;
+  saveState(true);
+  showToast(a.isFixedAsset? `${a.name} is now a fixed-asset account` : `${a.name} is no longer a fixed-asset account`);
+  renderAccounts();
+}
+
+/* ============================= ASSET REGISTER & REPORT ============================= */
+let ASSET_EDIT_ID = null;
+let ASSET_AS_OF = '';
+function renderAssets(){
+  setTopbar('Asset Register', 'Fixed assets, depreciation, and book value', `<button class="btn btn-primary" onclick="openAssetForm()">+ Add asset</button>`);
+  const asOf = ASSET_AS_OF || todayStr();
+  const assets = (S.assets||[]).slice().sort((a,b)=>(a.date||'').localeCompare(b.date||''));
+  // group by category (account name) for the report
+  const byCat = {};
+  assets.forEach(a=>{ const k=a.category||'Uncategorised'; (byCat[k]=byCat[k]||[]).push(a); });
+  const totalCost = round2(assets.reduce((s,a)=>s+(Number(a.cost)||0),0));
+  const totalDep = round2(assets.reduce((s,a)=>s+assetAccumulatedDep(a,asOf),0));
+  const totalBook = round2(totalCost-totalDep);
+
+  let html = `
+    <div class="card" style="margin-bottom:16px;">
+      <div class="card-head" style="flex-wrap:wrap;"><h3>Asset report — book values as at</h3>
+        <div style="display:flex; gap:8px; align-items:center; margin-left:auto;">
+          <input type="date" value="${asOf}" style="width:150px;" onchange="ASSET_AS_OF=this.value; renderAssets();">
+          <button class="btn btn-ghost btn-sm" onclick="exportReportCsv(assetReportModel())" title="Export to Excel (CSV)">⊞ Excel</button>
+          <button class="btn btn-ghost btn-sm" onclick="exportReportPdf(assetReportModel())" title="Export to PDF">⎙ PDF</button>
+        </div>
+      </div>
+      <div class="grid-4" style="padding:0 18px 16px;">
+        <div class="kpi"><div class="label">Assets</div><div class="value num">${assets.length}</div><div class="delta">on register</div></div>
+        <div class="kpi"><div class="label">Total cost</div><div class="value num">${fmt(totalCost)}</div><div class="delta">purchase value</div></div>
+        <div class="kpi"><div class="label">Accumulated depreciation</div><div class="value num">${fmt(totalDep)}</div><div class="delta">to ${fmtDateShort(asOf)}</div></div>
+        <div class="kpi"><div class="label">Net book value</div><div class="value num">${fmt(totalBook)}</div><div class="delta">cost − depreciation</div></div>
+      </div>
+    </div>`;
+
+  if(!assets.length){
+    html += `<div class="card"><div class="card-body">${emptyState('No assets yet', 'Add one here, or when you buy an asset through the Cashbook or a journal entry coded to a fixed-asset account, Ledgerly will offer to add it.', 'openAssetForm()', '+ Add asset')}</div></div>`;
+    document.getElementById('content').innerHTML = html;
+    return;
+  }
+
+  // Register grouped by category
+  Object.keys(byCat).sort().forEach(cat=>{
+    const list = byCat[cat];
+    const cCost = round2(list.reduce((s,a)=>s+(Number(a.cost)||0),0));
+    const cDep = round2(list.reduce((s,a)=>s+assetAccumulatedDep(a,asOf),0));
+    html += `<div class="section-title">${escapeHtml(cat)}</div><div class="card" style="margin-bottom:16px;">
+      <div style="overflow-x:auto;"><table><thead><tr>
+        <th>Asset</th><th>Purchased</th><th>Method</th><th class="amt">Cost</th><th class="amt">Annual dep.</th><th class="amt">Accum. dep.</th><th class="amt">Book value</th><th></th>
+      </tr></thead><tbody>
+        ${list.map(a=>{
+          const accum = assetAccumulatedDep(a, asOf);
+          const book = round2((Number(a.cost)||0)-accum);
+          return `<tr>
+            <td><strong>${escapeHtml(a.name)}</strong></td>
+            <td>${fmtDateShort(a.date)}</td>
+            <td>${a.usefulLifeYears? `Straight-line · ${a.usefulLifeYears}yr`:'—'}</td>
+            <td class="amt num">${fmt(a.cost)}</td>
+            <td class="amt num">${fmt(assetAnnualDep(a))}</td>
+            <td class="amt num">${fmt(accum)}</td>
+            <td class="amt num"><strong>${fmt(book)}</strong></td>
+            <td style="text-align:right; white-space:nowrap;"><button class="icon-btn" onclick="openAssetForm('${a.id}')">Edit</button></td>
+          </tr>`;
+        }).join('')}
+        <tr class="li-total-row"><td colspan="3">${escapeHtml(cat)} subtotal</td>
+          <td class="amt num">${fmt(cCost)}</td><td></td><td class="amt num">${fmt(cDep)}</td><td class="amt num">${fmt(round2(cCost-cDep))}</td><td></td></tr>
+      </tbody></table></div></div>`;
+  });
+
+  document.getElementById('content').innerHTML = html;
+  if(ASSET_EDIT_ID){ const id=ASSET_EDIT_ID; ASSET_EDIT_ID=null; openAssetForm(id); }
+}
+function openAssetForm(id){
+  const a = id ? (S.assets||[]).find(x=>x.id===id) : null;
+  const assetAccts = S.accounts.filter(x=>x.type==='Asset' && !x.isBank).sort((x,y)=>(x.code||'').localeCompare(y.code||''));
+  const body = `
+    <div class="field"><label>Asset name</label><input type="text" id="as-name" value="${a?escapeHtml(a.name):''}" placeholder="e.g. Dell laptop"></div>
+    <div class="field-row">
+      <div class="field"><label>Cost</label><input type="number" id="as-cost" step="0.01" value="${a?a.cost:''}" placeholder="0.00"></div>
+      <div class="field"><label>Purchase date</label><input type="date" id="as-date" value="${a?a.date:todayStr()}"></div>
+    </div>
+    <div class="field"><label>Asset account (category)</label>
+      <select id="as-acct">${assetAccts.map(x=>`<option value="${x.id}" ${a&&a.accountId===x.id?'selected':''}>${escapeHtml(x.code+' '+x.name)}</option>`).join('')}</select></div>
+    <div class="field-row">
+      <div class="field"><label>Useful life (years)</label><input type="number" id="as-life" step="1" min="0" value="${a?a.usefulLifeYears:5}"></div>
+      <div class="field"><label>Residual / salvage value</label><input type="number" id="as-residual" step="0.01" value="${a?(a.residual||0):0}"></div>
+    </div>
+    <div class="hint">Depreciation is straight-line: (cost − residual) ÷ useful life, spread monthly from the purchase date. Book value never drops below the residual value.</div>
+  `;
+  const actions = a
+    ? [{label:'Delete', cls:'btn-danger', onclick:`deleteAssetAction('${a.id}')`}, {label:'Save', cls:'btn-primary', onclick:`submitAssetForm('${a.id}')`}]
+    : [{label:'Add asset', cls:'btn-primary', onclick:`submitAssetForm()`}];
+  openModal(a?'Edit asset':'Add asset', body, actions);
+}
+function submitAssetForm(id){
+  const name = document.getElementById('as-name').value.trim();
+  const cost = round2(Number(document.getElementById('as-cost').value)||0);
+  const date = document.getElementById('as-date').value;
+  const accountId = document.getElementById('as-acct').value;
+  const usefulLifeYears = Number(document.getElementById('as-life').value)||0;
+  const residual = round2(Number(document.getElementById('as-residual').value)||0);
+  if(!name){ showToast('Enter an asset name'); return; }
+  if(cost<=0){ showToast('Enter the asset cost'); return; }
+  if(!date){ showToast('Enter the purchase date'); return; }
+  const acct = S.accounts.find(x=>x.id===accountId);
+  const category = acct ? acct.name : '';
+  if(id){
+    const a = (S.assets||[]).find(x=>x.id===id);
+    if(a){ Object.assign(a, {name, cost, date, accountId, category, usefulLifeYears, residual}); saveState(true); }
+  } else {
+    addAsset({name, cost, date, accountId, category, usefulLifeYears, residual, method:'straight-line'});
+  }
+  closeModal(); showToast('Asset saved'); renderAssets();
+}
+function deleteAssetAction(id){
+  if(!confirm('Remove this asset from the register? (This does not reverse any accounting entry.)')) return;
+  deleteAsset(id); closeModal(); showToast('Asset removed'); renderAssets();
+}
+function assetReportModel(){
+  const asOf = ASSET_AS_OF || todayStr();
+  const assets = (S.assets||[]).slice().sort((a,b)=>(a.category||'').localeCompare(b.category||'')||(a.date||'').localeCompare(b.date||''));
+  const rows=[], rowClasses=[];
+  const push=(cells,c)=>{ rows.push(cells); rowClasses.push(c||''); };
+  const byCat = {};
+  assets.forEach(a=>{ const k=a.category||'Uncategorised'; (byCat[k]=byCat[k]||[]).push(a); });
+  let tCost=0, tDep=0;
+  Object.keys(byCat).sort().forEach(cat=>{
+    push([cat.toUpperCase(),'','','','',''],'section');
+    let cCost=0,cDep=0;
+    byCat[cat].forEach(a=>{
+      const accum = assetAccumulatedDep(a, asOf); const book = round2((Number(a.cost)||0)-accum);
+      cCost+=Number(a.cost)||0; cDep+=accum;
+      push([a.name, fmtDateShort(a.date), round2(a.cost), round2(assetAnnualDep(a)), round2(accum), round2(book)]);
+    });
+    push([cat+' subtotal','', round2(cCost),'', round2(cDep), round2(cCost-cDep)],'total');
+    tCost+=cCost; tDep+=cDep;
+  });
+  push(['TOTAL','', round2(tCost),'', round2(tDep), round2(tCost-tDep)],'grand');
+  return { title:'Fixed Asset Register',
+    meta:[{label:'Book values as at',value:fmtDateShort(asOf)}],
+    columns:['Asset','Purchased', S.settings.currency+' Cost', S.settings.currency+' Annual dep.', S.settings.currency+' Accum. dep.', S.settings.currency+' Book value'],
+    rows, rowClasses };
 }
 function openAccountForm(){
   const body = `
@@ -4664,6 +5221,7 @@ function openAccountForm(){
     <div id="a-range-hint" class="hint" style="margin-top:-4px;"></div>
     <div class="field"><label>Account name</label><input type="text" id="a-name" placeholder="e.g. Marketing"></div>
     <div class="field"><label><input type="checkbox" id="a-isbank" style="width:auto; display:inline-block; margin-right:6px;"> This is a bank account</label></div>
+    <div class="field"><label><input type="checkbox" id="a-isfixed" style="width:auto; display:inline-block; margin-right:6px;"> This is a fixed-asset account (purchases prompt an asset-register entry)</label></div>
   `;
   openModal('New account', body, [{label:'Create account', cls:'btn-primary', onclick:'submitAccountForm()'}]);
   updateAccountRangeHint();
@@ -4682,6 +5240,8 @@ function submitAccountForm(){
   const type = document.getElementById('a-type').value;
   const name = document.getElementById('a-name').value.trim();
   const isBank = document.getElementById('a-isbank').checked;
+  const isFixedEl = document.getElementById('a-isfixed');
+  const isFixedAsset = isFixedEl ? isFixedEl.checked : false;
   if(!code || !name){ showToast('Enter a code and name'); return; }
   if(S.accounts.some(a=>a.code===code)){ showToast('That code is already used'); return; }
   // enforce the number-range rule: P&L items 1000–4999, Balance Sheet items 5000–9999
@@ -4695,7 +5255,8 @@ function submitAccountForm(){
     showToast('A bank account must be an Asset (Balance Sheet, 5000–9999)');
     return;
   }
-  S.accounts.push({id:uid('acc'), code, name, type, isBank});
+  if(isFixedAsset && type!=='Asset'){ showToast('Only Asset accounts can be marked as fixed-asset accounts'); return; }
+  S.accounts.push({id:uid('acc'), code, name, type, isBank, isFixedAsset});
   closeModal(); showToast('Account created'); navigate('accounts');
 }
 function deleteAccount(id){
