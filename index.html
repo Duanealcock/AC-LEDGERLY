@@ -275,13 +275,18 @@
   .cashbook-table th{ position:relative; }
   .cb-col-resizer{ position:absolute; top:0; right:-3px; width:7px; height:100%; cursor:col-resize; user-select:none; z-index:2; }
   .cb-col-resizer:hover, .cb-col-resizer.dragging{ background:linear-gradient(90deg, transparent 40%, var(--accent) 40%, var(--accent) 60%, transparent 60%); }
-  .cb-add-btn, .cb-del-btn, .cb-map-btn{ width:24px; height:24px; border-radius:50%; border:none; cursor:pointer; color:#fff; font-size:16px; font-weight:700; display:inline-flex; align-items:center; justify-content:center; line-height:1; }
+  .cb-add-btn, .cb-del-btn, .cb-map-btn, .cb-alloc-btn{ width:24px; height:24px; border-radius:50%; border:none; cursor:pointer; color:#fff; font-size:16px; font-weight:700; display:inline-flex; align-items:center; justify-content:center; line-height:1; }
   .cb-add-btn{ background:var(--money-pos); }
   .cb-add-btn:hover{ background:#155943; }
   .cb-del-btn{ background:var(--red); }
   .cb-del-btn:hover{ filter:brightness(0.9); }
   .cb-map-btn{ background:var(--ink); font-size:13px; }
   .cb-map-btn:hover{ background:var(--accent-dark); }
+  .cb-alloc-btn{ background:var(--accent-dark); font-size:14px; }
+  .cb-alloc-btn:hover{ filter:brightness(1.1); }
+  .alloc-doc-row{ display:flex; align-items:center; gap:10px; padding:8px 10px; border:1px solid var(--border); border-radius:8px; margin-bottom:6px; }
+  .alloc-doc-row.picked{ border-color:var(--accent); background:var(--surface-2); }
+  .alloc-summary{ display:flex; justify-content:space-between; gap:16px; padding:10px 12px; background:var(--surface-2); border-radius:8px; margin:10px 0; font-size:13px; }
   .cb-recon-dot{ width:9px; height:9px; border-radius:50%; display:inline-block; flex:0 0 auto; }
   .cb-undo-btn{ padding:4px 10px; border-radius:6px; border:1px solid var(--border-strong); background:#fff; color:var(--text-muted); cursor:pointer; font-size:11.5px; font-weight:600; font-family:inherit; white-space:nowrap; }
   .cb-undo-btn:hover{ border-color:var(--red); color:var(--red); }
@@ -499,7 +504,7 @@ function defaultData(){
       {id:'acc_unalloc_exp', code:'3900', name:'Unallocated Expense', type:'Expense', system:true},
       {id:'acc_share_capital', code:'5000', name:'Share Capital', type:'Equity', system:true},
       {id:'acc_equity', code:'5200', name:'Retained Income', type:'Equity', system:true},
-      {id:'acc_bank', code:'5010', name:'Business Bank Account', type:'Asset', isBank:true, system:true},
+      {id:'acc_bank', code:'8400', name:'Business Bank Account', type:'Asset', isBank:true, system:true},
       {id:'acc_ar', code:'5100', name:'Accounts Receivable', type:'Asset', system:true},
       {id:'acc_ap', code:'6000', name:'Accounts Payable', type:'Liability', system:true},
       {id:'acc_vatr', code:'9500', name:'VAT Receivable (Input)', type:'Asset', system:true},
@@ -634,6 +639,15 @@ function migrateCompanyShape(co){
       if(!co.accounts.some(a=>a.id===na.id || a.code===na.code)) co.accounts.push(na);
     });
     co._defaultsV5 = true;
+  }
+  // V6: change the default Business Bank Account code from 5010 to 8400.
+  if(!co._defaultsV6 && Array.isArray(co.accounts)){
+    const bank = co.accounts.find(a=>a.id==='acc_bank');
+    // only move it if it's still on the old default code and 8400 isn't already taken
+    if(bank && bank.code==='5010' && !co.accounts.some(a=>a.code==='8400')){
+      bank.code = '8400';
+    }
+    co._defaultsV6 = true;
   }
 }
 async function loadState(){
@@ -3203,11 +3217,14 @@ function confirmCsvImport(){
   // Convert each imported row into a Cashbook draft row so it can be allocated in the
   // full cashbook grid (Account/Contact, VAT, Selection) before being committed to the books.
   S.cashbookDrafts = S.cashbookDrafts || [];
+  const importedIds = [];
+  const importBatch = 'imp-'+uid('b');
   rows.forEach(r=>{
     const draft = blankCashbookRow(bank);
     draft.date = r.date;
     draft.description = r.desc;
     if(r.stmtBalance!=null) draft.stmtBalance = r.stmtBalance; // statement running balance for auto-recon flag
+    draft.importBatch = importBatch;
     // preserve any allocation already chosen in the preview
     draft.type = r.allocType || 'account';
     if(r.amount>0) draft.received = Math.abs(r.amount);
@@ -3220,15 +3237,143 @@ function confirmCsvImport(){
       draft.matchDocId = r.matchDocId || null;
     }
     S.cashbookDrafts.push(draft);
+    importedIds.push(draft.id);
   });
   const count = rows.length;
-  const mapped = (S.cashbookDrafts||[]).filter(d=>d.accountId===bank && d.accountSelection).length;
+  const hadBalanceCol = rows.some(r=>r.stmtBalance!=null);
   CSV_IMPORT = null;
   CASHBOOK_ACCOUNT = bank;
   closeModal();
   saveState(true);
   showToast(`${count} transaction${count===1?'':'s'} sent to the Cashbook — allocate and add them`);
   navigate('cashbook');
+  // Automated reconciliation: if the statement included a balance column, check it now.
+  if(hadBalanceCol){
+    setTimeout(()=> autoReconcileImport(bank, importBatch), 120);
+  } else {
+    setTimeout(()=> showToast('Tip: map a statement Balance column on import to auto-reconcile'), 400);
+  }
+}
+// ---- Automated reconciliation of an imported batch against its statement balance column ----
+function buildImportReconResult(bankId, importBatch){
+  const acc = S.accounts.find(a=>a.id===bankId);
+  const rows = (S.cashbookDrafts||[]).filter(r=>r.importBatch===importBatch)
+    .slice().sort((a,b)=> (a.date||'').localeCompare(b.date||''));
+  // Base = book balance before these drafts (drafts aren't posted, so it's the current balance).
+  const base = getAccountBalance(bankId);
+  let bal = round2(base);
+  const checks = [];
+  let firstBreakIndex = -1;
+  rows.forEach((r,i)=>{
+    bal = round2(bal + (Number(r.received)||0) - (Number(r.spent)||0));
+    const stmt = (r.stmtBalance!=null && r.stmtBalance!=='') ? round2(Number(r.stmtBalance)) : null;
+    const matches = stmt==null ? null : Math.abs(stmt - bal) < 0.005;
+    if(matches===false && firstBreakIndex<0) firstBreakIndex = i;
+    checks.push({ date:r.date, desc:r.description, spent:r.spent||0, received:r.received||0, running:bal, stmt, matches, diff: stmt==null?null:round2(stmt-bal) });
+  });
+  const withStmt = checks.filter(c=>c.matches!==null);
+  const matched = withStmt.filter(c=>c.matches).length;
+  const mismatched = withStmt.length - matched;
+  const finalStmt = [...checks].reverse().find(c=>c.stmt!=null);
+  return {
+    acc, base, checks, matched, mismatched, total:checks.length, withStmtCount:withStmt.length,
+    firstBreakIndex,
+    endRunning: checks.length? checks[checks.length-1].running : base,
+    endStmt: finalStmt ? finalStmt.stmt : null,
+    balanced: mismatched===0 && withStmt.length>0,
+  };
+}
+let LAST_RECON_RESULT = null;
+function autoReconcileImport(bankId, importBatch){
+  const res = buildImportReconResult(bankId, importBatch);
+  LAST_RECON_RESULT = res;
+  if(!res.withStmtCount){ showToast('No statement balances found to reconcile'); return; }
+  const okColor = res.balanced ? 'var(--money-pos)' : 'var(--red)';
+  const verdict = res.balanced
+    ? `<div style="font-weight:700; color:var(--money-pos);">✓ Reconciled — all ${res.matched} balances match the statement</div>`
+    : `<div style="font-weight:700; color:var(--red);">⚠ ${res.mismatched} of ${res.withStmtCount} rows don't match the statement</div>`;
+  let breakInfo = '';
+  if(res.firstBreakIndex>=0){
+    const b = res.checks[res.firstBreakIndex];
+    breakInfo = `<div style="margin-top:10px; padding:10px 12px; background:var(--surface-2); border-radius:8px; font-size:13px;">
+      <div style="font-weight:600; margin-bottom:4px;">First difference at:</div>
+      <div>${fmtDateShort(b.date)} · ${escapeHtml(b.desc||'—')}</div>
+      <div style="margin-top:4px;">Ledgerly running balance: <strong>${fmt(b.running)}</strong> · Statement: <strong>${fmt(b.stmt)}</strong> · Out by <strong class="neg">${fmt(Math.abs(b.diff))}</strong></div>
+      <div class="hint" style="margin-top:6px;">A mismatch here usually means a missing, duplicated, or wrong-amount transaction at or before this row — or that the opening balance doesn't match the statement's starting point.</div>
+    </div>`;
+  }
+  const body = `
+    <div style="font-size:13px;">
+      <div style="display:flex; gap:18px; flex-wrap:wrap; margin-bottom:10px;">
+        <div><div class="hint" style="margin:0;">Account</div><strong>${escapeHtml(res.acc.code+' '+res.acc.name)}</strong></div>
+        <div><div class="hint" style="margin:0;">Rows checked</div><strong>${res.withStmtCount}</strong></div>
+        <div><div class="hint" style="margin:0;">Matched</div><strong style="color:var(--money-pos);">${res.matched}</strong></div>
+        <div><div class="hint" style="margin:0;">Mismatched</div><strong style="color:${res.mismatched?'var(--red)':'var(--text)'};">${res.mismatched}</strong></div>
+      </div>
+      ${verdict}
+      <div style="margin-top:10px; display:flex; gap:24px; flex-wrap:wrap;">
+        <div>Ledgerly closing balance: <strong class="num">${fmt(res.endRunning)}</strong></div>
+        <div>Statement closing balance: <strong class="num">${res.endStmt!=null?fmt(res.endStmt):'—'}</strong></div>
+      </div>
+      ${breakInfo}
+    </div>`;
+  openModal('Automated bank reconciliation', body, [
+    {label:'⎙ Print report', cls:'btn-ghost', onclick:'printImportReconReport()'},
+    {label:'Close', cls:'btn-primary', onclick:'closeModal()'},
+  ]);
+}
+function printImportReconReport(){
+  const res = LAST_RECON_RESULT;
+  if(!res){ showToast('Run a reconciliation first'); return; }
+  const s = S.settings||{};
+  const companyExtra = [ s.businessVatNo?`VAT No: ${escapeHtml(s.businessVatNo)}`:'',
+    s.businessAddress?escapeHtml(String(s.businessAddress).replace(/\r?\n/g,', ')):'' ].filter(Boolean).join(' · ');
+  const logo = s.invoiceLogoDataUrl ? `<img src="${s.invoiceLogoDataUrl}" style="max-height:54px; max-width:180px; object-fit:contain;">` : '';
+  const rowsHtml = res.checks.map(c=>`<tr>
+    <td>${fmtDateShort(c.date)}</td><td>${escapeHtml(c.desc||'—')}</td>
+    <td class="r">${c.received?fmt(c.received):''}</td><td class="r">${c.spent?fmt(c.spent):''}</td>
+    <td class="r">${fmt(c.running)}</td><td class="r">${c.stmt!=null?fmt(c.stmt):'—'}</td>
+    <td style="text-align:center;">${c.matches===null?'':(c.matches?'<span style="color:#12674a;">✓</span>':'<span style="color:#b42318;">✗ '+fmt(Math.abs(c.diff))+'</span>')}</td>
+  </tr>`).join('');
+  const win = window.open('', '_blank');
+  if(!win){ showToast('Allow pop-ups to print'); return; }
+  win.document.write(`<!doctype html><html><head><meta charset="utf-8"><title>${escapeHtml(s.businessName||'Company')} — Automated Reconciliation</title>
+    <style>
+      *{box-sizing:border-box;} body{font-family:-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif; color:#0B0F1D; margin:32px; font-size:12.5px;}
+      .head{display:flex; justify-content:space-between; align-items:flex-start; border-bottom:2px solid #0B0F1D; padding-bottom:12px; margin-bottom:6px;}
+      .company{font-size:20px; font-weight:800; margin:0 0 2px;} .company-extra{color:#5b6270; font-size:11px; margin-bottom:8px;}
+      h1{font-size:15px; margin:6px 0 0; font-weight:600;}
+      .meta{color:#5b6270; font-size:11.5px; margin:10px 0 12px; display:flex; gap:18px; flex-wrap:wrap;} .meta .k{font-weight:600; color:#0B0F1D;}
+      .status{margin:10px 0 16px; padding:10px 14px; border-radius:8px; font-weight:700; ${res.balanced?'background:#e7f6ef; color:#12674a;':'background:#fdecec; color:#b42318;'}}
+      table{width:100%; border-collapse:collapse; margin-top:4px;} th,td{padding:6px 8px; text-align:left; border-bottom:1px solid #e6e8ee;}
+      th{font-size:10.5px; text-transform:uppercase; letter-spacing:.4px; color:#5b6270; border-bottom:1.5px solid #cfd3dc;}
+      td.r,th.r{text-align:right; font-variant-numeric:tabular-nums;}
+      .foot{margin-top:24px; color:#8a909c; font-size:10.5px; border-top:1px solid #e6e8ee; padding-top:8px;}
+      @media print{ body{margin:14mm;} .noprint{display:none;} }
+    </style></head><body>
+    <div class="head"><div>
+      <div class="company">${escapeHtml(s.businessName||'Company')}</div>
+      ${companyExtra?`<div class="company-extra">${companyExtra}</div>`:''}
+      <h1>Automated Bank Reconciliation</h1>
+    </div>${logo}</div>
+    <div class="meta">
+      <div><span class="k">Account:</span> ${escapeHtml(res.acc.code+' '+res.acc.name)}</div>
+      <div><span class="k">Rows checked:</span> ${res.withStmtCount}</div>
+      <div><span class="k">Matched:</span> ${res.matched}</div>
+      <div><span class="k">Mismatched:</span> ${res.mismatched}</div>
+    </div>
+    <div class="status">${res.balanced? '✓ Reconciled — every checked balance agrees with the statement' : '⚠ '+res.mismatched+' row(s) do not agree with the statement'}</div>
+    <table><thead><tr><th>Date</th><th>Description</th><th class="r">Money in</th><th class="r">Money out</th><th class="r">Ledgerly bal.</th><th class="r">Statement bal.</th><th style="text-align:center;">Check</th></tr></thead>
+      <tbody>${rowsHtml}</tbody></table>
+    <div style="margin-top:14px; display:flex; gap:24px; justify-content:flex-end;">
+      <div>Ledgerly closing: <strong>${fmt(res.endRunning)}</strong></div>
+      <div>Statement closing: <strong>${res.endStmt!=null?fmt(res.endStmt):'—'}</strong></div>
+    </div>
+    <div class="foot">${escapeHtml(s.businessName||'Company')} · Automated reconciliation by Ledgerly · ${new Date().toLocaleString()}</div>
+    <div class="noprint" style="margin-top:18px;"><button onclick="window.print()" style="padding:8px 16px; font-size:13px; cursor:pointer;">Print / Save as PDF</button></div>
+    </body></html>`);
+  win.document.close();
+  setTimeout(()=>{ try{ win.focus(); win.print(); }catch(e){} }, 350);
 }
 
 /* ============================= JOURNAL ENTRIES (manual) ============================= */
@@ -3508,7 +3653,16 @@ function blankCashbookRow(accountId){
 }
 // Resolve a cashbook row's VAT type id (new field, or legacy from vatRate).
 function cbVatTypeId(row){ if(row.vatType) return row.vatType; return row.vatRate>0 ? 'standard' : 'none'; }
-function cbTypeLabel(t){ return t==='contact'?'Contact': t==='transfer'?'Transfer': t==='vat'?'VAT':'Account'; }
+function cbTypeLabel(t){ return t==='customer'?'Customer': t==='supplier'?'Supplier': t==='contact'?'Contact': t==='transfer'?'Transfer': t==='vat'?'VAT':'Account'; }
+// Is this a customer/supplier allocation row? (contact kept for backward compatibility)
+function cbIsContactType(t){ return t==='customer' || t==='supplier' || t==='contact'; }
+// Which contact kind does a row target? customer -> customer; supplier -> supplier;
+// legacy 'contact' -> infer from money direction (received => customer, else supplier).
+function cbContactKind(row){
+  if(row.type==='customer') return 'customer';
+  if(row.type==='supplier') return 'supplier';
+  return (Number(row.received)||0) > 0 ? 'customer' : 'supplier'; // legacy contact
+}
 
 /* ---- Running balance + auto-reconcile flags for the cashbook ----
    Walks a set of rows in date order (stable by original index) from a starting balance,
@@ -3641,6 +3795,11 @@ function updateCashbookField(id, field, value){
   }
   row[field] = value;
   if(field==='vatType'){ row.vatRate = vatTypeRate(value); } // keep legacy rate in sync
+  if(field==='allocations' && value===null){ row.allocations = null; } // clearing allocations
+  if(field==='type'){
+    // switching away from a contact allocation clears its selections
+    row.contactSelection = null; row.matchDocId = null; row.allocations = null;
+  }
 
   // Auto-coding by description:
   if(field==='description'){
@@ -3711,14 +3870,24 @@ function postCashbookRow(row){
     payee:row.payee||'', description:row.description||'', reference:row.reference||'',
     type:row.type, accountSelection:row.accountSelection||null,
     contactSelection:row.contactSelection||null, matchDocId:row.matchDocId||null,
+    allocations: Array.isArray(row.allocations)? row.allocations.map(a=>({docId:a.docId, amount:a.amount})) : null,
     vatType:cbVatTypeId(row), vatRate:row.vatRate||0, spent:row.spent||0, received:row.received||0,
     stmtBalance: (row.stmtBalance!=null? row.stmtBalance : null),
   };
 
-  if(row.type==='contact'){
-    if(!row.matchDocId) return {ok:false, msg:'Select an invoice or bill to allocate this to'};
-    if(isIn) recordInvoicePayment(row.matchDocId, gross, row.date, row.accountId, cashbookRef);
-    else recordBillPayment(row.matchDocId, gross, row.date, row.accountId, cashbookRef);
+  if(cbIsContactType(row.type)){
+    const kind = cbContactKind(row);
+    const isCust = kind==='customer';
+    // Support multi-document allocation (one payment across several invoices/bills).
+    const allocs = Array.isArray(row.allocations) && row.allocations.length
+      ? row.allocations.filter(a=>a.docId && Number(a.amount)>0)
+      : (row.matchDocId ? [{docId:row.matchDocId, amount:gross}] : []);
+    if(!row.contactSelection) return {ok:false, msg:`Select a ${isCust?'customer':'supplier'}`};
+    if(!allocs.length) return {ok:false, msg:`Allocate this payment to at least one ${isCust?'invoice':'bill'}`};
+    allocs.forEach(a=>{
+      if(isCust) recordInvoicePayment(a.docId, round2(a.amount), row.date, row.accountId, cashbookRef);
+      else recordBillPayment(a.docId, round2(a.amount), row.date, row.accountId, cashbookRef);
+    });
     // tag the payment's journal entry(ies) so they show under Reviewed
     S.journal.filter(e=>e.ref===cashbookRef).forEach(e=>{ e.cashbookMeta = meta; });
     S.cashbookReviewed = S.cashbookReviewed || [];
@@ -3800,21 +3969,29 @@ function addAllCashbookRows(){
   renderCashbook();
 }
 function cashbookSelectionCell(r){
-  if(r.type==='contact'){
-    const isIn = r.received>0;
-    const contacts = S.contacts.filter(c=>c.type===(isIn?'customer':'supplier'));
-    const openDocs = isIn
-      ? S.invoices.filter(i=>i.contactId===r.contactSelection && ['open','partial'].includes(docStatus(i)))
-      : S.bills.filter(b=>b.contactId===r.contactSelection && ['open','partial'].includes(docStatus(b)));
+  if(cbIsContactType(r.type)){
+    const kind = cbContactKind(r);      // 'customer' | 'supplier'
+    const isCust = kind==='customer';
+    const contacts = S.contacts.filter(c=>c.type===kind);
+    // how many docs are allocated on this row (via the popup) or a single legacy match
+    const allocCount = Array.isArray(r.allocations) ? r.allocations.length : (r.matchDocId?1:0);
+    const allocTotal = Array.isArray(r.allocations) ? r.allocations.reduce((s,a)=>s+(Number(a.amount)||0),0) : 0;
+    const contactPicked = !!r.contactSelection;
+    let allocLabel;
+    if(allocCount>1) allocLabel = `${allocCount} ${isCust?'invoices':'bills'} · ${fmt(allocTotal)}`;
+    else if(allocCount===1){
+      const id = Array.isArray(r.allocations)&&r.allocations[0]?r.allocations[0].docId:r.matchDocId;
+      const d = (isCust?S.invoices:S.bills).find(x=>x.id===id);
+      allocLabel = d ? `${d.number}` : 'allocated';
+    } else allocLabel = '';
     return `
-      <select onchange="updateCashbookField('${r.id}','contactSelection',this.value); updateCashbookField('${r.id}','matchDocId',null); renderCashbook();" style="margin-bottom:4px;">
-        <option value="">Select ${isIn?'customer':'supplier'}…</option>
+      <select onchange="updateCashbookField('${r.id}','contactSelection',this.value); updateCashbookField('${r.id}','matchDocId',null); updateCashbookField('${r.id}','allocations',null); renderCashbook();" style="margin-bottom:4px;">
+        <option value="">Select ${isCust?'customer':'supplier'}…</option>
         ${contacts.map(c=>`<option value="${c.id}" ${c.id===r.contactSelection?'selected':''}>${escapeHtml(c.name)}</option>`).join('')}
       </select>
-      ${r.contactSelection? `<select onchange="updateCashbookField('${r.id}','matchDocId',this.value)">
-        <option value="">Select ${isIn?'invoice':'bill'}…</option>
-        ${openDocs.map(d=>`<option value="${d.id}" ${d.id===r.matchDocId?'selected':''}>${d.number} (${fmt(docBalanceDue(d))} due)</option>`).join('')}
-      </select>` : (r.contactSelection!==null && contacts.length===0 ? `<div class="hint" style="margin:0;">No ${isIn?'customers':'suppliers'} yet</div>` : '')}
+      ${contactPicked
+        ? `<button class="btn btn-ghost btn-sm" style="width:100%;" onclick="openInvoiceAllocator('${r.id}')">⑂ ${allocLabel? 'Allocated: '+allocLabel : 'Allocate '+(isCust?'invoices':'bills')+'…'}</button>`
+        : (contacts.length===0 ? `<div class="hint" style="margin:0;">No ${isCust?'customers':'suppliers'} yet</div>` : '')}
     `;
   }
   if(r.type==='transfer'){
@@ -3869,9 +4046,11 @@ function cashbookRowHtml(r){
     <td><input type="text" value="${escapeHtml(r.description)}" placeholder="Description" onchange="updateCashbookField('${r.id}','description',this.value)"></td>
     <td><select onchange="updateCashbookField('${r.id}','type',this.value); renderCashbook();">
       <option value="account" ${r.type==='account'?'selected':''}>Account</option>
-      <option value="contact" ${r.type==='contact'?'selected':''}>Contact</option>
+      <option value="customer" ${r.type==='customer'?'selected':''}>Customer</option>
+      <option value="supplier" ${r.type==='supplier'?'selected':''}>Supplier</option>
       <option value="transfer" ${r.type==='transfer'?'selected':''}>Transfer</option>
       <option value="vat" ${r.type==='vat'?'selected':''}>VAT</option>
+      ${r.type==='contact'? `<option value="contact" selected>Contact (legacy)</option>`:''}
     </select></td>
     <td>${cashbookSelectionCell(r)}</td>
     <td><input type="text" value="${escapeHtml(r.reference)}" placeholder="Reference" onchange="updateCashbookField('${r.id}','reference',this.value)"></td>
@@ -3885,8 +4064,130 @@ function cashbookRowHtml(r){
       <button class="cb-add-btn" onclick="insertCashbookRow()" title="Add a transaction (new row)">+</button>
       <button class="cb-del-btn" onclick="deleteCashbookRow('${r.id}')" title="Delete this transaction">−</button>
       <button class="cb-map-btn" onclick="openMappingFromRow('${r.id}')" title="Create a description→account mapping from this row">⇄</button>
+      <button class="cb-alloc-btn" onclick="openInvoiceAllocator('${r.id}')" title="Allocate this payment to customer/supplier invoices">⑂</button>
     </td>
   </tr>`;
+}
+// ---- Invoice/bill allocation popup (Fork icon) ----
+let ALLOC = null; // { rowId, contactId, picks:{docId:amount} }
+function openInvoiceAllocator(rowId){
+  const r = (S.cashbookDrafts||[]).find(x=>x.id===rowId);
+  if(!r){ showToast('Row not found'); return; }
+  const amount = (Number(r.received)||0) > 0 ? Number(r.received) : Number(r.spent)||0;
+  if(!amount){ showToast('Enter the payment amount (Spent or Received) first'); return; }
+  ALLOC = { rowId, contactId: r.contactSelection || '', picks: {} };
+  // seed from any existing allocations on the row
+  if(Array.isArray(r.allocations)) r.allocations.forEach(a=>{ ALLOC.picks[a.docId]=a.amount; });
+  else if(r.matchDocId) ALLOC.picks[r.matchDocId] = amount;
+  renderInvoiceAllocator();
+}
+function allocIsIncoming(){
+  const r = (S.cashbookDrafts||[]).find(x=>x.id===ALLOC.rowId);
+  return cbContactKind(r)==='customer'; // customer => invoices (money in); supplier => bills
+}
+function allocPaymentAmount(){
+  const r = (S.cashbookDrafts||[]).find(x=>x.id===ALLOC.rowId);
+  return (Number(r.received)||0) > 0 ? Number(r.received) : Number(r.spent)||0;
+}
+function renderInvoiceAllocator(){
+  const isIn = allocIsIncoming();
+  const payment = allocPaymentAmount();
+  const contacts = S.contacts.filter(c=>c.type===(isIn?'customer':'supplier'));
+  const docs = ALLOC.contactId
+    ? (isIn ? S.invoices : S.bills).filter(d=>d.contactId===ALLOC.contactId && ['open','partial'].includes(docStatus(d)))
+    : [];
+  const allocated = Object.values(ALLOC.picks).reduce((s,v)=>s+(Number(v)||0),0);
+  const remaining = round2(payment - allocated);
+  const docRows = docs.length ? docs.map(d=>{
+    const due = docBalanceDue(d);
+    const picked = ALLOC.picks[d.id]!=null;
+    const val = picked ? ALLOC.picks[d.id] : '';
+    return `<div class="alloc-doc-row ${picked?'picked':''}">
+      <input type="checkbox" style="width:auto;" ${picked?'checked':''} onchange="toggleAllocDoc('${d.id}', this.checked, ${due})">
+      <div style="flex:1;">
+        <div><strong>${d.number}</strong> · ${fmtDateShort(d.date)}</div>
+        <div class="hint" style="margin:0;">${fmt(due)} due${docStatus(d)==='partial'?' (partially paid)':''}</div>
+      </div>
+      <input type="number" step="0.01" min="0" placeholder="0.00" value="${val}" style="width:120px;" ${picked?'':'disabled'}
+        onchange="setAllocAmount('${d.id}', this.value)" title="Amount to allocate to this ${isIn?'invoice':'bill'}">
+    </div>`;
+  }).join('') : (ALLOC.contactId ? `<div class="hint">No open ${isIn?'invoices':'bills'} for this ${isIn?'customer':'supplier'}.</div>` : '');
+
+  const body = `
+    <div class="field"><label>${isIn?'Customer':'Supplier'}</label>
+      <select id="alloc-contact" onchange="ALLOC.contactId=this.value; ALLOC.picks={}; renderInvoiceAllocator();">
+        <option value="">Select ${isIn?'customer':'supplier'}…</option>
+        ${contacts.map(c=>`<option value="${c.id}" ${c.id===ALLOC.contactId?'selected':''}>${escapeHtml(c.name)}</option>`).join('')}
+      </select>
+    </div>
+    <div class="alloc-summary">
+      <div>Payment: <strong>${fmt(payment)}</strong></div>
+      <div>Allocated: <strong>${fmt(allocated)}</strong></div>
+      <div>Remaining: <strong style="color:${Math.abs(remaining)<0.005?'var(--money-pos)':(remaining<0?'var(--red)':'var(--text)')};">${fmt(remaining)}</strong></div>
+    </div>
+    <div style="max-height:320px; overflow-y:auto;">${docRows || `<div class="hint">Pick a ${isIn?'customer':'supplier'} to see open documents.</div>`}</div>
+    <div class="hint" style="margin-top:8px;">Tick documents and enter how much of the payment goes to each, until the remaining reaches zero. Ticking a document fills in its full amount due by default.</div>
+  `;
+  openModal(`Allocate payment to ${isIn?'invoices':'bills'}`, body, [
+    {label:'Auto-fill oldest first', cls:'btn-ghost', onclick:'autoFillAllocations()'},
+    {label:'Apply allocation', cls:'btn-primary', onclick:'applyInvoiceAllocation()'},
+  ]);
+}
+function toggleAllocDoc(docId, checked, due){
+  if(checked){
+    // fill with the smaller of remaining payment or amount due
+    const payment = allocPaymentAmount();
+    const already = Object.entries(ALLOC.picks).filter(([k])=>k!==docId).reduce((s,[,v])=>s+(Number(v)||0),0);
+    const remaining = round2(payment - already);
+    ALLOC.picks[docId] = round2(Math.max(0, Math.min(due, remaining)));
+  } else {
+    delete ALLOC.picks[docId];
+  }
+  renderInvoiceAllocator();
+}
+function setAllocAmount(docId, val){
+  const n = round2(Number(val)||0);
+  if(n<=0){ delete ALLOC.picks[docId]; } else { ALLOC.picks[docId] = n; }
+  renderInvoiceAllocator();
+}
+function autoFillAllocations(){
+  const isIn = allocIsIncoming();
+  const payment = allocPaymentAmount();
+  const docs = (isIn ? S.invoices : S.bills)
+    .filter(d=>d.contactId===ALLOC.contactId && ['open','partial'].includes(docStatus(d)))
+    .slice().sort((a,b)=>(a.date||'').localeCompare(b.date||'')); // oldest first
+  ALLOC.picks = {};
+  let left = payment;
+  for(const d of docs){
+    if(left<=0.005) break;
+    const due = docBalanceDue(d);
+    const take = round2(Math.min(due, left));
+    if(take>0){ ALLOC.picks[d.id] = take; left = round2(left-take); }
+  }
+  renderInvoiceAllocator();
+}
+function applyInvoiceAllocation(){
+  const r = (S.cashbookDrafts||[]).find(x=>x.id===ALLOC.rowId);
+  if(!r) { closeModal(); return; }
+  const picks = Object.entries(ALLOC.picks).filter(([,v])=>Number(v)>0);
+  if(!ALLOC.contactId){ showToast('Select a customer or supplier'); return; }
+  if(!picks.length){ showToast('Tick at least one document to allocate'); return; }
+  const payment = allocPaymentAmount();
+  const allocated = picks.reduce((s,[,v])=>s+Number(v),0);
+  if(allocated - payment > 0.005){ showToast('Allocated more than the payment amount'); return; }
+  // set the row to the correct contact allocation type (keep customer/supplier; upgrade legacy 'contact')
+  if(!cbIsContactType(r.type) || r.type==='contact'){
+    r.type = allocIsIncoming() ? 'customer' : 'supplier';
+  }
+  r.contactSelection = ALLOC.contactId;
+  r.allocations = picks.map(([docId,amount])=>({docId, amount:round2(amount)}));
+  r.matchDocId = picks.length===1 ? picks[0][0] : null; // keep single-doc compatibility
+  ALLOC = null;
+  closeModal();
+  saveState(true);
+  renderCashbook();
+  const leftover = round2(payment - allocated);
+  showToast(leftover>0.005 ? `Allocated ${fmt(allocated)} — ${fmt(leftover)} still unallocated` : 'Payment fully allocated');
 }
 // Open the mapping form pre-filled from a cashbook row (its description + current account allocation).
 function openMappingFromRow(id){
@@ -3921,6 +4222,16 @@ function markSelectedCashbookReviewed(){
   });
   S.cashbookDrafts = S.cashbookDrafts.filter(r=>!succeeded.includes(r.id));
   showToast(`${succeeded.length} marked as reviewed${skipped? `, ${skipped} skipped (missing info)`:''}`);
+  saveState(true);
+  renderCashbook();
+}
+// Delete all ticked rows in the New Transactions tab (drafts only — nothing posted).
+function deleteSelectedCashbookRows(){
+  const ids = Array.from(document.querySelectorAll('#cb-new-body .cb-tick:checked')).map(cb=>cb.closest('tr').getAttribute('data-id'));
+  if(!ids.length){ showToast('Tick the rows you want to delete'); return; }
+  if(!confirm(`Delete ${ids.length} selected transaction${ids.length===1?'':'s'}? This removes them from New Transactions and cannot be undone.`)) return;
+  S.cashbookDrafts = (S.cashbookDrafts||[]).filter(r=>!ids.includes(r.id));
+  showToast(`${ids.length} transaction${ids.length===1?'':'s'} deleted`);
   saveState(true);
   renderCashbook();
 }
@@ -4107,14 +4418,17 @@ function renderCashbook(){
       html += cashbookPager('new', newRows.length);
       html += `<div class="card-body" style="display:flex; justify-content:space-between; align-items:center; gap:10px; border-top:1px solid var(--border); flex-wrap:wrap;">
         <span class="hint" style="margin:0;">Select the transactions you want to review, then press <strong>Mark as reviewed</strong> to add them to the books.</span>
-        <button class="btn btn-primary btn-sm" onclick="markSelectedCashbookReviewed()">✓ Mark as reviewed</button>
+        <div style="display:flex; gap:8px;">
+          <button class="btn btn-danger btn-sm" onclick="deleteSelectedCashbookRows()">🗑 Delete selected</button>
+          <button class="btn btn-primary btn-sm" onclick="markSelectedCashbookReviewed()">✓ Mark as reviewed</button>
+        </div>
       </div>`;
     } else {
       if(q || hasDateFilter) html += emptyState('No matches', `No new transactions match the current filter.`, "clearCashbookFilters()", 'Clear filters');
       else html += emptyState('No new transactions', 'Insert a row or import a CSV to start capturing transactions into the cashbook.', 'insertCashbookRow()', '+ Insert row');
     }
     html += `</div>
-    <div class="hint" style="margin-top:12px;">Rows marked <strong style="color:var(--gold);">Unallocated Income / Unallocated Expense</strong> post to a holding account so your bank balance stays accurate — recode them properly any time from the Journal Entries or Chart of Accounts. Set Type to "Contact" to allocate a transaction straight to an open invoice or bill instead. Once added, transactions move to the <strong>Reviewed</strong> tab.</div>`;
+    <div class="hint" style="margin-top:12px;">Rows marked <strong style="color:var(--gold);">Unallocated Income / Unallocated Expense</strong> post to a holding account so your bank balance stays accurate — recode them properly any time from the Journal Entries or Chart of Accounts. Set Type to "Customer" or "Supplier" to allocate a payment to open invoices or bills via the tick-box popup. Once added, transactions move to the <strong>Reviewed</strong> tab.</div>`;
   } else {
     html += renderCashbookReviewed(reviewed);
   }
@@ -4126,11 +4440,16 @@ function toggleAllCashbookTicks(bodyId, checked){
   document.querySelectorAll('#'+bodyId+' .cb-tick').forEach(cb=>{ cb.checked = checked; });
 }
 function selectionLabel(meta){
-  if(meta.type==='contact'){
-    const isIn = meta.received>0;
+  if(cbIsContactType(meta.type)){
+    const isCust = cbContactKind(meta)==='customer';
     const c = S.contacts.find(x=>x.id===meta.contactSelection);
-    const doc = (isIn?S.invoices:S.bills).find(d=>d.id===meta.matchDocId);
-    return (c?escapeHtml(c.name):'Contact') + (doc? ' · '+doc.number : '');
+    const name = c?escapeHtml(c.name):'Contact';
+    if(Array.isArray(meta.allocations) && meta.allocations.length>1){
+      return `${name} · ${meta.allocations.length} ${isCust?'invoices':'bills'}`;
+    }
+    const singleId = (Array.isArray(meta.allocations) && meta.allocations[0]) ? meta.allocations[0].docId : meta.matchDocId;
+    const doc = (isCust?S.invoices:S.bills).find(d=>d.id===singleId);
+    return name + (doc? ' · '+doc.number : '');
   }
   if(meta.type==='transfer'){
     const a = S.accounts.find(x=>x.id===meta.transferAccountId);
@@ -5690,7 +6009,7 @@ function computeVatBreakdown(from, to){
   // Cashbook reviewed transactions coded to an account (not contact-allocated, which already sit in the docs above)
   (S.cashbookReviewed||[]).forEach(m=>{
     if(!inRange(m.date)) return;
-    if(m.type==='contact') return; // those are invoice/bill payments, VAT already captured on the doc
+    if(cbIsContactType(m.type)) return; // those are invoice/bill payments, VAT already captured on the doc
     const tId = m.vatType || (m.vatRate>0?'standard':'none');
     const rate = vatTypeRate(tId);
     const gross = (m.received||0)>0 ? m.received : m.spent;
