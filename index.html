@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Ledgerly — Accounting</title>
+<title>RECONI — Accounting</title>
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 120 120'%3E%3Cpolygon points='60,8 110,106 10,106' fill='none' stroke='%23C9A227' stroke-width='10'/%3E%3Crect x='2' y='64' width='116' height='18' fill='%23C9A227' transform='rotate(-4 60 72)'/%3E%3C/svg%3E">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet">
@@ -350,6 +350,11 @@
   .login-sub{ font-size:12.5px; color:var(--text-muted); margin-top:2px; }
   .login-error{ background:#F7E6E3; color:var(--red); font-size:12px; padding:8px 10px; border-radius:6px; margin:10px 0 4px; text-align:left; }
   .login-note{ font-size:10.5px; color:var(--text-muted); margin-top:18px; line-height:1.5; }
+  .pw-wrap{ position:relative; }
+  .pw-wrap input{ padding-right:40px; width:100%; }
+  .pw-eye{ position:absolute; top:50%; right:8px; transform:translateY(-50%); border:none; background:transparent; cursor:pointer; font-size:16px; line-height:1; padding:4px; border-radius:6px; opacity:.65; }
+  .pw-eye:hover{ opacity:1; background:rgba(0,0,0,.05); }
+  .pw-eye.active{ opacity:1; }
 </style>
 </head>
 <body>
@@ -363,7 +368,7 @@
       <polygon points="60,44 84,106 36,106" fill="none" stroke="url(#logoGradLogin)" stroke-width="7" stroke-linejoin="round"/>
       <rect x="2" y="64" width="116" height="17" rx="2" fill="url(#logoGradLogin)" transform="rotate(-4 60 72)"/>
     </svg></div>
-    <div class="login-title">Ledgerly</div>
+    <div class="login-title">RECONI</div>
     <div class="login-sub">Sign in to your books</div>
     <div class="field" style="text-align:left; margin-top:22px;">
       <label>Username</label>
@@ -371,7 +376,10 @@
     </div>
     <div class="field" style="text-align:left;">
       <label>Password</label>
-      <input type="password" id="login-password" autocomplete="current-password" onkeydown="if(event.key==='Enter') attemptLogin();">
+      <div class="pw-wrap">
+        <input type="password" id="login-password" autocomplete="current-password" onkeydown="if(event.key==='Enter') attemptLogin();">
+        <button type="button" class="pw-eye" id="login-pw-eye" onclick="togglePasswordVisibility('login-password','login-pw-eye')" title="Show password" aria-label="Show password">👁</button>
+      </div>
     </div>
     <div id="login-error" class="login-error" style="display:none;"></div>
     <button class="btn btn-primary" style="width:100%; justify-content:center; margin-top:6px;" onclick="attemptLogin()">Sign in</button>
@@ -388,7 +396,7 @@
         <polygon points="60,8 110,106 10,106" fill="none" stroke="url(#logoGradSidebar)" stroke-width="8" stroke-linejoin="round"/>
         <polygon points="60,44 84,106 36,106" fill="none" stroke="url(#logoGradSidebar)" stroke-width="7" stroke-linejoin="round"/>
         <rect x="2" y="64" width="116" height="17" rx="2" fill="url(#logoGradSidebar)" transform="rotate(-4 60 72)"/>
-      </svg></div><div class="name">Ledgerly</div></div>
+      </svg></div><div class="name">RECONI</div></div>
       <div class="brand-sub">Books &amp; Ledgers</div>
     </div>
     <div id="company-switcher" style="padding:0 12px 12px;"></div>
@@ -715,30 +723,30 @@ async function linkSaveFile(){
   try{
     const handle = await window.showSaveFilePicker({
       suggestedName: `ledgerly-${todayStr()}.json`,
-      types: [{ description:'Ledgerly data file', accept:{ 'application/json':['.json'] } }],
+      types: [{ description:'RECONI data file', accept:{ 'application/json':['.json'] } }],
     });
     if(!(await verifyHandlePermission(handle))){ showToast('Permission to write the file was declined'); return; }
     FILE_HANDLE = handle; FILE_NAME = handle.name;
     await writeWorkspaceToHandle();
     LAST_SAVED_AT = new Date();
     updateSaveIndicator();
-    showToast('Linked — Ledgerly will now save to '+FILE_NAME+' as you work');
+    showToast('Linked — RECONI will now save to '+FILE_NAME+' as you work');
     if(VIEW==='settings') renderSettings();
   }catch(e){ if(e && e.name!=='AbortError'){ console.error(e); showToast('Could not link the file'); } }
 }
-// Open an existing Ledgerly file and link it for ongoing saves.
+// Open an existing RECONI file and link it for ongoing saves.
 async function openSaveFile(){
   if(!fsApiSupported()){ showToast('Your browser doesn’t support opening a linked file — use Chrome or Edge on desktop'); return; }
   try{
     const [handle] = await window.showOpenFilePicker({
-      types: [{ description:'Ledgerly data file', accept:{ 'application/json':['.json'] } }],
+      types: [{ description:'RECONI data file', accept:{ 'application/json':['.json'] } }],
     });
     if(!(await verifyHandlePermission(handle))){ showToast('Permission to use the file was declined'); return; }
     const file = await handle.getFile();
     const text = await file.text();
     const parsed = JSON.parse(text);
     const ws = parsed.workspace || (parsed.companies ? parsed : null);
-    if(!ws || !ws.companies){ showToast('That file isn’t a Ledgerly workspace backup'); return; }
+    if(!ws || !ws.companies){ showToast('That file isn’t a RECONI workspace backup'); return; }
     if(!confirm('Load this file and use it for auto-save? Your current in-browser data will be replaced by the file’s contents.')) return;
     WORKSPACE = ws;
     Object.values(WORKSPACE.companies||{}).forEach(migrateCompanyShape);
@@ -871,7 +879,7 @@ function exportReportPdf(model){
     </div>${logo}</div>
     <div class="meta">${metaHtml}</div>
     <table>${headRow? '<thead>'+headRow+'</thead>':''}<tbody>${bodyRows}</tbody></table>
-    <div class="foot">${escapeHtml(companyName)} · Generated by Ledgerly · ${new Date().toLocaleString()}</div>
+    <div class="foot">${escapeHtml(companyName)} · Generated by RECONI · ${new Date().toLocaleString()}</div>
     <div class="noprint" style="margin-top:18px;"><button onclick="window.print()" style="padding:8px 16px; font-size:13px; cursor:pointer;">Print / Save as PDF</button></div>
     </body></html>`);
   win.document.close();
@@ -924,7 +932,7 @@ function handleRestoreBackup(event){
     if(parsed && parsed.type==='ledgerly-workspace-backup' && parsed.workspace){ newWorkspace = parsed.workspace; }
     else if(parsed && parsed.companies && parsed.activeId){ newWorkspace = parsed; } // raw workspace object, no wrapper
     if(!newWorkspace || !newWorkspace.companies){
-      showToast("This file doesn't look like a Ledgerly backup");
+      showToast("This file doesn't look like a RECONI backup");
       event.target.value = '';
       return;
     }
@@ -1011,14 +1019,45 @@ function submitNewCompany(){
 }
 function deleteCompanyAction(id){
   if(!canManageWorkspace()){ showToast('Only an administrator can delete companies'); return; }
-  const list = companyList();
   if(Object.keys(WORKSPACE.companies).length<=1){ showToast('You need at least one company'); return; }
-  const name = WORKSPACE.companies[id].settings.businessName;
-  if(!confirm(`Delete "${name}" and all of its data? This cannot be undone.`)) return;
+  const name = WORKSPACE.companies[id].settings.businessName || 'this company';
+  // Require confirmation. If sign-in is enabled, confirm with the current user's password;
+  // otherwise require typing the company name exactly (no password exists to check against).
+  const authOn = WORKSPACE.authEnabled && CURRENT_USER && CURRENT_USER.passwordHash;
+  const body = authOn
+    ? `<p style="margin-top:0;">You're about to permanently delete <strong>${escapeHtml(name)}</strong> and all of its data — invoices, transactions, reports, everything. This cannot be undone.</p>
+       <div class="field"><label>Enter your password to confirm</label>
+         <input type="password" id="del-pass" autocomplete="current-password" onkeydown="if(event.key==='Enter') confirmDeleteCompany('${id}')"></div>
+       <div id="del-err" class="hint" style="color:var(--red); display:none;">Incorrect password.</div>`
+    : `<p style="margin-top:0;">You're about to permanently delete <strong>${escapeHtml(name)}</strong> and all of its data. This cannot be undone.</p>
+       <div class="field"><label>Type the company name to confirm</label>
+         <input type="text" id="del-name" placeholder="${escapeHtml(name)}" onkeydown="if(event.key==='Enter') confirmDeleteCompany('${id}')"></div>
+       <div id="del-err" class="hint" style="color:var(--red); display:none;">The name doesn't match.</div>`;
+  openModal('Delete company', body, [
+    {label:'Cancel', cls:'btn-ghost', onclick:'closeModal()'},
+    {label:'Delete permanently', cls:'btn-danger', onclick:`confirmDeleteCompany('${id}')`},
+  ]);
+  setTimeout(()=>{ const el=document.getElementById('del-pass')||document.getElementById('del-name'); if(el) el.focus(); }, 60);
+}
+function confirmDeleteCompany(id){
+  if(!WORKSPACE.companies[id]) { closeModal(); return; }
+  if(!canManageWorkspace()){ showToast('Only an administrator can delete companies'); return; }
+  const authOn = WORKSPACE.authEnabled && CURRENT_USER && CURRENT_USER.passwordHash;
+  const errEl = document.getElementById('del-err');
+  if(authOn){
+    const pass = (document.getElementById('del-pass')||{}).value || '';
+    if(CURRENT_USER.passwordHash !== simpleHash(pass)){ if(errEl) errEl.style.display='block'; return; }
+  } else {
+    const typed = ((document.getElementById('del-name')||{}).value || '').trim();
+    const name = (WORKSPACE.companies[id].settings.businessName||'').trim();
+    if(typed !== name){ if(errEl) errEl.style.display='block'; return; }
+  }
+  // passed confirmation — delete
   delete WORKSPACE.companies[id];
   WORKSPACE.order = (WORKSPACE.order||[]).filter(x=>x!==id);
   (WORKSPACE.users||[]).forEach(u=>{ if(u.companyIds) u.companyIds = u.companyIds.filter(cid=>cid!==id); });
   if(WORKSPACE.activeId===id){ WORKSPACE.activeId = WORKSPACE.order[0]; S = WORKSPACE.companies[WORKSPACE.activeId]; }
+  closeModal();
   showToast('Company deleted'); saveState(true);
   openCompanySwitcher();
 }
@@ -1062,6 +1101,20 @@ function ensureActiveCompanyAccessible(){
     WORKSPACE.activeId = allowed[0];
     S = WORKSPACE.companies[allowed[0]];
   }
+}
+function togglePasswordVisibility(inputId, eyeId){
+  const inp = document.getElementById(inputId);
+  const eye = document.getElementById(eyeId);
+  if(!inp) return;
+  const show = inp.type === 'password';
+  inp.type = show ? 'text' : 'password';
+  if(eye){
+    eye.textContent = show ? '🙈' : '👁';
+    eye.title = show ? 'Hide password' : 'Show password';
+    eye.setAttribute('aria-label', eye.title);
+    eye.classList.toggle('active', show);
+  }
+  inp.focus();
 }
 function attemptLogin(){
   const username = document.getElementById('login-username').value.trim();
@@ -2772,7 +2825,7 @@ function printReconciliation(){
     <div class="status">${balanced? 'Balanced ✓ — the reconciliation agrees with the statement' : 'Out of balance by '+fmt(Math.abs(t.diff))}</div>
 
     <div class="sign"><div>Prepared by / date</div><div>Reviewed by / date</div></div>
-    <div class="foot">${escapeHtml(s.businessName||'Company')} · Generated by Ledgerly · ${new Date().toLocaleString()}</div>
+    <div class="foot">${escapeHtml(s.businessName||'Company')} · Generated by RECONI · ${new Date().toLocaleString()}</div>
     <div class="noprint" style="margin-top:18px;"><button onclick="window.print()" style="padding:8px 16px; font-size:13px; cursor:pointer;">Print / Save as PDF</button></div>
     </body></html>`);
   win.document.close();
@@ -3091,7 +3144,7 @@ function renderCsvMapping(){
         <option value="-1" ${map.balanceIdx===-1||map.balanceIdx==null?'selected':''}>— none —</option>
         ${CSV_IMPORT.headers.map((hh,i)=>`<option value="${i}" ${i===map.balanceIdx?'selected':''}>${hh||'(column '+(i+1)+')'}</option>`).join('')}
       </select>
-      <div class="hint">If your statement has a running balance column, map it here and Ledgerly will flag each row green when its own running balance agrees, red when it drifts.</div>
+      <div class="hint">If your statement has a running balance column, map it here and RECONI will flag each row green when its own running balance agrees, red when it drifts.</div>
     </div>
   `;
   updateCsvPreview();
@@ -3298,7 +3351,7 @@ function autoReconcileImport(bankId, importBatch){
     breakInfo = `<div style="margin-top:10px; padding:10px 12px; background:var(--surface-2); border-radius:8px; font-size:13px;">
       <div style="font-weight:600; margin-bottom:4px;">First difference at:</div>
       <div>${fmtDateShort(b.date)} · ${escapeHtml(b.desc||'—')}</div>
-      <div style="margin-top:4px;">Ledgerly running balance: <strong>${fmt(b.running)}</strong> · Statement: <strong>${fmt(b.stmt)}</strong> · Out by <strong class="neg">${fmt(Math.abs(b.diff))}</strong></div>
+      <div style="margin-top:4px;">RECONI running balance: <strong>${fmt(b.running)}</strong> · Statement: <strong>${fmt(b.stmt)}</strong> · Out by <strong class="neg">${fmt(Math.abs(b.diff))}</strong></div>
       <div class="hint" style="margin-top:6px;">A mismatch here usually means a missing, duplicated, or wrong-amount transaction at or before this row — or that the opening balance doesn't match the statement's starting point.</div>
     </div>`;
   }
@@ -3312,7 +3365,7 @@ function autoReconcileImport(bankId, importBatch){
       </div>
       ${verdict}
       <div style="margin-top:10px; display:flex; gap:24px; flex-wrap:wrap;">
-        <div>Ledgerly closing balance: <strong class="num">${fmt(res.endRunning)}</strong></div>
+        <div>RECONI closing balance: <strong class="num">${fmt(res.endRunning)}</strong></div>
         <div>Statement closing balance: <strong class="num">${res.endStmt!=null?fmt(res.endStmt):'—'}</strong></div>
       </div>
       ${breakInfo}
@@ -3363,13 +3416,13 @@ function printImportReconReport(){
       <div><span class="k">Mismatched:</span> ${res.mismatched}</div>
     </div>
     <div class="status">${res.balanced? '✓ Reconciled — every checked balance agrees with the statement' : '⚠ '+res.mismatched+' row(s) do not agree with the statement'}</div>
-    <table><thead><tr><th>Date</th><th>Description</th><th class="r">Money in</th><th class="r">Money out</th><th class="r">Ledgerly bal.</th><th class="r">Statement bal.</th><th style="text-align:center;">Check</th></tr></thead>
+    <table><thead><tr><th>Date</th><th>Description</th><th class="r">Money in</th><th class="r">Money out</th><th class="r">RECONI bal.</th><th class="r">Statement bal.</th><th style="text-align:center;">Check</th></tr></thead>
       <tbody>${rowsHtml}</tbody></table>
     <div style="margin-top:14px; display:flex; gap:24px; justify-content:flex-end;">
-      <div>Ledgerly closing: <strong>${fmt(res.endRunning)}</strong></div>
+      <div>RECONI closing: <strong>${fmt(res.endRunning)}</strong></div>
       <div>Statement closing: <strong>${res.endStmt!=null?fmt(res.endStmt):'—'}</strong></div>
     </div>
-    <div class="foot">${escapeHtml(s.businessName||'Company')} · Automated reconciliation by Ledgerly · ${new Date().toLocaleString()}</div>
+    <div class="foot">${escapeHtml(s.businessName||'Company')} · Automated reconciliation by RECONI · ${new Date().toLocaleString()}</div>
     <div class="noprint" style="margin-top:18px;"><button onclick="window.print()" style="padding:8px 16px; font-size:13px; cursor:pointer;">Print / Save as PDF</button></div>
     </body></html>`);
   win.document.close();
@@ -3669,8 +3722,11 @@ function cbContactKind(row){
    adding received (credit) and subtracting spent (debit). Returns a map of rowKey -> {balance, matches}.
    If a row carries a statement balance (stmtBalance, e.g. from an imported CSV), matches is
    true/false depending on whether the computed running balance agrees; otherwise matches is null. */
-function computeCashbookRunning(rows, startBalance, keyFn){
-  const ordered = rows.map((r,i)=>({r,i})).sort((a,b)=>
+function computeCashbookRunning(rows, startBalance, keyFn, anchorDate){
+  // Only rows dated on/after anchorDate participate in the running balance (if an anchor is given).
+  const parts = rows.map((r,i)=>({r,i}));
+  const active = anchorDate ? parts.filter(p=>(p.r.date||'') >= anchorDate) : parts;
+  const ordered = active.sort((a,b)=>
     (a.r.date||'').localeCompare(b.r.date||'') || (a.i-b.i));
   let bal = round2(startBalance||0);
   const out = {};
@@ -3682,6 +3738,10 @@ function computeCashbookRunning(rows, startBalance, keyFn){
     }
     out[keyFn(r)] = { balance: bal, matches };
   });
+  // rows before the anchor: mark as pre-reconciled (no running figure)
+  if(anchorDate){
+    parts.filter(p=>(p.r.date||'') < anchorDate).forEach(({r})=>{ out[keyFn(r)] = { preRecon:true }; });
+  }
   return out;
 }
 // The starting balance for the running column = account balance BEFORE the shown cashbook rows'
@@ -3697,6 +3757,7 @@ function cashbookRunningBase(accountId, reviewedRows){
 // Cell renderer for the running balance + match flag.
 function cbBalanceCell(info){
   if(!info) return `<td class="amt num" style="color:var(--text-muted);">—</td>`;
+  if(info.preRecon) return `<td class="amt num" style="color:var(--text-muted); font-size:11px;" title="Dated before the last reconciliation — already reconciled">✓ recon</td>`;
   const dot = info.matches===null ? ''
     : `<span class="cb-recon-dot" style="background:${info.matches?'var(--money-pos)':'var(--red)'};" title="${info.matches?'Running balance matches statement':'Running balance differs from statement'}"></span>`;
   return `<td class="amt num"><span style="display:inline-flex; align-items:center; gap:6px; justify-content:flex-end;">${dot}${fmt(info.balance)}</span></td>`;
@@ -4326,14 +4387,28 @@ function renderCashbook(){
   const newRows = (S.cashbookDrafts||[]).filter(r=>r.accountId===CASHBOOK_ACCOUNT).filter(matchRow);
   const reviewed = (S.cashbookReviewed||[]).filter(r=>r.accountId===CASHBOOK_ACCOUNT).filter(matchRow);
   const newTotalUnfiltered = (S.cashbookDrafts||[]).filter(r=>r.accountId===CASHBOOK_ACCOUNT).length;
-  // Running balance for both tabs. Reviewed rows are posted, so their running column ends at the
-  // account's current book balance. New rows are drafts, projected forward from the book balance.
+  // Running balance for both tabs, anchored to the last reconciliation if one exists.
+  const lastRec = lastReconciliation(CASHBOOK_ACCOUNT); // {date, closingBalance} or null
+  const anchorDate = lastRec ? lastRec.date : null;
+  const anchorBal = lastRec ? round2(lastRec.closingBalance) : null;
   const allReviewedForAcct = (S.cashbookReviewed||[]).filter(r=>r.accountId===CASHBOOK_ACCOUNT);
-  const revBase = cashbookRunningBase(CASHBOOK_ACCOUNT, allReviewedForAcct);
-  CB_RUN_REV = computeCashbookRunning(allReviewedForAcct, revBase, r=>r.cashbookRef);
   const allNewForAcct = (S.cashbookDrafts||[]).filter(r=>r.accountId===CASHBOOK_ACCOUNT);
-  // new drafts start from the current book balance (what the account is now) and project forward
-  CB_RUN_NEW = computeCashbookRunning(allNewForAcct, getAccountBalance(CASHBOOK_ACCOUNT), r=>r.id);
+  if(lastRec){
+    // Anchor: running balance starts at the reconciled closing balance and counts rows dated
+    // on/after the recon date (inclusive). Rows before the recon date are treated as already
+    // reconciled (no running figure shown).
+    CB_RUN_REV = computeCashbookRunning(allReviewedForAcct, anchorBal, r=>r.cashbookRef, anchorDate);
+    // New drafts continue from where the reviewed running balance ends (or the anchor if none post-date it).
+    let newBase = anchorBal;
+    const revAfter = allReviewedForAcct.filter(r=>(r.date||'') >= anchorDate);
+    newBase = round2(anchorBal + revAfter.reduce((s,r)=> s + (Number(r.received)||0) - (Number(r.spent)||0), 0));
+    CB_RUN_NEW = computeCashbookRunning(allNewForAcct, newBase, r=>r.id, anchorDate);
+  } else {
+    // No reconciliation yet — fall back to the book-balance behaviour.
+    const revBase = cashbookRunningBase(CASHBOOK_ACCOUNT, allReviewedForAcct);
+    CB_RUN_REV = computeCashbookRunning(allReviewedForAcct, revBase, r=>r.cashbookRef);
+    CB_RUN_NEW = computeCashbookRunning(allNewForAcct, getAccountBalance(CASHBOOK_ACCOUNT), r=>r.id);
+  }
   // When filtering (text or date), make sure the visible tab is one that actually has matches,
   // so results aren't hidden on the other tab. If only one tab matches, switch to it.
   if(q || hasDateFilter){
@@ -4367,6 +4442,13 @@ function renderCashbook(){
         <div class="cb-stat">
           <div class="cb-stat-val">${newTotalUnfiltered}</div>
           <div class="cb-stat-lbl">To be reviewed</div>
+        </div>
+        <div class="cb-stat" style="${lastRec?'border-color:var(--money-pos); background:rgba(18,103,74,.06);':''} min-width:150px;">
+          ${lastRec
+            ? `<div class="cb-stat-val num" style="color:var(--money-pos); font-size:16px;">${fmt(lastRec.closingBalance)}</div>
+               <div class="cb-stat-lbl">Last reconciled · ${fmtDateShort(lastRec.date)}</div>`
+            : `<div class="cb-stat-val" style="font-size:13px; color:var(--text-muted);">—</div>
+               <div class="cb-stat-lbl">Not yet reconciled</div>`}
         </div>
       </div>
       <div style="margin-left:auto; display:flex; align-items:center; gap:8px; flex-wrap:wrap;">
@@ -5421,7 +5503,7 @@ function renderAssets(){
     </div>`;
 
   if(!assets.length){
-    html += `<div class="card"><div class="card-body">${emptyState('No assets yet', 'Add one here, or when you buy an asset through the Cashbook or a journal entry coded to a fixed-asset account, Ledgerly will offer to add it.', 'openAssetForm()', '+ Add asset')}</div></div>`;
+    html += `<div class="card"><div class="card-body">${emptyState('No assets yet', 'Add one here, or when you buy an asset through the Cashbook or a journal entry coded to a fixed-asset account, RECONI will offer to add it.', 'openAssetForm()', '+ Add asset')}</div></div>`;
     document.getElementById('content').innerHTML = html;
     return;
   }
@@ -6514,7 +6596,7 @@ function renderSettings(){
 
           <div class="section-title" style="margin-top:20px;">Save to your hard drive</div>
           ${fsApiSupported()? `
-            <p style="font-size:12px; color:var(--text-muted); margin-top:0;">Link a file on your computer and Ledgerly will write to it automatically every time something changes — a real file you can see, back up, and keep. ${FILE_HANDLE? '':'You only pick it once.'}</p>
+            <p style="font-size:12px; color:var(--text-muted); margin-top:0;">Link a file on your computer and RECONI will write to it automatically every time something changes — a real file you can see, back up, and keep. ${FILE_HANDLE? '':'You only pick it once.'}</p>
             ${FILE_HANDLE? `
               <div class="balance-check" style="margin-bottom:10px;"><span class="dot" style="background:var(--money-pos)"></span> Auto-saving to <strong style="margin:0 4px;">${escapeHtml(FILE_NAME)}</strong> ${FILE_SAVE_OK===false? '<span class="neg">(last write failed)</span>':''}</div>
               <div style="display:flex; gap:8px; flex-wrap:wrap;">
