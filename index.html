@@ -6955,8 +6955,44 @@ function gateShowError(msg){ const el=gateEl('gate-error'); el.textContent=msg; 
 function gateShowInfo(msg){ const el=gateEl('gate-info'); el.textContent=msg; el.style.display='block'; gateEl('gate-error').style.display='none'; }
 function gateShowPending(){
   gateEl('gate-form').style.display='none';
-  gateEl('gate-pending').style.display='block';
+  const box = gateEl('gate-pending');
+  box.innerHTML = `
+    <div style="background:var(--surface-2); border:1px solid var(--gold); border-radius:10px; padding:16px; text-align:left;">
+      <div style="font-weight:700; margin-bottom:6px;">Your account is awaiting approval</div>
+      <div style="font-size:13px; color:var(--text-muted); line-height:1.5;">
+        Thanks for registering. An administrator needs to approve your access before you can sign in.
+        You'll be able to log in once your account has been approved.
+      </div>
+    </div>
+    <button class="btn btn-ghost" style="width:100%; justify-content:center; margin-top:12px;" onclick="gateSignOut()">Back to sign in</button>`;
+  box.style.display='block';
   gateEl('gate-sub').textContent='Account pending approval';
+}
+// Friendlier wording for common Supabase auth errors.
+function friendlyAuthError(msg){
+  const m = (msg||'').toLowerCase();
+  if(m.includes('invalid login')) return 'Incorrect email or password. Please try again.';
+  if(m.includes('email not confirmed')) return 'Please confirm your email first — check your inbox for the confirmation link.';
+  if(m.includes('already registered') || m.includes('already been registered')) return 'That email is already registered. Try signing in instead.';
+  if(m.includes('rate limit')) return 'Too many attempts. Please wait a minute and try again.';
+  if(m.includes('password')) return msg; // pass through password rules
+  return msg || 'Something went wrong. Please try again.';
+}
+// After registering with email-confirmation ON: tell them to check their inbox.
+function gateShowConfirmEmail(email){
+  gateEl('gate-form').style.display='none';
+  gateEl('gate-pending').style.display='block';
+  gateEl('gate-sub').textContent='Confirm your email';
+  const box = gateEl('gate-pending');
+  box.innerHTML = `
+    <div style="background:var(--surface-2); border:1px solid var(--gold); border-radius:10px; padding:16px; text-align:left;">
+      <div style="font-weight:700; margin-bottom:6px;">Check your email</div>
+      <div style="font-size:13px; color:var(--text-muted); line-height:1.5;">
+        We've sent a confirmation link to <strong>${escapeHtml(email)}</strong>. Click it to verify your address.
+        After that, an administrator will approve your account before you can sign in.
+      </div>
+    </div>
+    <button class="btn btn-ghost" style="width:100%; justify-content:center; margin-top:12px;" onclick="gateSignOut()">Back to sign in</button>`;
 }
 
 async function gatePrimaryAction(){
@@ -6964,22 +7000,32 @@ async function gatePrimaryAction(){
   const email = (gateEl('gate-email').value||'').trim();
   const password = gateEl('gate-password').value||'';
   if(!email || !password){ gateShowError('Enter your email and password.'); return; }
+  if(GATE_MODE==='register'){
+    // basic validation before hitting the server
+    if(!(gateEl('gate-name').value||'').trim()){ gateShowError('Please enter your full name.'); return; }
+    if(!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)){ gateShowError('Please enter a valid email address.'); return; }
+    if(password.length < 8){ gateShowError('Password must be at least 8 characters.'); return; }
+  }
   gateEl('gate-primary-btn').disabled = true;
   try{
     if(GATE_MODE==='register'){
       const fullName = (gateEl('gate-name').value||'').trim();
       const { data, error } = await SB.auth.signUp({
         email, password,
-        options:{ data:{ full_name: fullName } }
+        options:{ data:{ full_name: fullName }, emailRedirectTo: window.location.href }
       });
-      if(error){ gateShowError(error.message); return; }
-      // With email-confirm OFF, a session may exist immediately. Either way the
-      // profile is pending until an admin approves, so show the pending screen.
-      gateShowPending();
+      if(error){ gateShowError(friendlyAuthError(error.message)); return; }
+      // If Supabase returns no session, email confirmation is required first.
+      if(!data.session){
+        gateShowConfirmEmail(email);
+      } else {
+        // confirmation is off — go straight to the pending-approval screen
+        gateShowPending();
+      }
       return;
     } else {
       const { data, error } = await SB.auth.signInWithPassword({ email, password });
-      if(error){ gateShowError(error.message); return; }
+      if(error){ gateShowError(friendlyAuthError(error.message)); return; }
       await afterAuthenticated();
     }
   } catch(e){
