@@ -4,6 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>RECONI — Accounting</title>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 120 120'%3E%3Cpolygon points='60,8 110,106 10,106' fill='none' stroke='%23C9A227' stroke-width='10'/%3E%3Crect x='2' y='64' width='116' height='18' fill='%23C9A227' transform='rotate(-4 60 72)'/%3E%3C/svg%3E">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet">
@@ -336,7 +337,7 @@
   }
 
   /* Login screen */
-  #login-screen{
+  #login-screen, #auth-gate{
     position:fixed; inset:0; background:radial-gradient(ellipse at top, #141B33 0%, #0B0F1D 70%);
     display:flex; align-items:center; justify-content:center; z-index:500; padding:20px;
   }
@@ -358,6 +359,62 @@
 </style>
 </head>
 <body>
+<!-- ============ SUPABASE AUTH GATE (server-side accounts) ============ -->
+<div id="auth-gate" style="display:none;">
+  <div class="login-card">
+    <div class="login-logo"><svg viewBox="0 0 120 120" xmlns="http://www.w3.org/2000/svg">
+      <defs><linearGradient id="logoGradGate" x1="0%" y1="0%" x2="100%" y2="100%">
+        <stop offset="0%" stop-color="#F3D477"/><stop offset="55%" stop-color="#C9A227"/><stop offset="100%" stop-color="#8F6A16"/>
+      </linearGradient></defs>
+      <polygon points="60,8 110,106 10,106" fill="none" stroke="url(#logoGradGate)" stroke-width="8" stroke-linejoin="round"/>
+      <polygon points="60,44 84,106 36,106" fill="none" stroke="url(#logoGradGate)" stroke-width="7" stroke-linejoin="round"/>
+      <rect x="2" y="64" width="116" height="17" rx="2" fill="url(#logoGradGate)" transform="rotate(-4 60 72)"/>
+    </svg></div>
+    <div class="login-title">RECONI</div>
+    <div class="login-sub" id="gate-sub">Sign in to your account</div>
+
+    <!-- LOGIN + REGISTER shared fields -->
+    <div id="gate-form">
+      <div class="field" style="text-align:left; margin-top:22px;" id="gate-name-field" style="display:none;">
+        <label>Full name</label>
+        <input type="text" id="gate-name" autocomplete="name">
+      </div>
+      <div class="field" style="text-align:left; margin-top:22px;">
+        <label>Email</label>
+        <input type="email" id="gate-email" autocomplete="email" onkeydown="if(event.key==='Enter') document.getElementById('gate-password').focus();">
+      </div>
+      <div class="field" style="text-align:left;">
+        <label>Password</label>
+        <div class="pw-wrap">
+          <input type="password" id="gate-password" autocomplete="current-password" onkeydown="if(event.key==='Enter') gatePrimaryAction();">
+          <button type="button" class="pw-eye" id="gate-pw-eye" onclick="togglePasswordVisibility('gate-password','gate-pw-eye')" title="Show password" aria-label="Show password">👁</button>
+        </div>
+      </div>
+      <div id="gate-error" class="login-error" style="display:none;"></div>
+      <div id="gate-info" style="display:none; background:#e7f6ef; color:#12674a; font-size:12px; padding:8px 10px; border-radius:6px; margin:10px 0 4px; text-align:left;"></div>
+      <button class="btn btn-primary" id="gate-primary-btn" style="width:100%; justify-content:center; margin-top:6px;" onclick="gatePrimaryAction()">Sign in</button>
+      <div style="margin-top:14px; font-size:12.5px; display:flex; justify-content:space-between;">
+        <a href="#" id="gate-toggle" onclick="toggleGateMode(event)" style="color:var(--accent-dark);">Create an account</a>
+        <a href="#" id="gate-forgot" onclick="gateForgotPassword(event)" style="color:var(--text-muted);">Forgot password?</a>
+      </div>
+    </div>
+
+    <!-- PENDING APPROVAL state -->
+    <div id="gate-pending" style="display:none; margin-top:20px;">
+      <div style="background:var(--surface-2); border:1px solid var(--gold); border-radius:10px; padding:16px; text-align:left;">
+        <div style="font-weight:700; margin-bottom:6px;">Your account is awaiting approval</div>
+        <div style="font-size:13px; color:var(--text-muted); line-height:1.5;">
+          Thanks for registering. An administrator needs to approve your access before you can sign in.
+          You'll be able to log in once your account has been approved.
+        </div>
+      </div>
+      <button class="btn btn-ghost" style="width:100%; justify-content:center; margin-top:12px;" onclick="gateSignOut()">Back to sign in</button>
+    </div>
+
+    <div class="login-note">RECONI accounts are managed centrally. New registrations require administrator approval before access is granted.</div>
+  </div>
+</div>
+
 <div id="login-screen" style="display:none;">
   <div class="login-card">
     <div class="login-logo"><svg viewBox="0 0 120 120" xmlns="http://www.w3.org/2000/svg">
@@ -401,7 +458,7 @@
     </div>
     <div id="company-switcher" style="padding:0 12px 12px;"></div>
     <nav id="nav"></nav>
-    <div class="sidebar-foot"><div id="save-status">Not saved yet</div><div id="session-status" style="margin-top:4px;"></div></div>
+    <div class="sidebar-foot"><div id="save-status">Not saved yet</div><div id="session-status" style="margin-top:4px;"></div><div id="auth-status" style="margin-top:6px;"></div></div>
   </aside>
   <div id="main">
     <div id="topbar">
@@ -466,6 +523,7 @@ const NAV = [
   ]},
   {id:'yearend', label:'Year-End Close', ic:'⊗'},
   {id:'usage', label:'Time Tracking', ic:'◷'},
+  {id:'admin-users', label:'Users & Access', ic:'⚿', adminOnly:true},
   {id:'settings', label:'Settings', ic:'⚙'},
 ];
 // which nav view belongs to which expandable group, so the group auto-opens
@@ -768,10 +826,16 @@ async function saveState(immediate){
   clearTimeout(SAVE_TIMER);
   const doSave = async ()=>{
     try{
+      // Always keep a local cache (offline fallback + non-authed use).
       const result = await storageSet(STORAGE_KEY, JSON.stringify(WORKSPACE));
+      // In server mode, also push the active company's payload to Supabase.
+      let serverOk = true;
+      if(SERVER_MODE && WORKSPACE && WORKSPACE.activeId){
+        serverOk = await saveCompanyToServer(WORKSPACE.activeId);
+      }
       // also mirror to the linked disk file, if any
       if(FILE_HANDLE) await writeWorkspaceToHandle();
-      if(result || FILE_HANDLE){ LAST_SAVED_AT = new Date(); updateSaveIndicator(); }
+      if(result || FILE_HANDLE || serverOk){ LAST_SAVED_AT = new Date(); updateSaveIndicator(); }
       else { showToast('Could not save — changes may not persist'); }
     }catch(e){ console.error('save failed', e); showToast('Could not save — changes may not persist'); }
   };
@@ -786,6 +850,8 @@ function updateSaveIndicator(){
   const when = secs<5 ? 'just now' : secs<60 ? secs+'s ago' : Math.round(secs/60)+'m ago';
   if(FILE_HANDLE){
     el.innerHTML = `● Saved ${when} <span title="Saving to ${escapeHtml(FILE_NAME||'file')}" style="color:var(--money-pos);">→ 💾 ${escapeHtml(FILE_NAME||'file')}</span>`;
+  } else if(SERVER_MODE){
+    el.innerHTML = `● Saved ${when} <span style="color:var(--money-pos);">→ ☁ server</span>`;
   } else {
     el.textContent = '● Saved '+when;
   }
@@ -965,6 +1031,9 @@ function switchCompany(id){
     showToast("You don't have access to that company"); return;
   }
   if(typeof timeTick==='function') timeTick(); // credit time to the outgoing company first
+  const outgoing = WORKSPACE.activeId;
+  // In server mode, flush the outgoing company's payload before switching.
+  if(SERVER_MODE && outgoing && outgoing!==id){ saveCompanyToServer(outgoing); }
   WORKSPACE.activeId = id;
   S = WORKSPACE.companies[id];
   TIME_LAST_TICK = Date.now(); TIME_LAST_ACTIVE = Date.now();
@@ -1008,10 +1077,23 @@ function submitNewCompany(){
   const co = newCompanyRecord(name);
   co.settings.currency = currency;
   co.settings.taxRate = taxRate;
+  if(withSample){ const prevS = S; S = co; seedDemoData(); S = prevS; }
+  if(SERVER_MODE){
+    // Create on the server first so we use its UUID as the id.
+    createCompanyOnServer(co).then(serverId=>{
+      if(!serverId){ showToast('Could not create company on server'); return; }
+      co.serverId = serverId;
+      WORKSPACE.companies[serverId] = co;
+      (WORKSPACE.order = WORKSPACE.order||Object.keys(WORKSPACE.companies)).push(serverId);
+      WORKSPACE.activeId = serverId;
+      S = WORKSPACE.companies[serverId];
+      closeModal(); showToast('Company created'); saveState(true); navigate('dashboard');
+    });
+    return;
+  }
   const id = uid('co');
   WORKSPACE.companies[id] = co;
   (WORKSPACE.order = WORKSPACE.order||Object.keys(WORKSPACE.companies)).push(id);
-  if(withSample){ const prevS = S; S = co; seedDemoData(); S = prevS; }
   WORKSPACE.activeId = id;
   S = WORKSPACE.companies[id];
   if(CURRENT_USER && CURRENT_USER.isAdmin && CURRENT_USER.companyIds) CURRENT_USER.companyIds.push(id);
@@ -1053,6 +1135,9 @@ function confirmDeleteCompany(id){
     if(typed !== name){ if(errEl) errEl.style.display='block'; return; }
   }
   // passed confirmation — delete
+  const co = WORKSPACE.companies[id];
+  const serverId = co && co.serverId ? co.serverId : id;
+  if(SERVER_MODE){ deleteCompanyOnServer(serverId); }
   delete WORKSPACE.companies[id];
   WORKSPACE.order = (WORKSPACE.order||[]).filter(x=>x!==id);
   (WORKSPACE.users||[]).forEach(u=>{ if(u.companyIds) u.companyIds = u.companyIds.filter(cid=>cid!==id); });
@@ -1670,6 +1755,7 @@ function renderNav(){
   const activeGroup = NAV_GROUP_OF[VIEW];
   if(activeGroup) NAV_OPEN_GROUPS[activeGroup] = true;
   nav.innerHTML = NAV.map(item=>{
+    if(item.adminOnly && !reconiIsAdmin()) return ''; // hide admin-only items from non-admins
     if(item.sec) return `<div class="nav-section-label">${item.sec}</div>`;
     if(item.group){
       const open = !!NAV_OPEN_GROUPS[item.group];
@@ -1733,6 +1819,7 @@ function render(){
     'rep-vat': ()=>{ REPORT_TAB='vat'; renderReports(); },
     yearend: renderYearEnd,
     usage: renderUsage,
+    'admin-users': renderAdminUsers,
     settings: renderSettings,
     'invoice-print': renderInvoicePrintPage,
     'reconcile': renderReconcilePage,
@@ -6817,23 +6904,391 @@ function timeTotalsByCompany(from, to){
 }
 
 /* ============================= INIT ============================= */
+/* ============================= SUPABASE AUTH GATE ============================= */
+// Server-side accounts control ACCESS. Data still lives in local storage for now.
+const SUPABASE_URL = 'https://snoaphpvsyyxyhwfuxwj.supabase.co';
+const SUPABASE_KEY = 'sb_publishable_W4EFML6hMQnNJD07OmXV7g_IR3u-SjZ';
+let SB = null;          // supabase client
+let GATE_MODE = 'login'; // 'login' | 'register'
+let AUTH_PROFILE = null; // the signed-in user's profile row
+
+function initSupabase(){
+  try{
+    if(window.supabase && window.supabase.createClient){
+      SB = window.supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
+      return true;
+    }
+  }catch(e){ console.error('Supabase init failed', e); }
+  return false;
+}
+function showAuthGate(){
+  document.getElementById('shell').style.display = 'none';
+  document.getElementById('login-screen').style.display = 'none';
+  const g = document.getElementById('auth-gate');
+  if(g) g.style.display = 'flex';
+  setGateMode('login');
+}
+function gateEl(id){ return document.getElementById(id); }
+function setGateMode(mode){
+  GATE_MODE = mode;
+  gateEl('gate-form').style.display = 'block';
+  gateEl('gate-pending').style.display = 'none';
+  gateEl('gate-error').style.display = 'none';
+  gateEl('gate-info').style.display = 'none';
+  const nameField = gateEl('gate-name-field');
+  if(mode==='register'){
+    gateEl('gate-sub').textContent = 'Create your RECONI account';
+    gateEl('gate-primary-btn').textContent = 'Register';
+    gateEl('gate-toggle').textContent = 'Back to sign in';
+    nameField.style.display = 'block';
+    gateEl('gate-password').setAttribute('autocomplete','new-password');
+  } else {
+    gateEl('gate-sub').textContent = 'Sign in to your account';
+    gateEl('gate-primary-btn').textContent = 'Sign in';
+    gateEl('gate-toggle').textContent = 'Create an account';
+    nameField.style.display = 'none';
+    gateEl('gate-password').setAttribute('autocomplete','current-password');
+  }
+}
+function toggleGateMode(e){ if(e) e.preventDefault(); setGateMode(GATE_MODE==='login'?'register':'login'); }
+function gateShowError(msg){ const el=gateEl('gate-error'); el.textContent=msg; el.style.display='block'; gateEl('gate-info').style.display='none'; }
+function gateShowInfo(msg){ const el=gateEl('gate-info'); el.textContent=msg; el.style.display='block'; gateEl('gate-error').style.display='none'; }
+function gateShowPending(){
+  gateEl('gate-form').style.display='none';
+  gateEl('gate-pending').style.display='block';
+  gateEl('gate-sub').textContent='Account pending approval';
+}
+
+async function gatePrimaryAction(){
+  if(!SB){ gateShowError('Connection not ready — please refresh.'); return; }
+  const email = (gateEl('gate-email').value||'').trim();
+  const password = gateEl('gate-password').value||'';
+  if(!email || !password){ gateShowError('Enter your email and password.'); return; }
+  gateEl('gate-primary-btn').disabled = true;
+  try{
+    if(GATE_MODE==='register'){
+      const fullName = (gateEl('gate-name').value||'').trim();
+      const { data, error } = await SB.auth.signUp({
+        email, password,
+        options:{ data:{ full_name: fullName } }
+      });
+      if(error){ gateShowError(error.message); return; }
+      // With email-confirm OFF, a session may exist immediately. Either way the
+      // profile is pending until an admin approves, so show the pending screen.
+      gateShowPending();
+      return;
+    } else {
+      const { data, error } = await SB.auth.signInWithPassword({ email, password });
+      if(error){ gateShowError(error.message); return; }
+      await afterAuthenticated();
+    }
+  } catch(e){
+    gateShowError('Something went wrong. Please try again.');
+    console.error(e);
+  } finally {
+    gateEl('gate-primary-btn').disabled = false;
+  }
+}
+async function gateForgotPassword(e){
+  if(e) e.preventDefault();
+  if(!SB){ gateShowError('Connection not ready — please refresh.'); return; }
+  const email = (gateEl('gate-email').value||'').trim();
+  if(!email){ gateShowError('Enter your email above first, then click “Forgot password?”.'); return; }
+  try{
+    const { error } = await SB.auth.resetPasswordForEmail(email, { redirectTo: window.location.href });
+    if(error){ gateShowError(error.message); return; }
+    gateShowInfo('If that email has an account, a password-reset link is on its way.');
+  }catch(err){ gateShowError('Could not send reset email.'); }
+}
+// Fetch the signed-in user's profile and decide: allowed in, or pending/blocked.
+async function afterAuthenticated(){
+  const { data:{ user }, error } = await SB.auth.getUser();
+  if(error || !user){ gateShowError('Session error — please sign in again.'); return; }
+  // read own profile (RLS allows reading your own row)
+  const { data:profiles, error:pErr } = await SB.from('profiles').select('*').eq('id', user.id).limit(1);
+  if(pErr){ gateShowError('Could not load your profile: '+pErr.message); return; }
+  const profile = (profiles && profiles[0]) || null;
+  if(!profile){ gateShowPending(); return; } // trigger may lag; treat as pending
+  AUTH_PROFILE = profile;
+  const active = profile.is_approved===true && profile.is_blocked!==true
+    && ['none','trialing','active'].includes(profile.subscription_status||'none');
+  if(!active){
+    if(profile.is_blocked){ gateShowError('Your account has been blocked. Contact the administrator.'); await SB.auth.signOut(); return; }
+    gateShowPending();
+    return;
+  }
+  // Approved → enter the app. Data remains local for now.
+  enterAppAfterGate(profile);
+}
+function enterAppAfterGate(profile){
+  document.getElementById('auth-gate').style.display = 'none';
+  updateAuthStatus();
+  // Load this user's companies from the server (hybrid), then open the app.
+  loadWorkspaceFromServer().then(()=>{ showApp(); }).catch(err=>{
+    console.error('Server load failed, using local data', err);
+    showToast('Could not load from server — showing local data');
+    showApp();
+  });
+}
+
+/* ============================= HYBRID SERVER DATA LAYER ============================= */
+// Each company is one row in public.companies; its whole book lives in the JSONB `data`.
+// user_company_access + RLS decide which companies a user can load. Admins see all.
+let SERVER_MODE = false;   // true once we've loaded from Supabase this session
+
+async function loadWorkspaceFromServer(){
+  if(!SB){ return; }
+  const { data:companies, error } = await SB.from('companies').select('id, name, data, updated_at');
+  if(error){ throw error; }
+  SERVER_MODE = true;
+  if(!companies || companies.length===0){
+    // No companies granted/created yet. Give this user a fresh starter company
+    // stored on the server (so it persists and is shared).
+    await createStarterCompanyOnServer();
+    return;
+  }
+  // Rebuild the in-memory WORKSPACE from server rows.
+  const companiesMap = {};
+  const order = [];
+  companies.forEach(row=>{
+    const co = (row.data && Object.keys(row.data).length) ? row.data : newCompanyRecord(row.name||'Company');
+    co.serverId = row.id;                 // remember the server UUID
+    migrateCompanyShape(co);
+    companiesMap[row.id] = co;
+    order.push(row.id);
+  });
+  WORKSPACE = {
+    companies: companiesMap,
+    order,
+    activeId: order[0],
+    users: [],
+    authEnabled: false,
+    timeLog: (WORKSPACE && WORKSPACE.timeLog) || { entries:[] },
+    uiPrefs: (WORKSPACE && WORKSPACE.uiPrefs) || {},
+  };
+  S = WORKSPACE.companies[WORKSPACE.activeId];
+  LAST_SAVED_AT = new Date();
+}
+
+async function createStarterCompanyOnServer(){
+  const co = newCompanyRecord('My Business');
+  const { data:userRes } = await SB.auth.getUser();
+  const uid_ = userRes && userRes.user ? userRes.user.id : null;
+  const { data:inserted, error } = await SB.from('companies')
+    .insert({ name:'My Business', data:co, created_by:uid_ })
+    .select('id').limit(1);
+  if(error){ console.error('starter company insert failed', error); throw error; }
+  const serverId = inserted[0].id;
+  co.serverId = serverId;
+  WORKSPACE = { companies:{ [serverId]:co }, order:[serverId], activeId:serverId, users:[], authEnabled:false, timeLog:{entries:[]}, uiPrefs:{} };
+  S = co;
+  LAST_SAVED_AT = new Date();
+}
+
+// Save one company's payload to the server.
+async function saveCompanyToServer(companyId){
+  if(!SB || !SERVER_MODE) return false;
+  const co = WORKSPACE.companies[companyId];
+  if(!co) return false;
+  const serverId = co.serverId || companyId;
+  try{
+    const { error } = await SB.from('companies')
+      .update({ name: (co.settings && co.settings.businessName) || 'Company', data: co })
+      .eq('id', serverId);
+    if(error){ console.error('save company failed', error); return false; }
+    return true;
+  }catch(e){ console.error(e); return false; }
+}
+
+// Create a brand-new company on the server (used by the "add company" flow when online).
+async function createCompanyOnServer(co){
+  if(!SB || !SERVER_MODE) return null;
+  const { data:userRes } = await SB.auth.getUser();
+  const uid_ = userRes && userRes.user ? userRes.user.id : null;
+  const { data:inserted, error } = await SB.from('companies')
+    .insert({ name:(co.settings&&co.settings.businessName)||'Company', data:co, created_by:uid_ })
+    .select('id').limit(1);
+  if(error){ console.error('create company failed', error); return null; }
+  return inserted[0].id;
+}
+
+// Delete a company on the server.
+async function deleteCompanyOnServer(serverId){
+  if(!SB || !SERVER_MODE) return false;
+  const { error } = await SB.from('companies').delete().eq('id', serverId);
+  if(error){ console.error('delete company failed', error); return false; }
+  return true;
+}
+
+function updateAuthStatus(){
+  const el = document.getElementById('auth-status');
+  if(!el) return;
+  if(AUTH_PROFILE){
+    const who = escapeHtml(AUTH_PROFILE.full_name || AUTH_PROFILE.email || 'Signed in');
+    el.innerHTML = `<div style="color:rgba(237,243,238,.65);">${who}${reconiIsAdmin()?' · admin':''}</div>
+      <a href="#" onclick="event.preventDefault(); reconiSignOut();" style="color:var(--gold);">Sign out</a>`;
+  } else {
+    el.innerHTML = '';
+  }
+}
+async function gateSignOut(){
+  try{ if(SB) await SB.auth.signOut(); }catch(e){}
+  AUTH_PROFILE = null;
+  showAuthGate();
+}
+// expose a global sign-out RECONI can call from the sidebar later
+async function reconiSignOut(){ await gateSignOut(); }
+
+/* ============================= ADMIN: USERS & ACCESS (Step 3) ============================= */
+function reconiIsAdmin(){ return !!(AUTH_PROFILE && ['owner','admin'].includes(AUTH_PROFILE.role) && !AUTH_PROFILE.is_blocked); }
+let ADMIN_USERS = [];        // cached list of profiles
+let ADMIN_USERS_LOADING = false;
+
+async function renderAdminUsers(){
+  setTopbar('Users & Access', 'Approve, block, and manage who can use RECONI', '');
+  if(!reconiIsAdmin()){
+    document.getElementById('content').innerHTML = `<div class="card"><div class="card-body"><p style="margin:0; color:var(--text-muted);">You don't have permission to manage users.</p></div></div>`;
+    return;
+  }
+  if(!SB){
+    document.getElementById('content').innerHTML = `<div class="card"><div class="card-body"><p style="margin:0; color:var(--red);">Not connected to the server. Users can only be managed while signed in online.</p></div></div>`;
+    return;
+  }
+  document.getElementById('content').innerHTML = `<div class="card"><div class="card-body"><p style="margin:0; color:var(--text-muted);">Loading users…</p></div></div>`;
+  await loadAdminUsers();
+  paintAdminUsers();
+}
+async function loadAdminUsers(){
+  ADMIN_USERS_LOADING = true;
+  try{
+    const { data, error } = await SB.from('profiles').select('*').order('created_at', { ascending:false });
+    if(error){ showToast('Could not load users: '+error.message); ADMIN_USERS=[]; }
+    else ADMIN_USERS = data||[];
+  }catch(e){ showToast('Could not load users'); ADMIN_USERS=[]; }
+  ADMIN_USERS_LOADING = false;
+}
+function userStatusBadge(u){
+  if(u.is_blocked) return `<span class="badge badge-void">Blocked</span>`;
+  if(!u.is_approved) return `<span class="badge badge-draft">Pending</span>`;
+  return `<span class="badge badge-open">Active</span>`;
+}
+function paintAdminUsers(){
+  const me = AUTH_PROFILE ? AUTH_PROFILE.id : null;
+  const pending = ADMIN_USERS.filter(u=>!u.is_approved && !u.is_blocked);
+  const rows = ADMIN_USERS.map(u=>{
+    const isSelf = u.id===me;
+    const canBlock = !isSelf && u.role!=='owner';   // can't block yourself or the owner
+    return `<tr>
+      <td>
+        <div><strong>${escapeHtml(u.full_name||'—')}</strong></div>
+        <div style="font-size:12px; color:var(--text-muted);">${escapeHtml(u.email||'')}</div>
+      </td>
+      <td>${escapeHtml(u.role||'user')}${isSelf?' <span style="font-size:11px; color:var(--text-muted);">(you)</span>':''}</td>
+      <td>${userStatusBadge(u)}</td>
+      <td style="text-align:right; white-space:nowrap;">
+        ${!u.is_approved && !u.is_blocked ? `<button class="btn btn-primary btn-sm" onclick="adminApprove('${u.id}')">Approve</button>` : ''}
+        ${u.is_approved && !u.is_blocked && canBlock ? `<button class="btn btn-ghost btn-sm" onclick="adminBlock('${u.id}')">Block</button>` : ''}
+        ${u.is_blocked ? `<button class="btn btn-ghost btn-sm" onclick="adminUnblock('${u.id}')">Unblock</button>` : ''}
+        ${!isSelf ? `<button class="icon-btn" onclick="adminManageCompanies('${u.id}')" title="Assign companies">Companies</button>` : ''}
+      </td>
+    </tr>`;
+  }).join('');
+
+  document.getElementById('content').innerHTML = `
+    ${pending.length? `<div class="card" style="margin-bottom:16px; border-left:3px solid var(--gold);">
+      <div class="card-body"><strong>${pending.length} account${pending.length===1?'':'s'} awaiting approval.</strong>
+      <span style="color:var(--text-muted);"> Review them below and Approve to grant access.</span></div></div>`:''}
+    <div class="card">
+      <div class="card-head"><h3>All users (${ADMIN_USERS.length})</h3>
+        <button class="btn btn-ghost btn-sm" onclick="renderAdminUsers()">↻ Refresh</button></div>
+      <table><thead><tr><th>User</th><th>Role</th><th>Status</th><th></th></tr></thead>
+        <tbody>${rows || `<tr><td colspan="4" style="color:var(--text-muted);">No users yet.</td></tr>`}</tbody>
+      </table>
+    </div>
+    <div class="card" style="margin-top:16px;"><div class="card-body">
+      <div class="hint" style="margin:0;">Approving a user lets them sign in. Blocking instantly revokes their access on their next action. The database enforces this server-side, so it holds even outside this app. Company assignment controls which companies a user can see (admins see all).</div>
+    </div></div>`;
+}
+async function adminSetStatus(userId, approve, block){
+  if(!SB) return;
+  try{
+    const { error } = await SB.rpc('admin_set_user_status', { target:userId, approve, block });
+    if(error){ showToast('Action failed: '+error.message); return; }
+    showToast('User updated');
+    await loadAdminUsers(); paintAdminUsers();
+  }catch(e){ showToast('Action failed'); }
+}
+function adminApprove(id){ adminSetStatus(id, true, false); }
+function adminBlock(id){ if(confirm('Block this user? They lose access immediately.')) adminSetStatus(id, findUserApproved(id), true); }
+function adminUnblock(id){ adminSetStatus(id, findUserApproved(id), false); }
+function findUserApproved(id){ const u=ADMIN_USERS.find(x=>x.id===id); return u? u.is_approved!==false : true; }
+
+// ---- Company assignment ----
+async function adminManageCompanies(userId){
+  if(!SB) return;
+  const u = ADMIN_USERS.find(x=>x.id===userId); if(!u) return;
+  // load this workspace's companies (local) + current grants (server)
+  const companies = companyList(); // local companies in this browser
+  let grants = [];
+  try{
+    const { data } = await SB.from('user_company_access').select('company_id, access').eq('user_id', userId);
+    grants = data||[];
+  }catch(e){}
+  const body = `
+    <p style="margin-top:0; font-size:13px; color:var(--text-muted);">Choose which companies <strong>${escapeHtml(u.full_name||u.email)}</strong> may access. (Admins and owners can see every company regardless.)</p>
+    ${companies.length? companies.map(c=>{
+      const g = grants.find(x=>x.company_id===c.id);
+      return `<label style="display:flex; align-items:center; gap:10px; padding:8px 10px; border:1px solid var(--border); border-radius:8px; margin-bottom:6px;">
+        <input type="checkbox" style="width:auto;" ${g?'checked':''} onchange="adminToggleCompany('${userId}','${c.id}', this.checked)">
+        <span style="flex:1;">${escapeHtml(c.settings.businessName||'Untitled')}</span>
+        <span style="font-size:11px; color:var(--text-muted);">${g? (g.access||'write') : ''}</span>
+      </label>`;
+    }).join('') : `<div class="hint">No companies exist in this browser yet.</div>`}
+    <div class="hint" style="margin-top:10px;">Note: company data is still stored locally in this build, so these grants take full effect once data moves to the server (a later step). They're saved now so you don't have to redo them.</div>
+  `;
+  openModal('Assign companies', body, [{label:'Done', cls:'btn-primary', onclick:'closeModal(); renderAdminUsers();'}]);
+}
+async function adminToggleCompany(userId, companyId, on){
+  if(!SB) return;
+  try{
+    if(on){
+      // ensure the company row exists server-side (so the FK is valid), then grant.
+      const c = WORKSPACE.companies[companyId];
+      await SB.from('companies').upsert({ id:companyId, name:(c&&c.settings.businessName)||'Untitled' }, { onConflict:'id' });
+      const { error } = await SB.rpc('admin_grant_company', { target:userId, cid:companyId, access_level:'write' });
+      if(error){ showToast('Grant failed: '+error.message); return; }
+    } else {
+      const { error } = await SB.rpc('admin_revoke_company', { target:userId, cid:companyId });
+      if(error){ showToast('Revoke failed: '+error.message); return; }
+    }
+  }catch(e){ showToast('Company assignment failed'); }
+}
+
 async function init(){
   await loadState();
   document.getElementById('modal-root').addEventListener('input', (e)=>{
     if(e.target.closest('#li-body-wrap') || e.target.id==='f-tax'){ recalcInvoiceForm(); }
   });
-  if(WORKSPACE.authEnabled && (WORKSPACE.users||[]).length>0){
-    const sessionId = getSessionUserId();
-    const user = sessionId ? WORKSPACE.users.find(u=>u.id===sessionId) : null;
-    if(user){
-      CURRENT_USER = user;
-      ensureActiveCompanyAccessible();
-      showApp();
-    } else {
-      showLoginScreen();
-    }
-  } else {
+  // Supabase auth gate governs ACCESS. If it can't initialise (offline/CDN blocked),
+  // fall back to the app so you're never locked out by a network hiccup.
+  const sbReady = initSupabase();
+  if(!sbReady){
+    console.warn('Supabase unavailable — opening app without the server gate.');
     showApp();
+    return;
+  }
+  // Is there already a valid Supabase session? If so, check the profile and enter.
+  try{
+    const { data:{ session } } = await SB.auth.getSession();
+    if(session){
+      showAuthGate();               // show gate container (will be hidden if approved)
+      await afterAuthenticated();
+    } else {
+      showAuthGate();
+    }
+  }catch(e){
+    console.error(e);
+    showAuthGate();
   }
 }
 init();
