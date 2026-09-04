@@ -7074,8 +7074,10 @@ async function afterAuthenticated(){
   const profile = (profiles && profiles[0]) || null;
   if(!profile){ gateShowPending(); return; } // trigger may lag; treat as pending
   AUTH_PROFILE = profile;
-  const active = profile.is_approved===true && profile.is_blocked!==true
-    && ['none','trialing','active'].includes(profile.subscription_status||'none');
+  const isAdmin = ['owner','admin'].includes(profile.role) && profile.is_blocked!==true;
+  // Admins/owners always have full access — never trial-gated, never billing-restricted.
+  const active = isAdmin || (profile.is_approved===true && profile.is_blocked!==true
+    && ['none','trialing','active'].includes(profile.subscription_status||'none'));
   if(!active){
     if(profile.is_blocked){ gateShowError('Your account has been blocked. Contact the administrator.'); await SB.auth.signOut(); return; }
     gateShowPending();
@@ -7229,6 +7231,18 @@ function trialDaysLeft(){
 }
 function renderSubscription(){
   setTopbar('Subscription', 'Choose the plan that fits your practice', '');
+  // Administrators have full, unlimited access with no billing — show that clearly.
+  if(reconiIsAdmin()){
+    document.getElementById('content').innerHTML = `
+      <div class="card"><div class="card-body" style="text-align:center; padding:40px 20px;">
+        <div style="font-size:40px; margin-bottom:10px;">◈</div>
+        <div style="font-size:18px; font-weight:800; margin-bottom:6px;">Administrator — full unlimited access</div>
+        <div style="color:var(--text-muted); font-size:13.5px; max-width:460px; margin:0 auto;">
+          Your account has complete access to every feature and unlimited companies and users, with no subscription or payment required. Billing applies only to standard user accounts.
+        </div>
+      </div></div>`;
+    return;
+  }
   const status = subStatus();
   const curPlan = currentPlanId();
   const trialLeft = trialDaysLeft();
@@ -7303,6 +7317,20 @@ function startCheckout(planId){
 
 
 function reconiIsAdmin(){ return !!(AUTH_PROFILE && ['owner','admin'].includes(AUTH_PROFILE.role) && !AUTH_PROFILE.is_blocked); }
+// Central "does this account have active, usable access right now?" — admins always true.
+function reconiHasAccess(){
+  if(reconiIsAdmin()) return true;
+  if(!AUTH_PROFILE) return true; // local/offline fallback (no server gate)
+  return AUTH_PROFILE.is_approved===true && AUTH_PROFILE.is_blocked!==true
+    && ['none','trialing','active'].includes(AUTH_PROFILE.subscription_status||'none');
+}
+// Company limit for the current account (null = unlimited). Admins are always unlimited.
+function reconiCompanyLimit(){
+  if(reconiIsAdmin()) return null;                 // unlimited
+  const planId = AUTH_PROFILE && AUTH_PROFILE.plan;
+  const plan = (typeof RECONI_PLANS!=='undefined') ? RECONI_PLANS.find(p=>p.id===planId) : null;
+  return plan ? plan.companies : null;             // null = unlimited if no plan matched
+}
 let ADMIN_USERS = [];        // cached list of profiles
 let ADMIN_USERS_LOADING = false;
 
