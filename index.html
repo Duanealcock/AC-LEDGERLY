@@ -7400,6 +7400,7 @@ function paintAdminUsers(){
         ${u.is_approved && !u.is_blocked && canBlock ? `<button class="btn btn-ghost btn-sm" onclick="adminBlock('${u.id}')">Block</button>` : ''}
         ${u.is_blocked ? `<button class="btn btn-ghost btn-sm" onclick="adminUnblock('${u.id}')">Unblock</button>` : ''}
         ${!isSelf ? `<button class="icon-btn" onclick="adminManageCompanies('${u.id}')" title="Assign companies">Companies</button>` : ''}
+        ${!isSelf && u.role!=='owner' ? `<button class="icon-btn" style="color:var(--red);" onclick="adminRemoveUser('${u.id}')" title="Remove this user">Remove</button>` : ''}
       </td>
     </tr>`;
   }).join('');
@@ -7410,7 +7411,10 @@ function paintAdminUsers(){
       <span style="color:var(--text-muted);"> Review them below and Approve to grant access.</span></div></div>`:''}
     <div class="card">
       <div class="card-head"><h3>All users (${ADMIN_USERS.length})</h3>
-        <button class="btn btn-ghost btn-sm" onclick="renderAdminUsers()">↻ Refresh</button></div>
+        <div style="display:flex; gap:8px;">
+          <button class="btn btn-primary btn-sm" onclick="adminOpenCreateUser()">+ Add user</button>
+          <button class="btn btn-ghost btn-sm" onclick="renderAdminUsers()">↻ Refresh</button>
+        </div></div>
       <table><thead><tr><th>User</th><th>Role</th><th>Status</th><th></th></tr></thead>
         <tbody>${rows || `<tr><td colspan="4" style="color:var(--text-muted);">No users yet.</td></tr>`}</tbody>
       </table>
@@ -7431,6 +7435,85 @@ async function adminSetStatus(userId, approve, block){
 function adminApprove(id){ adminSetStatus(id, true, false); }
 function adminBlock(id){ if(confirm('Block this user? They lose access immediately.')) adminSetStatus(id, findUserApproved(id), true); }
 function adminUnblock(id){ adminSetStatus(id, findUserApproved(id), false); }
+
+// ---- Create a new user account (admin) ----
+function adminOpenCreateUser(){
+  const body = `
+    <div class="field"><label>Full name</label><input type="text" id="cu-name" placeholder="Jane Bookkeeper"></div>
+    <div class="field"><label>Email</label><input type="email" id="cu-email" autocomplete="off" placeholder="jane@example.com"></div>
+    <div class="field"><label>Temporary password</label>
+      <div class="pw-wrap">
+        <input type="password" id="cu-pass" autocomplete="new-password" placeholder="At least 8 characters">
+        <button type="button" class="pw-eye" id="cu-pass-eye" onclick="togglePasswordVisibility('cu-pass','cu-pass-eye')">👁</button>
+      </div>
+    </div>
+    <label style="display:flex; align-items:center; gap:8px; font-size:13px; margin-top:4px; cursor:pointer;">
+      <input type="checkbox" id="cu-approve" checked style="width:auto;"> Approve immediately (they can sign in right away)
+    </label>
+    <div class="hint" style="margin-top:8px;">Share the email and temporary password with the person — they can change their password after signing in. The account is created pre-confirmed, so they won't need to verify their email.</div>
+    <div id="cu-error" class="login-error" style="display:none; margin-top:8px;"></div>
+  `;
+  openModal('Add user', body, [
+    {label:'Cancel', cls:'btn-ghost', onclick:'closeModal()'},
+    {label:'Create user', cls:'btn-primary', onclick:'adminCreateUser()'},
+  ]);
+}
+async function adminCreateUser(){
+  const name = (document.getElementById('cu-name').value||'').trim();
+  const email = (document.getElementById('cu-email').value||'').trim();
+  const pass = document.getElementById('cu-pass').value||'';
+  const approve = document.getElementById('cu-approve').checked;
+  const err = document.getElementById('cu-error');
+  const showErr = m=>{ if(err){ err.textContent=m; err.style.display='block'; } };
+  if(!name){ showErr('Enter a name.'); return; }
+  if(!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)){ showErr('Enter a valid email.'); return; }
+  if(pass.length<8){ showErr('Password must be at least 8 characters.'); return; }
+  if(!SB){ showErr('Not connected to the server.'); return; }
+  try{
+    const { data, error } = await SB.functions.invoke('admin-users', { body:{ action:'create', email, password:pass, full_name:name, approve } });
+    if(error){ showErr(error.message||'Could not create user'); return; }
+    if(data && data.error){ showErr(data.error); return; }
+    closeModal(); showToast('User created'); await loadAdminUsers(); paintAdminUsers();
+  }catch(e){ showErr('Could not create user'); }
+}
+
+// ---- Remove a user: revoke access OR fully delete ----
+function adminRemoveUser(userId){
+  const u = ADMIN_USERS.find(x=>x.id===userId);
+  if(!u) return;
+  const body = `
+    <p style="margin-top:0;">Remove <strong>${escapeHtml(u.full_name||u.email)}</strong>?</p>
+    <div style="display:flex; flex-direction:column; gap:10px; margin-top:12px;">
+      <button class="btn btn-ghost" style="justify-content:flex-start; text-align:left; height:auto; padding:12px 14px;" onclick="adminRevokeAccess('${userId}')">
+        <div><div style="font-weight:700;">Revoke access</div><div style="font-size:12px; color:var(--text-muted);">Blocks them and removes company access. Keeps the account record — you can restore access later.</div></div>
+      </button>
+      <button class="btn btn-ghost" style="justify-content:flex-start; text-align:left; height:auto; padding:12px 14px; border-color:var(--red);" onclick="adminDeleteUser('${userId}')">
+        <div><div style="font-weight:700; color:var(--red);">Delete permanently</div><div style="font-size:12px; color:var(--text-muted);">Erases their login and profile completely. This cannot be undone.</div></div>
+      </button>
+    </div>`;
+  openModal('Remove user', body, [{label:'Cancel', cls:'btn-ghost', onclick:'closeModal()'}]);
+}
+async function adminRevokeAccess(userId){
+  // block + strip company access (uses existing RPCs; no service role needed)
+  if(!SB) return;
+  try{
+    await SB.rpc('admin_set_user_status', { target:userId, approve:false, block:true });
+    // remove all their company grants
+    const { data:grants } = await SB.from('user_company_access').select('company_id').eq('user_id', userId);
+    for(const g of (grants||[])){ await SB.rpc('admin_revoke_company', { target:userId, cid:g.company_id }); }
+    closeModal(); showToast('Access revoked'); await loadAdminUsers(); paintAdminUsers();
+  }catch(e){ showToast('Could not revoke access'); }
+}
+async function adminDeleteUser(userId){
+  if(!confirm('Permanently delete this user? This erases their login and cannot be undone.')) return;
+  if(!SB) return;
+  try{
+    const { data, error } = await SB.functions.invoke('admin-users', { body:{ action:'delete', user_id:userId } });
+    if(error){ showToast(error.message||'Could not delete user'); return; }
+    if(data && data.error){ showToast(data.error); return; }
+    closeModal(); showToast('User deleted'); await loadAdminUsers(); paintAdminUsers();
+  }catch(e){ showToast('Could not delete user'); }
+}
 function findUserApproved(id){ const u=ADMIN_USERS.find(x=>x.id===id); return u? u.is_approved!==false : true; }
 
 // ---- Company assignment ----
