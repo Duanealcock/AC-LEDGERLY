@@ -7309,10 +7309,30 @@ function choosePlan(planId){
     {label:`Start ${RECONI_TRIAL_DAYS}-day trial`, cls:'btn-primary', onclick:`startCheckout('${p.id}')`},
   ]);
 }
-function startCheckout(planId){
-  // PayFast checkout will be wired here once your merchant credentials + Edge Function are ready.
+async function startCheckout(planId){
+  if(!SB){ showToast('Please sign in first.'); return; }
   closeModal();
-  showToast('Checkout coming soon — PayFast integration is the next step.');
+  showToast('Preparing secure checkout…');
+  try{
+    // Ask our Edge Function to build + sign the PayFast request (passphrase stays server-side).
+    const { data, error } = await SB.functions.invoke('payfast-checkout', { body:{ planId } });
+    if(error){ showToast('Checkout error: '+error.message); return; }
+    if(!data || !data.processUrl || !data.params){ showToast('Checkout could not be prepared.'); return; }
+    // Build a form and POST to PayFast (redirects the user to pay).
+    const form = document.createElement('form');
+    form.method = 'POST';
+    form.action = data.processUrl;
+    Object.keys(data.params).forEach(k=>{
+      const input = document.createElement('input');
+      input.type = 'hidden'; input.name = k; input.value = data.params[k];
+      form.appendChild(input);
+    });
+    document.body.appendChild(form);
+    form.submit();
+  }catch(e){
+    console.error(e);
+    showToast('Could not start checkout. Please try again.');
+  }
 }
 
 
