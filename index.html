@@ -353,7 +353,7 @@
   }
 
   /* Login screen */
-  #login-screen, #auth-gate{
+  #login-screen, #auth-gate, #company-setup{
     position:fixed; inset:0; background:radial-gradient(ellipse at top, #141B33 0%, #0B0F1D 70%);
     display:flex; align-items:center; justify-content:center; z-index:500; padding:20px;
   }
@@ -1042,6 +1042,20 @@ function companyList(){
 function canManageWorkspace(){
   return !WORKSPACE.authEnabled || (CURRENT_USER && CURRENT_USER.isAdmin);
 }
+// Can the signed-in user add ANOTHER company right now?
+// Admins: always. Regular users: only if under their plan's company limit.
+function canAddCompany(){
+  if(typeof reconiIsAdmin==='function' && reconiIsAdmin()) return true;   // admins unlimited
+  const limit = (typeof reconiCompanyLimit==='function') ? reconiCompanyLimit() : null;
+  if(limit==null) return true;                                            // unlimited plan
+  const count = WORKSPACE && WORKSPACE.companies ? Object.keys(WORKSPACE.companies).length : 0;
+  return count < limit;
+}
+function companyLimitMessage(){
+  const limit = (typeof reconiCompanyLimit==='function') ? reconiCompanyLimit() : null;
+  if(limit==null) return '';
+  return `Your current plan allows ${limit} compan${limit===1?'y':'ies'}. Upgrade your subscription to add more.`;
+}
 function switchCompany(id){
   if(!WORKSPACE.companies[id]) return;
   if(WORKSPACE.authEnabled && CURRENT_USER && !CURRENT_USER.isAdmin && !(CURRENT_USER.companyIds||[]).includes(id)){
@@ -1069,7 +1083,10 @@ function openCompanySwitcher(){
       </div>
       ${(canManage && list.length>1) ? `<button class="icon-btn" onclick="event.stopPropagation(); deleteCompanyAction('${c.id}')">Delete</button>` : ''}
     </div>`).join('');
-  const body = `${rows}${canManage? `<button class="btn btn-ghost" style="width:100%; margin-top:6px; justify-content:center;" onclick="openNewCompanyForm()">+ Add company</button>` : ''}`;
+  const canAdd = canAddCompany();
+  const body = `${rows}${canAdd
+    ? `<button class="btn btn-ghost" style="width:100%; margin-top:6px; justify-content:center;" onclick="openNewCompanyForm()">+ Add company</button>`
+    : `<div class="hint" style="margin-top:8px; text-align:center;">${escapeHtml(companyLimitMessage())} <a href="#" onclick="event.preventDefault(); closeModal(); navigate('subscription');" style="color:var(--accent-dark);">View plans</a></div>`}`;
   openModal('Switch company', body, []);
 }
 function openNewCompanyForm(){
@@ -1085,7 +1102,7 @@ function openNewCompanyForm(){
   openModal('New company', body, [{label:'Create company', cls:'btn-primary', onclick:'submitNewCompany()'}]);
 }
 function submitNewCompany(){
-  if(!canManageWorkspace()){ showToast('Only an administrator can add companies'); return; }
+  if(!canAddCompany()){ showToast(companyLimitMessage()||'You cannot add more companies on your plan'); return; }
   const name = document.getElementById('co-name').value.trim();
   if(!name){ showToast('Enter a company name'); return; }
   const currency = document.getElementById('co-currency').value.trim() || 'R';
@@ -6748,7 +6765,7 @@ function renderSettings(){
             ${(canManageWorkspace() && companyList().length>1)?`<button class="btn btn-danger btn-sm" onclick="deleteCompanyAction('${c.id}')">Delete</button>`:''}
           </div>
         </div>`).join('')}
-      ${canManageWorkspace()? `<button class="btn btn-primary btn-sm" style="margin-top:14px;" onclick="openNewCompanyForm()">+ Add company</button>` : ''}
+      ${canAddCompany()? `<button class="btn btn-primary btn-sm" style="margin-top:14px;" onclick="openNewCompanyForm()">+ Add company</button>` : ''}
     </div></div>
     ${canManageWorkspace() ? `
     <div class="section-title">Users &amp; access</div>
@@ -7089,18 +7106,96 @@ async function afterAuthenticated(){
 function enterAppAfterGate(profile){
   document.getElementById('auth-gate').style.display = 'none';
   updateAuthStatus();
-  // Load this user's companies from the server (hybrid), then open the app.
-  loadWorkspaceFromServer().then(()=>{ showApp(); }).catch(err=>{
+  // Load this user's companies from the server (hybrid), then open the app —
+  // or show the first-time company setup page if they have none yet.
+  loadWorkspaceFromServer().then(()=>{
+    if(NEEDS_COMPANY_SETUP){ showCompanySetup(); }
+    else { showApp(); }
+  }).catch(err=>{
     console.error('Server load failed, using local data', err);
     showToast('Could not load from server — showing local data');
     showApp();
   });
+}
+// First-time company setup: shown to a signed-in user who has no company yet.
+function showCompanySetup(){
+  document.getElementById('shell').style.display = 'none';
+  document.getElementById('auth-gate').style.display = 'none';
+  let host = document.getElementById('company-setup');
+  if(!host){
+    host = document.createElement('div');
+    host.id = 'company-setup';
+    document.body.appendChild(host);
+  }
+  host.style.display = 'flex';
+  const who = AUTH_PROFILE ? (AUTH_PROFILE.full_name || AUTH_PROFILE.email) : '';
+  host.innerHTML = `
+    <div class="login-card" style="max-width:420px;">
+      <div class="login-logo"><svg viewBox="0 0 120 120" xmlns="http://www.w3.org/2000/svg">
+        <defs><linearGradient id="logoGradSetup" x1="0%" y1="0%" x2="100%" y2="100%">
+          <stop offset="0%" stop-color="#F3D477"/><stop offset="55%" stop-color="#C9A227"/><stop offset="100%" stop-color="#8F6A16"/>
+        </linearGradient></defs>
+        <polygon points="60,8 110,106 10,106" fill="none" stroke="url(#logoGradSetup)" stroke-width="8" stroke-linejoin="round"/>
+        <rect x="2" y="64" width="116" height="17" rx="2" fill="url(#logoGradSetup)" transform="rotate(-4 60 72)"/>
+      </svg></div>
+      <div class="login-title">Set up your company</div>
+      <div class="login-sub">${who? 'Welcome, '+escapeHtml(who.split(' ')[0])+'. ':''}Let's create your first company.</div>
+      <div style="text-align:left; margin-top:20px;">
+        <div class="field"><label>Company name *</label><input type="text" id="setup-name" placeholder="Your business name"></div>
+        <div class="field"><label>VAT number (optional)</label><input type="text" id="setup-vat" placeholder="e.g. 4123456789"></div>
+        <div class="field-row">
+          <div class="field"><label>Currency</label><input type="text" id="setup-currency" value="R" style="width:70px;"></div>
+          <div class="field"><label>VAT rate %</label><input type="number" id="setup-vatrate" value="15" step="0.01"></div>
+        </div>
+        <label style="display:flex; align-items:center; gap:8px; font-size:13px; margin-top:4px; cursor:pointer;">
+          <input type="checkbox" id="setup-sample" style="width:auto;"> Add sample data to explore (you can delete it later)
+        </label>
+        <div id="setup-error" class="login-error" style="display:none; margin-top:8px;"></div>
+        <button class="btn btn-primary" id="setup-btn" style="width:100%; justify-content:center; margin-top:14px;" onclick="submitCompanySetup()">Create company &amp; continue</button>
+      </div>
+      <div class="login-note">You can add more companies later${'.'} Your plan determines how many companies you can create.</div>
+      <div style="margin-top:10px;"><a href="#" onclick="event.preventDefault(); reconiSignOut();" style="color:var(--text-muted); font-size:12px;">Sign out</a></div>
+    </div>`;
+  setTimeout(()=>{ const el=document.getElementById('setup-name'); if(el) el.focus(); }, 60);
+}
+async function submitCompanySetup(){
+  const name = (document.getElementById('setup-name').value||'').trim();
+  const vat = (document.getElementById('setup-vat').value||'').trim();
+  const currency = (document.getElementById('setup-currency').value||'R').trim() || 'R';
+  const vatRate = Number(document.getElementById('setup-vatrate').value)||0;
+  const withSample = document.getElementById('setup-sample').checked;
+  const err = document.getElementById('setup-error');
+  if(!name){ if(err){ err.textContent='Please enter a company name.'; err.style.display='block'; } return; }
+  const btn = document.getElementById('setup-btn'); if(btn) btn.disabled = true;
+  const co = newCompanyRecord(name);
+  co.settings.businessName = name;
+  co.settings.businessVatNo = vat;
+  co.settings.currency = currency;
+  co.settings.taxRate = vatRate;
+  if(withSample){ const prev=S; S=co; seedDemoData(); S=prev; }
+  try{
+    let serverId = null;
+    if(SB && SERVER_MODE){ serverId = await createCompanyOnServer(co); }
+    if(!serverId) serverId = uid('co');
+    co.serverId = serverId;
+    WORKSPACE = { companies:{ [serverId]:co }, order:[serverId], activeId:serverId, users:[], authEnabled:false, timeLog:{entries:[]}, uiPrefs:{} };
+    S = co;
+    NEEDS_COMPANY_SETUP = false;
+    LAST_SAVED_AT = new Date();
+    const host = document.getElementById('company-setup'); if(host) host.style.display='none';
+    showApp();
+    showToast('Company created — welcome to RECONI');
+  }catch(e){
+    if(err){ err.textContent='Could not create company. Please try again.'; err.style.display='block'; }
+    if(btn) btn.disabled = false;
+  }
 }
 
 /* ============================= HYBRID SERVER DATA LAYER ============================= */
 // Each company is one row in public.companies; its whole book lives in the JSONB `data`.
 // user_company_access + RLS decide which companies a user can load. Admins see all.
 let SERVER_MODE = false;   // true once we've loaded from Supabase this session
+let NEEDS_COMPANY_SETUP = false;   // true when a signed-in user has no company yet
 
 async function loadWorkspaceFromServer(){
   if(!SB){ return; }
@@ -7108,11 +7203,12 @@ async function loadWorkspaceFromServer(){
   if(error){ throw error; }
   SERVER_MODE = true;
   if(!companies || companies.length===0){
-    // No companies granted/created yet. Give this user a fresh starter company
-    // stored on the server (so it persists and is shared).
-    await createStarterCompanyOnServer();
+    // New user with no companies yet → show the company setup page instead of
+    // auto-creating a "My Business". They enter their own company details.
+    NEEDS_COMPANY_SETUP = true;
     return;
   }
+  NEEDS_COMPANY_SETUP = false;
   // Rebuild the in-memory WORKSPACE from server rows.
   const companiesMap = {};
   const order = [];
@@ -7393,7 +7489,7 @@ function paintAdminUsers(){
         <div><strong>${escapeHtml(u.full_name||'—')}</strong></div>
         <div style="font-size:12px; color:var(--text-muted);">${escapeHtml(u.email||'')}</div>
       </td>
-      <td>${escapeHtml(u.role||'user')}${isSelf?' <span style="font-size:11px; color:var(--text-muted);">(you)</span>':''}</td>
+      <td>${escapeHtml(u.role||'user')}${isSelf?' <span style="font-size:11px; color:var(--text-muted);">(you)</span>':''}${!isSelf && u.role!=='owner'? ` <button class="icon-btn" style="font-size:11px;" onclick="adminToggleRole('${u.id}')" title="Make ${u.role==='admin'?'a regular user':'an admin'}">${u.role==='admin'?'→ user':'→ admin'}</button>`:''}</td>
       <td>${userStatusBadge(u)}</td>
       <td style="text-align:right; white-space:nowrap;">
         ${!u.is_approved && !u.is_blocked ? `<button class="btn btn-primary btn-sm" onclick="adminApprove('${u.id}')">Approve</button>` : ''}
@@ -7433,6 +7529,22 @@ async function adminSetStatus(userId, approve, block){
   }catch(e){ showToast('Action failed'); }
 }
 function adminApprove(id){ adminSetStatus(id, true, false); }
+// Toggle a user between 'admin' and 'user' (admins are free + unlimited).
+async function adminToggleRole(userId){
+  if(!SB) return;
+  const u = ADMIN_USERS.find(x=>x.id===userId); if(!u) return;
+  if(u.role==='owner'){ showToast('The owner role cannot be changed here'); return; }
+  const newRole = u.role==='admin' ? 'user' : 'admin';
+  const msg = newRole==='admin'
+    ? `Make ${u.full_name||u.email} an admin? Admins get full, unlimited, free access and can manage users.`
+    : `Change ${u.full_name||u.email} to a regular user? They'll be limited by their subscription plan.`;
+  if(!confirm(msg)) return;
+  try{
+    const { error } = await SB.from('profiles').update({ role:newRole }).eq('id', userId);
+    if(error){ showToast('Could not change role: '+error.message); return; }
+    showToast('Role updated'); await loadAdminUsers(); paintAdminUsers();
+  }catch(e){ showToast('Could not change role'); }
+}
 function adminBlock(id){ if(confirm('Block this user? They lose access immediately.')) adminSetStatus(id, findUserApproved(id), true); }
 function adminUnblock(id){ adminSetStatus(id, findUserApproved(id), false); }
 
