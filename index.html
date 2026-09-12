@@ -5949,6 +5949,62 @@ function tbGroupedData(){
   const bsCredit = round2(bsRows.reduce((s,r)=>s+r.credit,0));
   return { asOf, includeOpening, plRows, bsRows, plDebit, plCredit, netProfit, bsDebit, bsCredit };
 }
+
+/* ===== Export trial balance for an external Financial Statement system ===== */
+// Flat trial balance: code, name, type, debit, credit, net (signed to normal side).
+function fsTrialBalanceData(){
+  const asOf = window._rTo || todayStr();
+  const includeOpening = window._rIncludeOpening !== false;
+  const rows = S.accounts.map(a=>{
+    const bal = getAccountBalance(a.id, asOf, !includeOpening); // signed to account's normal side
+    const isDebitNormal = accountNormalIsDebit(a.type);
+    const debit  = (isDebitNormal && bal>=0) || (!isDebitNormal && bal<0) ? Math.abs(bal) : 0;
+    const credit = (!isDebitNormal && bal>=0) || (isDebitNormal && bal<0) ? Math.abs(bal) : 0;
+    // net = debit - credit (signed; debits positive, credits negative — the column sums to zero)
+    const net = round2(debit - credit);
+    return { code:a.code||'', name:a.name||'', type:a.type||'', debit:round2(debit), credit:round2(credit), net };
+  }).filter(r=> Math.abs(r.debit)>0.001 || Math.abs(r.credit)>0.001)
+    .sort((x,y)=> (x.code||'').localeCompare(y.code||''));
+  const totalDebit = round2(rows.reduce((s,r)=>s+r.debit,0));
+  const totalCredit = round2(rows.reduce((s,r)=>s+r.credit,0));
+  return {
+    company: (S.settings && S.settings.businessName) || 'Company',
+    vatNo: (S.settings && S.settings.businessVatNo) || '',
+    currency: (S.settings && S.settings.currency) || 'R',
+    asOf, includeOpening, rows, totalDebit, totalCredit,
+    balanced: Math.abs(totalDebit-totalCredit) < 0.01,
+  };
+}
+function fsExportTrialBalanceCsv(){
+  const d = fsTrialBalanceData();
+  const lines = [];
+  lines.push(['Account Code','Account Name','Account Type','Debit','Credit','Net (debit +)']);
+  d.rows.forEach(r=> lines.push([r.code, r.name, r.type, r.debit, r.credit, r.net]));
+  lines.push(['','','TOTAL', d.totalDebit, d.totalCredit, '']);
+  const csv = lines.map(row=> row.map(csvCell).join(',')).join('\r\n');
+  const stem = safeFileStem(`${d.company} Trial Balance ${d.asOf}`);
+  downloadBlob('\uFEFF'+csv, `${stem}.csv`, 'text/csv;charset=utf-8;');
+  showToast('Trial balance exported (CSV)');
+}
+function fsExportTrialBalanceJson(){
+  const d = fsTrialBalanceData();
+  const payload = {
+    format: 'reconi.trial-balance',
+    version: 1,
+    company: d.company,
+    vatNumber: d.vatNo,
+    currency: d.currency,
+    asOfDate: d.asOf,
+    includesOpeningBalances: d.includeOpening,
+    accounts: d.rows.map(r=>({ code:r.code, name:r.name, type:r.type, debit:r.debit, credit:r.credit, net:r.net })),
+    totals: { debit:d.totalDebit, credit:d.totalCredit, balanced:d.balanced },
+    generatedAt: new Date().toISOString(),
+  };
+  const stem = safeFileStem(`${d.company} Trial Balance ${d.asOf}`);
+  downloadBlob(JSON.stringify(payload, null, 2), `${stem}.json`, 'application/json');
+  showToast('Trial balance exported (JSON)');
+}
+
 function tbReportModel(){
   const d = tbGroupedData();
   const cur = S.settings.currency;
@@ -5994,7 +6050,7 @@ function renderTB(asOf){
     <td class="amt num">${r.debit?fmt(r.debit):''}</td><td class="amt num">${r.credit?fmt(r.credit):''}</td></tr>`;
 
   document.getElementById('report-body').innerHTML = `<div class="card">
-    <div class="card-head" style="flex-wrap:wrap;"><h3>As of</h3><div style="display:flex; gap:8px; align-items:center; margin-left:auto;"><input type="date" value="${asOf}" style="width:150px;" onchange="window._rTo=this.value; renderReports();">${reportExportButtons('tbReportModel')}</div></div>
+    <div class="card-head" style="flex-wrap:wrap;"><h3>As of</h3><div style="display:flex; gap:8px; align-items:center; margin-left:auto;"><input type="date" value="${asOf}" style="width:150px;" onchange="window._rTo=this.value; renderReports();">${reportExportButtons('tbReportModel')}<button class="btn btn-ghost btn-sm" onclick="fsExportTrialBalanceCsv()" title="Export trial balance for a financial statement system (CSV)">↗ FS CSV</button><button class="btn btn-ghost btn-sm" onclick="fsExportTrialBalanceJson()" title="Export trial balance for a financial statement system (JSON)">↗ FS JSON</button></div></div>
     <div class="card-body" style="padding-bottom:0;">
       <label style="display:flex; align-items:center; gap:8px; cursor:pointer; text-transform:none; letter-spacing:normal; font-weight:500; color:var(--text); font-size:13px;">
         <input type="checkbox" style="width:auto;" ${includeOpening?'checked':''} onchange="window._rIncludeOpening=this.checked; renderReports();">
@@ -7478,10 +7534,40 @@ function userStatusBadge(u){
   if(!u.is_approved) return `<span class="badge badge-draft">Pending</span>`;
   return `<span class="badge badge-open">Active</span>`;
 }
+// Billing status badge (from subscription_status). Admins/owners = not billed.
+function billingBadge(u){
+  if(['owner','admin'].includes(u.role)) return `<span class="badge" style="background:var(--surface-2); color:var(--text-muted);">Not billed</span>`;
+  const s = u.subscription_status || 'none';
+  if(s==='active')   return `<span class="badge badge-open">Paid</span>`;
+  if(s==='trialing') return `<span class="badge badge-draft">Trial${u.trial_ends_at? ' · '+billingTrialLeft(u):''}</span>`;
+  if(s==='past_due') return `<span class="badge badge-void" style="background:#fdecec; color:#b42318;">Past due</span>`;
+  if(s==='canceled') return `<span class="badge badge-void">Cancelled</span>`;
+  return `<span class="badge" style="background:var(--surface-2); color:var(--text-muted);">No plan</span>`;
+}
+function billingTrialLeft(u){
+  const end = new Date(u.trial_ends_at); const days = Math.ceil((end-new Date())/(1000*60*60*24));
+  return days>0 ? days+'d' : 'ended';
+}
+function billingPlanLabel(u){
+  if(['owner','admin'].includes(u.role)) return 'Unlimited';
+  const planId = u.plan;
+  if(typeof RECONI_PLANS!=='undefined'){ const p=RECONI_PLANS.find(x=>x.id===planId); if(p) return p.name; }
+  return planId ? planId : '—';
+}
+let ADMIN_BILLING_FILTER = 'all';   // all | active | trialing | past_due | canceled | none
 function paintAdminUsers(){
   const me = AUTH_PROFILE ? AUTH_PROFILE.id : null;
   const pending = ADMIN_USERS.filter(u=>!u.is_approved && !u.is_blocked);
-  const rows = ADMIN_USERS.map(u=>{
+  // billing filter
+  const f = ADMIN_BILLING_FILTER;
+  const shown = ADMIN_USERS.filter(u=>{
+    if(f==='all') return true;
+    const s = u.subscription_status||'none';
+    if(f==='none') return !['owner','admin'].includes(u.role) && (s==='none');
+    return s===f;
+  });
+  const pastDueCount = ADMIN_USERS.filter(u=>!['owner','admin'].includes(u.role) && (u.subscription_status==='past_due')).length;
+  const rows = shown.map(u=>{
     const isSelf = u.id===me;
     const canBlock = !isSelf && u.role!=='owner';   // can't block yourself or the owner
     return `<tr>
@@ -7491,6 +7577,7 @@ function paintAdminUsers(){
       </td>
       <td>${escapeHtml(u.role||'user')}${isSelf?' <span style="font-size:11px; color:var(--text-muted);">(you)</span>':''}${!isSelf && u.role!=='owner'? ` <button class="icon-btn" style="font-size:11px;" onclick="adminToggleRole('${u.id}')" title="Make ${u.role==='admin'?'a regular user':'an admin'}">${u.role==='admin'?'→ user':'→ admin'}</button>`:''}</td>
       <td>${userStatusBadge(u)}</td>
+      <td>${billingBadge(u)}<div style="font-size:11px; color:var(--text-muted); margin-top:2px;">${escapeHtml(billingPlanLabel(u))}</div></td>
       <td style="text-align:right; white-space:nowrap;">
         ${!u.is_approved && !u.is_blocked ? `<button class="btn btn-primary btn-sm" onclick="adminApprove('${u.id}')">Approve</button>` : ''}
         ${u.is_approved && !u.is_blocked && canBlock ? `<button class="btn btn-ghost btn-sm" onclick="adminBlock('${u.id}')">Block</button>` : ''}
@@ -7501,22 +7588,31 @@ function paintAdminUsers(){
     </tr>`;
   }).join('');
 
+  const filterBtn = (val,label)=>`<button class="btn btn-sm ${f===val?'btn-primary':'btn-ghost'}" onclick="ADMIN_BILLING_FILTER='${val}'; paintAdminUsers();">${label}</button>`;
+
   document.getElementById('content').innerHTML = `
     ${pending.length? `<div class="card" style="margin-bottom:16px; border-left:3px solid var(--gold);">
       <div class="card-body"><strong>${pending.length} account${pending.length===1?'':'s'} awaiting approval.</strong>
       <span style="color:var(--text-muted);"> Review them below and Approve to grant access.</span></div></div>`:''}
+    ${pastDueCount? `<div class="card" style="margin-bottom:16px; border-left:3px solid var(--red);">
+      <div class="card-body"><strong style="color:var(--red);">${pastDueCount} account${pastDueCount===1?'':'s'} past due.</strong>
+      <span style="color:var(--text-muted);"> Payment failed — access is restricted until they renew.</span></div></div>`:''}
     <div class="card">
-      <div class="card-head"><h3>All users (${ADMIN_USERS.length})</h3>
-        <div style="display:flex; gap:8px;">
+      <div class="card-head" style="flex-wrap:wrap; gap:8px;"><h3>All users (${ADMIN_USERS.length})</h3>
+        <div style="display:flex; gap:8px; margin-left:auto;">
           <button class="btn btn-primary btn-sm" onclick="adminOpenCreateUser()">+ Add user</button>
           <button class="btn btn-ghost btn-sm" onclick="renderAdminUsers()">↻ Refresh</button>
         </div></div>
-      <table><thead><tr><th>User</th><th>Role</th><th>Status</th><th></th></tr></thead>
-        <tbody>${rows || `<tr><td colspan="4" style="color:var(--text-muted);">No users yet.</td></tr>`}</tbody>
+      <div class="card-body" style="padding-top:0; display:flex; gap:6px; flex-wrap:wrap;">
+        <span style="font-size:12px; color:var(--text-muted); align-self:center; margin-right:4px;">Billing:</span>
+        ${filterBtn('all','All')}${filterBtn('active','Paid')}${filterBtn('trialing','Trial')}${filterBtn('past_due','Past due')}${filterBtn('canceled','Cancelled')}${filterBtn('none','No plan')}
+      </div>
+      <table><thead><tr><th>User</th><th>Role</th><th>Status</th><th>Billing</th><th></th></tr></thead>
+        <tbody>${rows || `<tr><td colspan="5" style="color:var(--text-muted);">No users match this filter.</td></tr>`}</tbody>
       </table>
     </div>
     <div class="card" style="margin-top:16px;"><div class="card-body">
-      <div class="hint" style="margin:0;">Approving a user lets them sign in. Blocking instantly revokes their access on their next action. The database enforces this server-side, so it holds even outside this app. Company assignment controls which companies a user can see (admins see all).</div>
+      <div class="hint" style="margin:0;">Billing status comes from each user's subscription. <strong>Paid</strong> = active subscription; <strong>Trial</strong> = in free trial; <strong>Past due</strong> = payment failed (access restricted); <strong>Cancelled</strong> = subscription ended. Admins and owners are never billed. These update automatically once payments are live.</div>
     </div></div>`;
 }
 async function adminSetStatus(userId, approve, block){
