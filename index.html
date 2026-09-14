@@ -289,6 +289,14 @@
   .alloc-doc-row.picked{ border-color:var(--accent); background:var(--surface-2); }
   .alloc-summary{ display:flex; justify-content:space-between; gap:16px; padding:10px 12px; background:var(--surface-2); border-radius:8px; margin:10px 0; font-size:13px; }
   .cb-recon-dot{ width:9px; height:9px; border-radius:50%; display:inline-block; flex:0 0 auto; }
+  /* opening balances (Sage-style) */
+  .ob-table{ width:100%; border-collapse:collapse; }
+  .ob-table th{ font-size:11px; text-transform:uppercase; letter-spacing:.5px; color:var(--text-muted); text-align:left; padding:10px 12px; border-bottom:1.5px solid var(--border-strong); }
+  .ob-table th.amt{ text-align:right; }
+  .ob-table td{ padding:6px 12px; border-bottom:1px solid var(--border); font-size:13px; }
+  .ob-group-row td{ font-weight:700; text-transform:uppercase; font-size:11px; letter-spacing:.5px; color:var(--ink); background:var(--surface-2); border-bottom:1.5px solid var(--border-strong); padding-top:10px; }
+  .ob-total-row td{ font-weight:700; border-top:2px solid var(--border-strong); }
+  .ob-diff-row td{ font-weight:700; }
   /* subscription plan cards */
   .plans-grid{ display:grid; grid-template-columns:repeat(3, 1fr); gap:16px; }
   @media (max-width:820px){ .plans-grid{ grid-template-columns:1fr; } }
@@ -524,6 +532,7 @@ const NAV = [
   {id:'purchases', label:'Purchases / Bills', ic:'↙'},
   {id:'banking', label:'Banking', ic:'▤'},
   {id:'journal', label:'Journal Entries', ic:'✎'},
+  {id:'opening-balances', label:'Opening Balances', ic:'⇋'},
   {id:'cashbook', label:'Cashbook', ic:'▥'},
   {sec:'Records'},
   {id:'contacts', label:'All Contacts', ic:'☰'},
@@ -1841,6 +1850,7 @@ function render(){
     purchases: renderPurchases,
     banking: renderBanking,
     journal: renderJournal,
+    'opening-balances': renderOpeningBalances,
     cashbook: renderCashbook,
     contacts: renderContacts,
     accounts: renderAccounts,
@@ -3564,6 +3574,129 @@ function accountOptionsHtml(selectedId){
 function entryTotals(e){
   return { debit: e.lines.reduce((s,l)=>s+(l.debit||0),0), credit: e.lines.reduce((s,l)=>s+(l.credit||0),0) };
 }
+
+/* ============================= OPENING BALANCES (Sage-style) ============================= */
+let OB_AS_OF = '';
+let OB_VALUES = null;   // { accountId: {debit, credit} } — working values on screen
+function obDefaultDate(){
+  // day before the financial year start, or today
+  try{ const b = fyBounds(currentFyLabel()); if(b && b.from) return isoAddDays(b.from, -1); }catch(e){}
+  return todayStr();
+}
+function obExistingOpeningFor(accountId){
+  // sum any existing opening-balance journal lines for this account (so the screen shows current state)
+  let debit=0, credit=0;
+  S.journal.filter(e=>e.isOpeningBalance).forEach(e=>{
+    e.lines.forEach(l=>{ if(l.accountId===accountId){ debit+=l.debit||0; credit+=l.credit||0; } });
+  });
+  return { debit:round2(debit), credit:round2(credit) };
+}
+function obInitValues(){
+  OB_VALUES = {};
+  S.accounts.forEach(a=>{ const ex = obExistingOpeningFor(a.id); OB_VALUES[a.id] = { debit: ex.debit||0, credit: ex.credit||0 }; });
+}
+const OB_TYPE_ORDER = ['Asset','Liability','Equity','Income','Expense'];
+const OB_TYPE_LABEL = { Asset:'Assets', Liability:'Liabilities', Equity:'Equity', Income:'Income', Expense:'Expenses' };
+function renderOpeningBalances(){
+  setTopbar('Opening Balances', 'Capture opening balances by account — debits and credits must balance', '');
+  if(!OB_AS_OF) OB_AS_OF = obDefaultDate();
+  if(!OB_VALUES) obInitValues();
+
+  // group accounts by type in a sensible order
+  const groups = OB_TYPE_ORDER.map(t=>({ type:t, label:OB_TYPE_LABEL[t], accounts:S.accounts.filter(a=>a.type===t).sort((x,y)=>(x.code||'').localeCompare(y.code||'')) }))
+    .filter(g=>g.accounts.length);
+
+  const rowFor = a => {
+    const v = OB_VALUES[a.id] || {debit:0, credit:0};
+    const locked = a.system && (a.id==='acc_equity' || a.id==='acc_ar' || a.id==='acc_ap' || a.id==='acc_vatr' || a.id==='acc_vatp' || a.id==='acc_sales' || a.id==='acc_share_capital');
+    const sysNote = locked ? ` <span style="font-size:11px; color:var(--text-muted);">*System</span>` : '';
+    return `<tr>
+      <td>${escapeHtml(a.code||'')} · ${escapeHtml(a.name)}${sysNote}</td>
+      <td class="amt"><input type="number" step="0.01" class="num ob-debit" data-acc="${a.id}" value="${v.debit? v.debit : ''}" placeholder="0.00" ${locked?'disabled style="background:var(--surface-2);"':''} onchange="obSet('${a.id}','debit',this.value)" style="width:120px; text-align:right;"></td>
+      <td class="amt"><input type="number" step="0.01" class="num ob-credit" data-acc="${a.id}" value="${v.credit? v.credit : ''}" placeholder="0.00" ${locked?'disabled style="background:var(--surface-2);"':''} onchange="obSet('${a.id}','credit',this.value)" style="width:120px; text-align:right;"></td>
+    </tr>`;
+  };
+
+  const groupHtml = groups.map(g=>`
+    <tr class="ob-group-row"><td colspan="3">${escapeHtml(g.label)}</td></tr>
+    ${g.accounts.map(rowFor).join('')}
+  `).join('');
+
+  const t = obTotals();
+
+  document.getElementById('content').innerHTML = `
+    <div class="card" style="margin-bottom:14px;"><div class="card-body" style="display:flex; align-items:center; gap:14px; flex-wrap:wrap;">
+      <div style="display:flex; align-items:center; gap:8px;"><label style="margin:0;">Opening balances as at</label>
+        <input type="date" id="ob-date" value="${OB_AS_OF}" onchange="OB_AS_OF=this.value;" style="width:150px;"></div>
+      <div class="hint" style="margin:0; flex:1; min-width:200px;">Enter each account's opening balance in the Debit or Credit column. The totals at the bottom must balance (Difference = 0) before you can save.</div>
+    </div></div>
+
+    <div class="card">
+      <div style="overflow-x:auto;"><table class="ob-table">
+        <thead><tr><th>Account</th><th class="amt">Debit</th><th class="amt">Credit</th></tr></thead>
+        <tbody>${groupHtml}</tbody>
+        <tfoot>
+          <tr class="ob-total-row"><td style="text-align:right;">Sub Total</td>
+            <td class="amt num" id="ob-total-debit">${fmt(t.debit)}</td>
+            <td class="amt num" id="ob-total-credit">${fmt(t.credit)}</td></tr>
+          <tr class="ob-diff-row"><td style="text-align:right;">Difference</td>
+            <td class="amt num" id="ob-diff-debit" colspan="2" style="text-align:center; color:${t.balanced?'var(--money-pos)':'var(--red)'};">
+              ${t.balanced? 'Balanced ✓' : 'Out by '+fmt(Math.abs(t.diff))}</td></tr>
+        </tfoot>
+      </table></div>
+      <div class="card-body" style="display:flex; justify-content:flex-end; gap:8px; border-top:1px solid var(--border);">
+        <button class="btn btn-ghost" onclick="obReset()">Reset</button>
+        <button class="btn btn-primary" id="ob-save-btn" onclick="saveOpeningBalances()" ${t.balanced?'':'disabled'}>Save opening balances</button>
+      </div>
+    </div>`;
+}
+function obTotals(){
+  let debit=0, credit=0;
+  Object.values(OB_VALUES||{}).forEach(v=>{ debit+=Number(v.debit)||0; credit+=Number(v.credit)||0; });
+  debit=round2(debit); credit=round2(credit);
+  const diff = round2(debit-credit);
+  return { debit, credit, diff, balanced: Math.abs(diff)<0.005 && (debit>0||credit>0) };
+}
+function obSet(accId, side, val){
+  if(!OB_VALUES[accId]) OB_VALUES[accId] = {debit:0, credit:0};
+  const n = round2(Number(val)||0);
+  OB_VALUES[accId][side] = n;
+  // a value on one side clears the other (an account is debit OR credit)
+  if(n>0){ OB_VALUES[accId][side==='debit'?'credit':'debit'] = 0; }
+  obRefreshTotals();
+}
+function obRefreshTotals(){
+  const t = obTotals();
+  const td=document.getElementById('ob-total-debit'), tc=document.getElementById('ob-total-credit'),
+        df=document.getElementById('ob-diff-debit'), btn=document.getElementById('ob-save-btn');
+  if(td) td.textContent=fmt(t.debit);
+  if(tc) tc.textContent=fmt(t.credit);
+  if(df){ df.textContent = t.balanced?'Balanced ✓':'Out by '+fmt(Math.abs(t.diff)); df.style.color = t.balanced?'var(--money-pos)':'var(--red)'; }
+  if(btn) btn.disabled = !t.balanced;
+}
+function obReset(){ obInitValues(); renderOpeningBalances(); }
+function saveOpeningBalances(){
+  const t = obTotals();
+  if(!t.balanced){ showToast('Debits and credits must balance before saving'); return; }
+  // Build the lines from non-zero values.
+  const lines = [];
+  Object.keys(OB_VALUES).forEach(accId=>{
+    const v = OB_VALUES[accId];
+    if((Number(v.debit)||0)>0) lines.push({accountId:accId, debit:round2(v.debit), credit:0});
+    else if((Number(v.credit)||0)>0) lines.push({accountId:accId, debit:0, credit:round2(v.credit)});
+  });
+  if(!lines.length){ showToast('Enter at least one opening balance'); return; }
+  if(!confirm('Save these opening balances? This replaces any existing opening-balance entry.')) return;
+  // Remove existing opening-balance entries (this screen is the single source for them).
+  S.journal = S.journal.filter(e=> !e.isOpeningBalance);
+  const entry = postJournal('Opening balances', OB_AS_OF, lines);
+  entry.manual = true; entry.isOpeningBalance = true; entry.ref = 'opening-'+entry.id;
+  saveState(true);
+  showToast('Opening balances saved');
+  OB_VALUES = null; // reload from saved state
+  renderOpeningBalances();
+}
+
 function renderJournal(){
   setTopbar('Journal Entries', 'Manual double-entry postings and the full transaction log',
     `<button class="btn btn-primary" onclick="openJournalEntryForm()">+ New Journal Entry</button>`);
