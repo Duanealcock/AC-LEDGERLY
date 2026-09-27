@@ -291,13 +291,25 @@
   .alloc-doc-row.picked{ border-color:var(--accent); background:var(--surface-2); }
   .alloc-summary{ display:flex; justify-content:space-between; gap:16px; padding:10px 12px; background:var(--surface-2); border-radius:8px; margin:10px 0; font-size:13px; }
   .cb-recon-dot{ width:9px; height:9px; border-radius:50%; display:inline-block; flex:0 0 auto; }
-  /* opening balances (Sage-style) */
-  .ob-table{ width:100%; border-collapse:collapse; }
-  .ob-table th{ font-size:11px; text-transform:uppercase; letter-spacing:.5px; color:var(--text-muted); text-align:left; padding:10px 12px; border-bottom:1.5px solid var(--border-strong); }
-  .ob-table th.amt{ text-align:right; }
-  .ob-table td{ padding:6px 12px; border-bottom:1px solid var(--border); font-size:13px; }
-  .ob-group-row td{ font-weight:700; text-transform:uppercase; font-size:11px; letter-spacing:.5px; color:var(--ink); background:var(--surface-2); border-bottom:1.5px solid var(--border-strong); padding-top:10px; }
-  .ob-total-row td{ font-weight:700; border-top:2px solid var(--border-strong); }
+  /* opening balances (accounting-practice style: aligned, equal-size cells) */
+  .ob-table{ width:100%; border-collapse:collapse; table-layout:fixed; }
+  .ob-table col.ob-col-acct{ width:auto; }
+  .ob-table col.ob-col-amt{ width:190px; }
+  .ob-table th{ font-size:11px; text-transform:uppercase; letter-spacing:.5px; color:var(--text-muted); padding:10px 14px; border-bottom:1.5px solid var(--border-strong); }
+  .ob-table th.ob-th-acct{ text-align:left; }
+  .ob-table th.ob-th-amt{ text-align:right; }
+  .ob-table td{ padding:5px 14px; border-bottom:1px solid var(--border); font-size:13px; vertical-align:middle; }
+  .ob-acct{ white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+  .ob-sys{ font-size:10px; text-transform:uppercase; letter-spacing:.5px; color:var(--text-muted); margin-left:6px; }
+  .ob-cell{ text-align:right; }
+  .ob-input{ width:100%; box-sizing:border-box; height:34px; padding:0 12px; text-align:right; font-size:13px; font-variant-numeric:tabular-nums; border:1px solid var(--border); border-radius:8px; background:var(--surface); color:var(--text); transition:border-color .12s, box-shadow .12s; }
+  .ob-input:focus{ outline:none; border-color:var(--accent); box-shadow:0 0 0 3px rgba(201,162,39,.15); }
+  .ob-input:disabled{ background:var(--surface-2); color:var(--text-muted); border-color:var(--border); cursor:not-allowed; }
+  .ob-input::-webkit-outer-spin-button, .ob-input::-webkit-inner-spin-button{ -webkit-appearance:none; margin:0; }
+  .ob-input{ -moz-appearance:textfield; }
+  .ob-group-row td{ font-weight:700; text-transform:uppercase; font-size:11px; letter-spacing:.5px; color:var(--ink); background:var(--surface-2); border-bottom:1.5px solid var(--border-strong); padding-top:11px; padding-bottom:9px; }
+  .ob-total-row td{ font-weight:700; border-top:2px solid var(--border-strong); font-variant-numeric:tabular-nums; }
+  .ob-total-row td.ob-cell, .ob-diff-row td.ob-cell{ text-align:right; padding-right:26px; }
   .ob-diff-row td{ font-weight:700; }
   /* subscription plan cards */
   .plans-grid{ display:grid; grid-template-columns:repeat(3, 1fr); gap:16px; }
@@ -3758,11 +3770,12 @@ function renderOpeningBalances(){
   const rowFor = a => {
     const v = OB_VALUES[a.id] || {debit:0, credit:0};
     const locked = a.system && (a.id==='acc_equity' || a.id==='acc_ar' || a.id==='acc_ap' || a.id==='acc_vatr' || a.id==='acc_vatp' || a.id==='acc_sales' || a.id==='acc_share_capital');
-    const sysNote = locked ? ` <span style="font-size:11px; color:var(--text-muted);">*System</span>` : '';
+    const sysNote = locked ? ` <span class="ob-sys">*System</span>` : '';
+    const dis = locked ? 'disabled' : '';
     return `<tr>
-      <td>${escapeHtml(a.code||'')} · ${escapeHtml(a.name)}${sysNote}</td>
-      <td class="amt"><input type="number" step="0.01" class="num ob-debit" data-acc="${a.id}" value="${v.debit? v.debit : ''}" placeholder="0.00" ${locked?'disabled style="background:var(--surface-2);"':''} onchange="obSet('${a.id}','debit',this.value)" style="width:120px; text-align:right;"></td>
-      <td class="amt"><input type="number" step="0.01" class="num ob-credit" data-acc="${a.id}" value="${v.credit? v.credit : ''}" placeholder="0.00" ${locked?'disabled style="background:var(--surface-2);"':''} onchange="obSet('${a.id}','credit',this.value)" style="width:120px; text-align:right;"></td>
+      <td class="ob-acct">${escapeHtml(a.code||'')} · ${escapeHtml(a.name)}${sysNote}</td>
+      <td class="ob-cell"><input type="number" step="0.01" inputmode="decimal" class="ob-input ob-debit" data-acc="${a.id}" value="${v.debit? v.debit : ''}" placeholder="0.00" ${dis} onchange="obSet('${a.id}','debit',this.value)"></td>
+      <td class="ob-cell"><input type="number" step="0.01" inputmode="decimal" class="ob-input ob-credit" data-acc="${a.id}" value="${v.credit? v.credit : ''}" placeholder="0.00" ${dis} onchange="obSet('${a.id}','credit',this.value)"></td>
     </tr>`;
   };
 
@@ -3782,14 +3795,15 @@ function renderOpeningBalances(){
 
     <div class="card">
       <div style="overflow-x:auto;"><table class="ob-table">
-        <thead><tr><th>Account</th><th class="amt">Debit</th><th class="amt">Credit</th></tr></thead>
+        <colgroup><col class="ob-col-acct"><col class="ob-col-amt"><col class="ob-col-amt"></colgroup>
+        <thead><tr><th class="ob-th-acct">Account</th><th class="ob-th-amt">Debit</th><th class="ob-th-amt">Credit</th></tr></thead>
         <tbody>${groupHtml}</tbody>
         <tfoot>
           <tr class="ob-total-row"><td style="text-align:right;">Sub Total</td>
-            <td class="amt num" id="ob-total-debit">${fmt(t.debit)}</td>
-            <td class="amt num" id="ob-total-credit">${fmt(t.credit)}</td></tr>
+            <td class="ob-cell" id="ob-total-debit">${fmt(t.debit)}</td>
+            <td class="ob-cell" id="ob-total-credit">${fmt(t.credit)}</td></tr>
           <tr class="ob-diff-row"><td style="text-align:right;">Difference</td>
-            <td class="amt num" id="ob-diff-debit" colspan="2" style="text-align:center; color:${t.balanced?'var(--money-pos)':'var(--red)'};">
+            <td id="ob-diff-debit" colspan="2" style="text-align:center; color:${t.balanced?'var(--money-pos)':'var(--red)'};">
               ${t.balanced? 'Balanced ✓' : 'Out by '+fmt(Math.abs(t.diff))}</td></tr>
         </tfoot>
       </table></div>
