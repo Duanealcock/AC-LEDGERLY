@@ -4264,14 +4264,14 @@ function findAccountMapping(description){
   return (S.accountMappings||[]).find(m=> m.phrase && desc.includes(m.phrase.toLowerCase())) || null;
 }
 function mappedAccountFor(description){ const m = findAccountMapping(description); return m ? m.accountId : null; }
-function addAccountMapping(phrase, accountId){
+function addAccountMapping(phrase, accountId, vatType){
   phrase = (phrase||'').trim();
   if(!phrase || !accountId) return;
   S.accountMappings = S.accountMappings || [];
   // replace an existing rule with the same phrase (case-insensitive), else add
   const existing = S.accountMappings.find(m=> m.phrase.toLowerCase()===phrase.toLowerCase());
-  if(existing){ existing.accountId = accountId; }
-  else S.accountMappings.push({ id:uid('map'), phrase, accountId });
+  if(existing){ existing.accountId = accountId; if(vatType!==undefined) existing.vatType = vatType; }
+  else S.accountMappings.push({ id:uid('map'), phrase, accountId, vatType: vatType||null });
   saveState(true);
 }
 function deleteAccountMapping(id){
@@ -4283,6 +4283,7 @@ function openMappingForm(id, seed){
   const m = id ? (S.accountMappings||[]).find(x=>x.id===id) : null;
   const selectedAcct = m ? m.accountId : (seed && seed.accountId ? seed.accountId : null);
   const phraseVal = m ? m.phrase : (seed && seed.phrase ? seed.phrase : '');
+  const selectedVat = m ? (m.vatType||'none') : (seed && seed.vatType ? seed.vatType : 'none');
   const accountOpts = S.accounts.slice().sort((a,b)=>(a.code||'').localeCompare(b.code||''))
     .map(a=>`<option value="${a.id}" ${selectedAcct===a.id?'selected':''}>${escapeHtml(a.code+' '+a.name)}</option>`).join('');
   const body = `
@@ -4290,6 +4291,9 @@ function openMappingForm(id, seed){
       <input type="text" id="map-phrase" placeholder="e.g. Vodacom" value="${escapeHtml(phraseVal)}"></div>
     <div class="field"><label>Code to account</label>
       <select id="map-acct">${accountOpts}</select></div>
+    <div class="field"><label>VAT treatment</label>
+      <select id="map-vat">${vatTypeOptions(selectedVat)}</select>
+      <div class="hint" style="margin-top:4px;">The mapping will apply this VAT type to matching transactions, along with the account.</div></div>
     <div class="hint">Matching is case-insensitive and matches anywhere in the description. Manage all mappings under Settings.</div>
   `;
   openModal(m?'Edit mapping':'Add mapping', body, [{label:m?'Save changes':'Add mapping', cls:'btn-primary', onclick:`submitMappingForm(${id?`'${id}'`:'null'})`}]);
@@ -4297,15 +4301,16 @@ function openMappingForm(id, seed){
 function submitMappingForm(id){
   const phrase = document.getElementById('map-phrase').value.trim();
   const accountId = document.getElementById('map-acct').value;
+  const vatType = document.getElementById('map-vat') ? document.getElementById('map-vat').value : null;
   if(!phrase){ showToast('Enter a phrase to match'); return; }
   if(!accountId){ showToast('Choose an account'); return; }
   if(id){
     const m = (S.accountMappings||[]).find(x=>x.id===id);
-    if(m){ m.phrase = phrase; m.accountId = accountId; saveState(true); }
+    if(m){ m.phrase = phrase; m.accountId = accountId; m.vatType = vatType; saveState(true); }
   } else {
     // guard against duplicate phrase
     if((S.accountMappings||[]).some(x=>x.phrase.toLowerCase()===phrase.toLowerCase())){ showToast('A mapping with that phrase already exists'); return; }
-    addAccountMapping(phrase, accountId);
+    addAccountMapping(phrase, accountId, vatType);
   }
   closeModal(); showToast('Mapping saved');
   // re-render wherever we are (Settings shows the list; Cashbook may now auto-apply the new rule)
@@ -4326,8 +4331,13 @@ function applyMappingsToDrafts(){
     if(r.type!=='account') return;
     if(r.accountSelection) return;         // already allocated — don't override
     if(r._mapDismissed) return;            // user cleared it deliberately
-    const accId = mappedAccountFor(r.description);
-    if(accId){ r.accountSelection = accId; applied++; }
+    const m = findAccountMapping(r.description);
+    if(m){
+      r.accountSelection = m.accountId;
+      // also apply the mapping's VAT type, if it set one
+      if(m.vatType){ r.vatType = m.vatType; r.vatRate = vatTypeRate(m.vatType); }
+      applied++;
+    }
   });
   return applied;
 }
@@ -4359,8 +4369,12 @@ function updateCashbookField(id, field, value){
   if(field==='description'){
     // if this row isn't allocated yet, try to auto-fill from a saved mapping
     if(row.type==='account' && !row.accountSelection && !row._mapDismissed){
-      const accId = mappedAccountFor(value);
-      if(accId){ row.accountSelection = accId; saveState(); renderCashbook(); return; }
+      const m = findAccountMapping(value);
+      if(m){
+        row.accountSelection = m.accountId;
+        if(m.vatType){ row.vatType = m.vatType; row.vatRate = vatTypeRate(m.vatType); }
+        saveState(); renderCashbook(); return;
+      }
     }
   }
   if(field==='accountSelection'){
@@ -4749,7 +4763,7 @@ function openMappingFromRow(id){
   if(!row){ openMappingForm(); return; }
   const phrase = (row.description||'').trim();
   const acctId = row.type==='account' ? (row.accountSelection||'') : '';
-  openMappingForm(null, {phrase, accountId:acctId});
+  openMappingForm(null, {phrase, accountId:acctId, vatType: cbVatTypeId(row)});
 }
 // Ticking a New Transactions checkbox commits that row straight to the books.
 function tickCommitCashbookRow(id){
@@ -7122,10 +7136,11 @@ function renderSettings(){
         <div class="card" style="margin-bottom:14px;"><div class="card-head"><h3>Auto-coding mappings</h3><button class="btn btn-ghost btn-sm" onclick="openMappingForm()">+ Add mapping</button></div><div class="card-body">
           <p style="font-size:12px; color:var(--text-muted); margin-top:0;">When a cashbook transaction's description contains a phrase below, it's automatically coded to that account. You can still change any row after it's applied.</p>
           ${(S.accountMappings||[]).length? `
-            <table><thead><tr><th>If description contains…</th><th>Code to account</th><th></th></tr></thead><tbody>
+            <table><thead><tr><th>If description contains…</th><th>Code to account</th><th>VAT</th><th></th></tr></thead><tbody>
               ${S.accountMappings.map(m=>{ const a=S.accounts.find(x=>x.id===m.accountId); return `<tr>
                 <td><strong>${escapeHtml(m.phrase)}</strong></td>
                 <td>${a? escapeHtml(a.code+' '+a.name) : '<span class="neg">(account removed)</span>'}</td>
+                <td>${m.vatType? escapeHtml(vatTypeLabel(m.vatType)) : '—'}</td>
                 <td style="text-align:right; white-space:nowrap;">
                   <button class="btn btn-ghost btn-sm" onclick="openMappingForm('${m.id}')">Edit</button>
                   <button class="btn btn-ghost btn-sm" onclick="removeMapping('${m.id}')">Delete</button>
