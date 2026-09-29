@@ -596,11 +596,11 @@ function defaultData(){
       {id:'acc_unalloc_exp', code:'3900', name:'Unallocated Expense', type:'Expense', system:true},
       {id:'acc_share_capital', code:'5000', name:'Share Capital', type:'Equity', system:true},
       {id:'acc_equity', code:'5200', name:'Retained Income', type:'Equity', system:true},
-      {id:'acc_bank', code:'8400', name:'Business Bank Account', type:'Asset', isBank:true, system:true},
-      {id:'acc_ar', code:'5100', name:'Accounts Receivable', type:'Asset', system:true},
-      {id:'acc_ap', code:'6000', name:'Accounts Payable', type:'Liability', system:true},
-      {id:'acc_vatr', code:'9500', name:'VAT Receivable (Input)', type:'Asset', system:true},
-      {id:'acc_vatp', code:'9600', name:'VAT Payable (Output)', type:'Liability', system:true},
+      {id:'acc_bank', code:'8400', name:'Business Bank Account', type:'Current Assets', isBank:true, system:true},
+      {id:'acc_ar', code:'5100', name:'Accounts Receivable', type:'Current Assets', system:true},
+      {id:'acc_ap', code:'6000', name:'Accounts Payable', type:'Current Liabilities', system:true},
+      {id:'acc_vatr', code:'9500', name:'VAT Receivable (Input)', type:'Current Assets', system:true},
+      {id:'acc_vatp', code:'9600', name:'VAT Payable (Output)', type:'Current Liabilities', system:true},
     ],
     contacts:[],
     invoices:[],
@@ -744,6 +744,19 @@ function migrateCompanyShape(co){
       bank.code = '8400';
     }
     co._defaultsV6 = true;
+  }
+  // V7: split Asset/Liability into Current/Non-Current sub-types.
+  if(!co._typesV7 && Array.isArray(co.accounts)){
+    co.accounts.forEach(a=>{
+      if(a.type==='Asset'){
+        // fixed-asset accounts and bank land sensibly; default the rest to Current Assets
+        if(a.isFixedAsset) a.type = 'Non-Current Assets';
+        else a.type = 'Current Assets';
+      } else if(a.type==='Liability'){
+        a.type = 'Current Liabilities';
+      }
+    });
+    co._typesV7 = true;
   }
 }
 async function loadState(){
@@ -1466,8 +1479,14 @@ function todayStr(){ return new Date().toISOString().slice(0,10); }
 function isoAddDays(iso, n){ const d=new Date(iso+'T00:00:00'); d.setDate(d.getDate()+n); return d.toISOString().slice(0,10); }
 
 function accountType(id){ const a=S.accounts.find(x=>x.id===id); return a?a.type:null; }
-function accountNormalIsDebit(type){ return type==='Asset'||type==='Expense'; }
-function isFixedAssetAccount(id){ const a=S.accounts.find(x=>x.id===id); return !!(a && a.type==='Asset' && a.isFixedAsset); }
+// Account type families. Assets & Liabilities are split into Current / Non-Current
+// sub-types; these helpers let all the existing logic treat them correctly.
+const ASSET_TYPES = ['Current Assets','Non-Current Assets','Asset']; // 'Asset' kept for legacy data
+const LIABILITY_TYPES = ['Current Liabilities','Non-Current Liabilities','Liability'];
+function isAssetType(type){ return ASSET_TYPES.includes(type); }
+function isLiabilityType(type){ return LIABILITY_TYPES.includes(type); }
+function accountNormalIsDebit(type){ return isAssetType(type)||type==='Expense'; }
+function isFixedAssetAccount(id){ const a=S.accounts.find(x=>x.id===id); return !!(a && isAssetType(a.type) && a.isFixedAsset); }
 
 /* ============================= FIXED ASSETS ============================= */
 // Straight-line depreciation. Each asset: {id, name, accountId, cost, date, category, method,
@@ -3725,7 +3744,7 @@ function printImportReconReport(){
 /* ============================= JOURNAL ENTRIES (manual) ============================= */
 let JOURNAL_FILTER = 'all';
 function accountOptionsHtml(selectedId){
-  const types = ['Asset','Liability','Equity','Income','Expense'];
+  const types = ['Income','Expense','Non-Current Assets','Current Assets','Equity','Non-Current Liabilities','Current Liabilities','Asset','Liability'];
   return types.map(t=>{
     const accs = S.accounts.filter(a=>a.type===t).sort((a,b)=>a.code.localeCompare(b.code));
     if(!accs.length) return '';
@@ -3756,8 +3775,8 @@ function obInitValues(){
   OB_VALUES = {};
   S.accounts.forEach(a=>{ const ex = obExistingOpeningFor(a.id); OB_VALUES[a.id] = { debit: ex.debit||0, credit: ex.credit||0 }; });
 }
-const OB_TYPE_ORDER = ['Asset','Liability','Equity','Income','Expense'];
-const OB_TYPE_LABEL = { Asset:'Assets', Liability:'Liabilities', Equity:'Equity', Income:'Income', Expense:'Expenses' };
+const OB_TYPE_ORDER = ['Non-Current Assets','Current Assets','Non-Current Liabilities','Current Liabilities','Equity','Income','Expense','Asset','Liability'];
+const OB_TYPE_LABEL = { 'Non-Current Assets':'Non-Current Assets','Current Assets':'Current Assets','Non-Current Liabilities':'Non-Current Liabilities','Current Liabilities':'Current Liabilities', Equity:'Equity', Income:'Income', Expense:'Expenses', Asset:'Assets (legacy)', Liability:'Liabilities (legacy)' };
 function renderOpeningBalances(){
   setTopbar('Opening Balances', 'Capture opening balances by account — debits and credits must balance', '');
   if(!OB_AS_OF) OB_AS_OF = obDefaultDate();
@@ -5959,7 +5978,7 @@ function deleteContact(id){
 /* ============================= CHART OF ACCOUNTS ============================= */
 function renderAccounts(){
   setTopbar('Chart of Accounts', 'Every account used to categorise money in and out', `<button class="btn btn-primary" onclick="openAccountForm()">+ New Account</button>`);
-  const types = ['Asset','Liability','Equity','Income','Expense'];
+  const types = ['Income','Expense','Non-Current Assets','Current Assets','Equity','Non-Current Liabilities','Current Liabilities','Asset','Liability'];
   let html = '';
   types.forEach(t=>{
     const accs = S.accounts.filter(a=>a.type===t).sort((a,b)=>a.code.localeCompare(b.code));
@@ -5968,14 +5987,14 @@ function renderAccounts(){
       <table><thead><tr><th style="width:70px;">Code</th><th>Name</th><th class="amt">Balance</th><th></th></tr></thead><tbody>
       ${accs.map(a=>`<tr><td class="mono">${a.code}</td><td>${a.name}${a.isBank?' <span class="badge badge-open">Bank</span>':''}${a.isFixedAsset?' <span class="badge badge-draft">Fixed asset</span>':''}</td>
         <td class="amt num">${fmt(getAccountBalance(a.id))}</td>
-        <td style="text-align:right; white-space:nowrap;">${a.type==='Asset' && !a.isBank ? `<button class="icon-btn" onclick="toggleFixedAsset('${a.id}')" title="Mark whether purchases to this account are fixed assets">${a.isFixedAsset?'Unmark fixed':'Mark fixed asset'}</button>`:''} ${a.system?'':`<button class="icon-btn" onclick="deleteAccount('${a.id}')">Delete</button>`}</td></tr>`).join('')}
+        <td style="text-align:right; white-space:nowrap;">${isAssetType(a.type) && !a.isBank ? `<button class="icon-btn" onclick="toggleFixedAsset('${a.id}')" title="Mark whether purchases to this account are fixed assets">${a.isFixedAsset?'Unmark fixed':'Mark fixed asset'}</button>`:''} ${a.system?'':`<button class="icon-btn" onclick="deleteAccount('${a.id}')">Delete</button>`}</td></tr>`).join('')}
       </tbody></table></div>`;
   });
   document.getElementById('content').innerHTML = html;
 }
 function toggleFixedAsset(id){
   const a = S.accounts.find(x=>x.id===id);
-  if(!a || a.type!=='Asset'){ showToast('Only Asset accounts can be fixed-asset accounts'); return; }
+  if(!a || !isAssetType(a.type)){ showToast('Only asset accounts can be fixed-asset accounts'); return; }
   a.isFixedAsset = !a.isFixedAsset;
   saveState(true);
   showToast(a.isFixedAsset? `${a.name} is now a fixed-asset account` : `${a.name} is no longer a fixed-asset account`);
@@ -6052,7 +6071,7 @@ function renderAssets(){
 }
 function openAssetForm(id){
   const a = id ? (S.assets||[]).find(x=>x.id===id) : null;
-  const assetAccts = S.accounts.filter(x=>x.type==='Asset' && !x.isBank).sort((x,y)=>(x.code||'').localeCompare(y.code||''));
+  const assetAccts = S.accounts.filter(x=>isAssetType(x.type) && !x.isBank).sort((x,y)=>(x.code||'').localeCompare(y.code||''));
   const body = `
     <div class="field"><label>Asset name</label><input type="text" id="as-name" value="${a?escapeHtml(a.name):''}" placeholder="e.g. Dell laptop"></div>
     <div class="field-row">
@@ -6127,7 +6146,7 @@ function openAccountForm(){
       <div class="field"><label>Code</label><input type="text" id="a-code" placeholder="e.g. 3060"></div>
       <div class="field"><label>Type</label><select id="a-type" onchange="updateAccountRangeHint()">
         <optgroup label="Income Statement (1000–4999)"><option>Income</option><option>Expense</option></optgroup>
-        <optgroup label="Balance Sheet (5000–9999)"><option>Asset</option><option>Liability</option><option>Equity</option></optgroup>
+        <optgroup label="Balance Sheet (5000–9999)"><option>Non-Current Assets</option><option>Current Assets</option><option>Equity</option><option>Non-Current Liabilities</option><option>Current Liabilities</option></optgroup>
       </select></div>
     </div>
     <div id="a-range-hint" class="hint" style="margin-top:-4px;"></div>
@@ -6162,12 +6181,12 @@ function submitAccountForm(){
     showToast(`${type} is a ${r.label} account — code must be ${r.min}–${r.max}`);
     return;
   }
-  // bank accounts must be Assets (Balance Sheet)
-  if(isBank && accountGroupOf(type)!=='bs'){
-    showToast('A bank account must be an Asset (Balance Sheet, 5000–9999)');
+  // bank accounts must be a balance-sheet asset
+  if(isBank && !isAssetType(type)){
+    showToast('A bank account must be an asset type (Current or Non-Current Assets)');
     return;
   }
-  if(isFixedAsset && type!=='Asset'){ showToast('Only Asset accounts can be marked as fixed-asset accounts'); return; }
+  if(isFixedAsset && !isAssetType(type)){ showToast('Only asset accounts can be marked as fixed-asset accounts'); return; }
   S.accounts.push({id:uid('acc'), code, name, type, isBank, isFixedAsset});
   closeModal(); showToast('Account created'); navigate('accounts');
 }
@@ -6260,8 +6279,8 @@ function renderPL(from,to){
 }
 function bsReportModel(){
   const asOf = window._rTo;
-  const assets = S.accounts.filter(a=>a.type==='Asset');
-  const liabilities = S.accounts.filter(a=>a.type==='Liability');
+  const assets = S.accounts.filter(a=>isAssetType(a.type));
+  const liabilities = S.accounts.filter(a=>isLiabilityType(a.type));
   const equity = S.accounts.filter(a=>a.type==='Equity');
   const assetsTotal = assets.reduce((s,a)=>s+getAccountBalance(a.id,asOf),0);
   const liabTotal = liabilities.reduce((s,a)=>s+getAccountBalance(a.id,asOf),0);
@@ -6285,8 +6304,8 @@ function bsReportModel(){
   return { title:'Balance Sheet', meta:[{label:'As at',value:fmtDateShort(asOf)}], columns:['Account', S.settings.currency+' Balance'], rows, rowClasses };
 }
 function renderBS(asOf){
-  const assets = S.accounts.filter(a=>a.type==='Asset');
-  const liabilities = S.accounts.filter(a=>a.type==='Liability');
+  const assets = S.accounts.filter(a=>isAssetType(a.type));
+  const liabilities = S.accounts.filter(a=>isLiabilityType(a.type));
   const equity = S.accounts.filter(a=>a.type==='Equity');
   const assetsTotal = assets.reduce((s,a)=>s+getAccountBalance(a.id,asOf),0);
   const liabTotal = liabilities.reduce((s,a)=>s+getAccountBalance(a.id,asOf),0);
