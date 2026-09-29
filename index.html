@@ -1473,6 +1473,12 @@ function seedDemoData(){
 function daysAgo(n){ const d=new Date(); d.setDate(d.getDate()-n); return d.toISOString().slice(0,10); }
 
 /* ============================= JOURNAL / LEDGER ENGINE ============================= */
+// Strip a redundant leading "Cashbook" label from a description for display/export.
+// (Reversible — only cleans the shown text, never changes stored data.)
+function cleanDesc(d){
+  if(!d) return d;
+  return String(d).replace(/^\s*cash\s?book\s*[:\-–]?\s*/i, '').trim() || String(d).trim();
+}
 function postJournal(description, date, lines){
   lines.forEach(l=>{ if(!l.id) l.id = uid('jl'); });
   const totalDebit = lines.reduce((s,l)=>s+(l.debit||0),0);
@@ -2848,7 +2854,7 @@ function getBankLinesForAccount(accountId){
     e.lines.forEach(l=>{
       if(l.accountId===accountId){
         if(!l.id) l.id = uid('jl'); // lazy-migrate older entries that predate line ids
-        out.push({entryId:e.id, lineId:l.id, date:e.date, desc:e.description, debit:l.debit||0, credit:l.credit||0, reconciled: !!l.reconciled});
+        out.push({entryId:e.id, lineId:l.id, date:e.date, desc:cleanDesc(e.description), debit:l.debit||0, credit:l.credit||0, reconciled: !!l.reconciled});
       }
     });
   });
@@ -6604,7 +6610,7 @@ function glAccountData(accId, from, to){
     if(!GL_INCLUDE_OPENING && e.isOpeningBalance) return;
     e.lines.forEach(l=>{
       if(l.accountId!==accId) return;
-      txns.push({ date:e.date, ref:e.ref||'', desc:e.description||'', debit:l.debit||0, credit:l.credit||0, isOpening:!!e.isOpeningBalance });
+      txns.push({ date:e.date, ref:e.ref||'', desc:cleanDesc(e.description||''), debit:l.debit||0, credit:l.credit||0, isOpening:!!e.isOpeningBalance });
     });
   });
   txns.sort((a,b)=> (a.date||'').localeCompare(b.date||''));
@@ -6781,7 +6787,7 @@ function computeVatBreakdown(from, to){
     const isIn = (m.received||0)>0;
     const acc = m.accountSelection ? S.accounts.find(a=>a.id===m.accountSelection) : null;
     const accLabel = acc ? (acc.code+'/000') : (isIn?'1000/000':'3000/000');
-    const line = {date:m.date, ref:m.reference||m.id||'Cashbook', name:m.payee||m.description||'Cashbook entry', net, vat, type: isIn?'CB Receipts':'CB Payments', account:accLabel};
+    const line = {date:m.date, ref:m.reference||m.id||'Cashbook', name:cleanDesc(m.payee||m.description||'Cashbook entry'), net, vat, type: isIn?'CB Receipts':'CB Payments', account:accLabel};
     if(isIn) add(output, tId, net, vat, line); else add(input, tId, net, vat, line);
   });
 
