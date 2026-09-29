@@ -6939,23 +6939,23 @@ function vatReturnModel(){
   const order = ['standard','zero','exempt','capital','none'];
   const rows=[], rowClasses=[];
   const push=(cells,c)=>{ rows.push(cells); rowClasses.push(c||''); };
-  push(['OUTPUT TAX — SALES & INCOME','','',''],'section');
+  push(['OUTPUT TAX — SALES & INCOME','','','',''],'section');
   order.forEach(id=>{ const b=bd.output[id]; if(!b||!b.lines.length) return;
-    push([`${b.type.name} — ${b.type.rate}%`,'','',''],'section');
-    b.lines.slice().sort((x,y)=>(x.date||'').localeCompare(y.date||'')).forEach(l=> push([fmtDateShort(l.date), (l.ref||'')+' '+(l.name||''), round2(l.net), round2(l.vat)]));
-    push([b.type.name+' subtotal','', round2(b.net), round2(b.vat)],'total');
+    push([`${b.type.name} — ${b.type.rate}%`,'','','',''],'section');
+    b.lines.slice().sort((x,y)=>(x.date||'').localeCompare(y.date||'')).forEach(l=> push([fmtDateShort(l.date), (l.ref||'')+' '+cleanDesc(l.name||''), round2(l.net), round2(l.net+l.vat), round2(l.vat)]));
+    push([b.type.name+' subtotal','', round2(b.net), round2(b.net+b.vat), round2(b.vat)],'total');
   });
-  push(['Total output '+biz.taxLabel+' (Box 4)','','', round2(bd.outputTotals.vat)],'total');
-  push(['INPUT TAX — PURCHASES & EXPENSES','','',''],'section');
+  push(['Total output '+biz.taxLabel+' (Box 4)','','','', round2(bd.outputTotals.vat)],'total');
+  push(['INPUT TAX — PURCHASES & EXPENSES','','','',''],'section');
   order.forEach(id=>{ const b=bd.input[id]; if(!b||!b.lines.length) return;
-    push([`${b.type.name} — ${b.type.rate}%`,'','',''],'section');
-    b.lines.slice().sort((x,y)=>(x.date||'').localeCompare(y.date||'')).forEach(l=> push([fmtDateShort(l.date), (l.ref||'')+' '+(l.name||''), round2(l.net), round2(l.vat)]));
-    push([b.type.name+' subtotal','', round2(b.net), round2(b.vat)],'total');
+    push([`${b.type.name} — ${b.type.rate}%`,'','','',''],'section');
+    b.lines.slice().sort((x,y)=>(x.date||'').localeCompare(y.date||'')).forEach(l=> push([fmtDateShort(l.date), (l.ref||'')+' '+cleanDesc(l.name||''), round2(l.net), round2(l.net+l.vat), round2(l.vat)]));
+    push([b.type.name+' subtotal','', round2(b.net), round2(b.net+b.vat), round2(b.vat)],'total');
   });
-  push(['Total input '+biz.taxLabel+' (Box 14)','','', round2(bd.inputTotals.vat)],'total');
-  push([(bd.net>=0?'Net '+biz.taxLabel+' payable (Box 20)':'Net '+biz.taxLabel+' refundable (Box 20)'),'','', round2(Math.abs(bd.net))],'grand');
+  push(['Total input '+biz.taxLabel+' (Box 14)','','','', round2(bd.inputTotals.vat)],'total');
+  push([(bd.net>=0?'Net '+biz.taxLabel+' payable (Box 20)':'Net '+biz.taxLabel+' refundable (Box 20)'),'','','', round2(Math.abs(bd.net))],'grand');
   return { title:'VAT Return', meta:[{label:'Period',value:fmtPeriodLabel(p.from,p.to)},{label:'Ref',value:vatPeriodRef(p.from)},biz.businessVatNo?{label:'VAT No.',value:biz.businessVatNo}:null].filter(Boolean),
-    columns:['Date','Ref / Name', S.settings.currency+' Net', S.settings.currency+' '+biz.taxLabel], rows, rowClasses };
+    columns:['Date','Ref / Name', S.settings.currency+' Exclusive', S.settings.currency+' Inclusive', S.settings.currency+' '+biz.taxLabel], rows, rowClasses };
 }
 function renderVatDetail(){
   const p = (S.vatPeriods||[]).find(x=>x.id===VAT_DETAIL_ID);
@@ -6974,8 +6974,9 @@ function renderVatDetail(){
       .map(l=>`<tr>
         <td>${fmtDateShort(l.date)}</td>
         <td class="mono">${escapeHtml(l.ref||'')}</td>
-        <td>${escapeHtml(l.name||'')}</td>
+        <td>${escapeHtml(cleanDesc(l.name)||'')}</td>
         <td class="amt num">${fmt(l.net)}</td>
+        <td class="amt num">${fmt(round2(l.net + l.vat))}</td>
         <td class="amt num">${fmt(l.vat)}</td>
       </tr>`).join('');
     return `<div style="margin-top:14px;">
@@ -6983,9 +6984,9 @@ function renderVatDetail(){
         <strong>${t.name} — ${t.rate}%</strong>
         <span style="font-size:11px; color:var(--text-muted);">${bucketEntry.lines.length} transaction${bucketEntry.lines.length===1?'':'s'}</span>
       </div>
-      <table style="margin:0;"><thead><tr><th>Date</th><th>Ref</th><th>Name</th><th class="amt">Net (excl.)</th><th class="amt">${biz.taxLabel}</th></tr></thead>
+      <table style="margin:0;"><thead><tr><th>Date</th><th>Ref</th><th>Name</th><th class="amt">Exclusive</th><th class="amt">Inclusive</th><th class="amt">${biz.taxLabel}</th></tr></thead>
         <tbody>${rows}
-          <tr class="li-total-row"><td colspan="3">${t.name} subtotal</td><td class="amt num">${fmt(bucketEntry.net)}</td><td class="amt num">${fmt(bucketEntry.vat)}</td></tr>
+          <tr class="li-total-row"><td colspan="3">${t.name} subtotal</td><td class="amt num">${fmt(bucketEntry.net)}</td><td class="amt num">${fmt(round2(bucketEntry.net + bucketEntry.vat))}</td><td class="amt num">${fmt(bucketEntry.vat)}</td></tr>
         </tbody></table>
     </div>`;
   }
