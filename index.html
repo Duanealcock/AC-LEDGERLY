@@ -5,6 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>RECONI — Accounting</title>
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
 <link rel="icon" href="data:image/png;base64,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">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet">
@@ -2179,53 +2180,66 @@ function generateRecurringNow(id){
   navigate('sales');
 }
 
-function openInvoiceForm(){
+let INVOICE_EDIT_ID = null;
+function openInvoiceForm(editId){
   if(S.contacts.filter(c=>c.type==='customer').length===0){
     showToast('Add a customer first');
     openContactForm('customer');
     return;
+  }
+  const editInv = editId ? S.invoices.find(i=>i.id===editId) : null;
+  INVOICE_EDIT_ID = editInv ? editId : null;
+  // Guard: can't edit a paid/partially-paid invoice (money already moved).
+  if(editInv){
+    const st = docStatus(editInv);
+    if(st==='paid' || st==='partial'){ showToast('Paid invoices can\'t be edited — void it or issue a credit note'); return; }
+    if(st==='void'){ showToast('Voided invoices can\'t be edited'); return; }
   }
   const customers = S.contacts.filter(c=>c.type==='customer');
   const incomeAccounts = S.accounts.filter(a=>a.type==='Income');
   const today = todayStr();
   const due = new Date(); due.setDate(due.getDate()+14);
   const dueStr = due.toISOString().slice(0,10);
-  const lineRow = (idx)=>`
-    <tr data-row="${idx}">
-      <td><input type="text" class="li-desc" placeholder="Description"></td>
-      <td style="width:64px;"><input type="number" class="li-qty" value="1" min="0" step="1"></td>
-      <td style="width:100px;"><input type="number" class="li-price" value="0" min="0" step="0.01"></td>
-      <td style="width:150px;"><select class="li-acct">${incomeAccounts.map(a=>`<option value="${a.id}">${a.code} ${a.name}</option>`).join('')}</select></td>
+  const lineRow = (l)=>`
+    <tr>
+      <td><input type="text" class="li-desc" placeholder="Description" value="${l?escapeHtml(l.desc||''):''}"></td>
+      <td style="width:64px;"><input type="number" class="li-qty" value="${l?(l.qty||1):1}" min="0" step="1"></td>
+      <td style="width:100px;"><input type="number" class="li-price" value="${l?(l.price||0):0}" min="0" step="0.01"></td>
+      <td style="width:150px;"><select class="li-acct">${incomeAccounts.map(a=>`<option value="${a.id}" ${l&&l.accountId===a.id?'selected':''}>${a.code} ${a.name}</option>`).join('')}</select></td>
       <td style="width:90px; text-align:right;" class="li-line-total num">${S.settings.currency}0.00</td>
       <td style="width:30px;"><button class="icon-btn" onclick="this.closest('tr').remove(); recalcInvoiceForm();">✕</button></td>
     </tr>`;
+  const linesHtml = editInv && editInv.lines.length ? editInv.lines.map(lineRow).join('') : lineRow(null);
   const body = `
+    ${editInv && docStatus(editInv)!=='draft' ? `<div class="hint" style="margin-bottom:12px; border-left:3px solid var(--gold); padding-left:10px;">Editing an issued invoice will re-post its ledger entry with the new values.</div>`:''}
     <div class="field-row">
-      <div class="field"><label>Customer</label><select id="f-contact">${customers.map(c=>`<option value="${c.id}">${c.name}</option>`).join('')}</select></div>
-      <div class="field"><label>Invoice date</label><input type="date" id="f-date" value="${today}"></div>
+      <div class="field"><label>Customer</label><select id="f-contact">${customers.map(c=>`<option value="${c.id}" ${editInv&&editInv.contactId===c.id?'selected':''}>${c.name}</option>`).join('')}</select></div>
+      <div class="field"><label>Invoice date</label><input type="date" id="f-date" value="${editInv&&editInv.date&&editInv.status!=='draft'?editInv.date:today}"></div>
     </div>
     <div class="field-row">
-      <div class="field"><label>Due date</label><input type="date" id="f-due" value="${dueStr}"></div>
+      <div class="field"><label>Due date</label><input type="date" id="f-due" value="${editInv&&editInv.dueDate?editInv.dueDate:dueStr}"></div>
       <div class="field"><label>${S.settings.taxLabel} type</label>
-        <select id="f-tax" onchange="recalcInvoiceForm()">${vatTypeOptions('standard')}</select></div>
+        <select id="f-tax" onchange="recalcInvoiceForm()">${vatTypeOptions(editInv?(editInv.vatType||'standard'):'standard')}</select></div>
     </div>
     <div class="section-title">Line items</div>
     <table class="li-table" id="li-body-wrap">
       <thead><tr><th>Description</th><th>Qty</th><th>Price</th><th>Income account</th><th class="amt">Total</th><th></th></tr></thead>
-      <tbody id="li-body">${lineRow(0)}</tbody>
+      <tbody id="li-body">${linesHtml}</tbody>
     </table>
     <button class="btn btn-ghost btn-sm" style="margin-top:8px;" onclick="document.getElementById('li-body').insertAdjacentHTML('beforeend', document.getElementById('li-tmpl').innerHTML); recalcInvoiceForm();">+ Add line</button>
-    <template id="li-tmpl">${lineRow('x').replace(/data-row="x"/,'data-row="x"')}</template>
+    <template id="li-tmpl">${lineRow(null)}</template>
     <div style="margin-top:18px; border-top:1px solid var(--border); padding-top:12px;">
       <div class="report-row"><span>Subtotal</span><span class="num" id="sum-sub">${S.settings.currency}0.00</span></div>
       <div class="report-row"><span>${S.settings.taxLabel}</span><span class="num" id="sum-tax">${S.settings.currency}0.00</span></div>
       <div class="report-row total"><span>Total</span><span class="num" id="sum-total">${S.settings.currency}0.00</span></div>
     </div>
   `;
-  openModal('New Invoice', body, [
-    {label:'Save as draft', cls:'btn-ghost', onclick:`submitInvoiceForm(false)`},
-    {label:'Save & issue', cls:'btn-primary', onclick:`submitInvoiceForm(true)`},
-  ], true);
+  const actions = editInv
+    ? (docStatus(editInv)==='draft'
+        ? [{label:'Save draft', cls:'btn-ghost', onclick:`submitInvoiceForm(false)`},{label:'Save & issue', cls:'btn-primary', onclick:`submitInvoiceForm(true)`}]
+        : [{label:'Cancel', cls:'btn-ghost', onclick:'closeModal()'},{label:'Save changes', cls:'btn-primary', onclick:`submitInvoiceForm('keep')`}])
+    : [{label:'Save as draft', cls:'btn-ghost', onclick:`submitInvoiceForm(false)`},{label:'Save & issue', cls:'btn-primary', onclick:`submitInvoiceForm(true)`}];
+  openModal(editInv?('Edit '+editInv.number):'New Invoice', body, actions, true);
   recalcInvoiceForm();
 }
 function selectedVatType(){
@@ -2267,11 +2281,44 @@ function submitInvoiceForm(issueNow){
   const vatType = selectedVatType();
   const lines = collectLines('.li-desc','.li-qty','.li-price','.li-acct');
   if(lines.length===0){ showToast('Add at least one line item'); return; }
+
+  // ---- EDITING an existing invoice ----
+  if(INVOICE_EDIT_ID){
+    const inv = S.invoices.find(i=>i.id===INVOICE_EDIT_ID);
+    if(!inv){ INVOICE_EDIT_ID=null; showToast('Invoice not found'); return; }
+    const wasStatus = docStatus(inv);
+    if(wasStatus==='paid' || wasStatus==='partial' || wasStatus==='void'){ showToast('This invoice can no longer be edited'); return; }
+    const wasIssued = (wasStatus!=='draft');
+    // If it was issued, reverse its old ledger entry first.
+    if(wasIssued && inv.issueRef){ reverseJournalByRef(inv.issueRef); inv.issueRef=null; }
+    // Apply the edits.
+    inv.contactId = contactId;
+    inv.dueDate = due;
+    inv.vatType = vatType;
+    inv.taxRate = vatTypeRate(vatType);
+    inv.lines = lines;
+    // Decide final state.
+    const shouldIssue = (issueNow===true) || (issueNow==='keep' && wasIssued);
+    if(shouldIssue){
+      inv.status = 'draft';           // reset so issueInvoice re-posts cleanly
+      issueInvoice(inv.id, (issueNow==='keep' ? (inv.date||date) : date));
+    } else {
+      inv.status = 'draft';
+    }
+    INVOICE_EDIT_ID = null;
+    saveState(true);
+    closeModal();
+    showToast('Invoice updated');
+    navigate('sales');
+    return;
+  }
+
+  // ---- NEW invoice ----
   const inv = makeInvoiceObj(contactId, date, due, lines, vatType);
   S.invoices.push(inv);
-  if(issueNow) issueInvoice(inv.id, date);
+  if(issueNow===true) issueInvoice(inv.id, date);
   closeModal();
-  showToast(issueNow? 'Invoice issued' : 'Invoice saved as draft');
+  showToast(issueNow===true? 'Invoice issued' : 'Invoice saved as draft');
   navigate('sales');
 }
 
@@ -2296,11 +2343,18 @@ function openInvoiceDetail(id){
     </div>
     ${paymentsRows? `<div class="section-title">Payments</div><table><thead><tr><th>Date</th><th>Into</th><th class="amt">Amount</th></tr></thead><tbody>${paymentsRows}</tbody></table>`:''}
   `;
-  const actions = [{label:'Print / Save as PDF', cls:'btn-ghost', onclick:`openInvoicePrintView('${inv.id}')`}];
+  const actions = [{label:'Download PDF', cls:'btn-ghost', onclick:`downloadInvoicePdf('${inv.id}','save')`}];
   if(status==='draft'){
+    actions.push({label:'Edit', cls:'btn-ghost', onclick:`closeModal(); openInvoiceForm('${inv.id}')`});
     actions.push({label:'Delete draft', cls:'btn-danger', onclick:`deleteInvoice('${inv.id}')`});
     actions.push({label:'Issue invoice', cls:'btn-primary', onclick:`issueInvoiceAction('${inv.id}')`});
-  } else if(status==='open' || status==='partial'){
+  } else if(status==='open'){
+    // issued but no payments yet → editable in place
+    actions.push({label:'Edit', cls:'btn-ghost', onclick:`closeModal(); openInvoiceForm('${inv.id}')`});
+    actions.push({label:'Void', cls:'btn-danger', onclick:`voidInvoiceAction('${inv.id}')`});
+    actions.push({label:'Record payment', cls:'btn-primary', onclick:`openInvoicePaymentForm('${inv.id}')`});
+  } else if(status==='partial'){
+    // has payments → not directly editable
     actions.push({label:'Void', cls:'btn-danger', onclick:`voidInvoiceAction('${inv.id}')`});
     actions.push({label:'Record payment', cls:'btn-primary', onclick:`openInvoicePaymentForm('${inv.id}')`});
   } else if(status==='paid'){
@@ -2347,7 +2401,8 @@ function renderInvoicePrintPage(){
   const status = docStatus(inv);
   setTopbar(inv.number, 'Tax invoice', `
     <button class="btn btn-ghost" onclick="navigate('sales')">← Back to invoices</button>
-    <button class="btn btn-primary" onclick="printInvoiceWindow('${inv.id}')">🖶 Print / Save as PDF</button>
+    <button class="btn btn-ghost" onclick="downloadInvoicePdf('${inv.id}','open')">⎙ Print</button>
+    <button class="btn btn-primary" onclick="downloadInvoicePdf('${inv.id}','save')">⬇ Download PDF</button>
   `);
   const biz = S.settings;
   const cust = S.contacts.find(c=>c.id===inv.contactId) || {name:'—'};
@@ -2420,6 +2475,136 @@ function renderInvoicePrintPage(){
     </div>
   `;
 }
+// Generate a REAL PDF of the invoice (the Sage way) — no browser headers/footers.
+function downloadInvoicePdf(id, mode){
+  // mode: 'save' (download) or 'open' (open in new tab to view/print). Default save.
+  const JsPDF = (window.jspdf && window.jspdf.jsPDF) || window.jsPDF;
+  if(!JsPDF){ showToast('PDF library still loading — try again in a moment'); return; }
+  const inv = S.invoices.find(i=>i.id===id); if(!inv){ showToast('Invoice not found'); return; }
+  const status = docStatus(inv);
+  const biz = S.settings;
+  const cust = S.contacts.find(c=>c.id===inv.contactId) || {name:'—'};
+  const docTitle = status==='void' ? 'VOID TAX INVOICE' : status==='draft' ? 'PRO FORMA INVOICE' : 'TAX INVOICE';
+  const cur = (biz.currency||'R');
+  const money = n => cur + ' ' + fmt(n);
+
+  const doc = new JsPDF({ unit:'pt', format:'a4' });
+  const PW = doc.internal.pageSize.getWidth();   // ~595pt
+  const PH = doc.internal.pageSize.getHeight();  // ~842pt
+  const M = 40;                                   // margin
+  let y = M;
+
+  // ---- Logo + company name (top-left) ----
+  if(biz.invoiceLogoDataUrl){
+    try{
+      const fmtType = biz.invoiceLogoDataUrl.indexOf('image/png')>=0 ? 'PNG' : 'JPEG';
+      doc.addImage(biz.invoiceLogoDataUrl, fmtType, M, y, 90, 90, undefined, 'FAST');
+    }catch(e){}
+  }
+  // ---- Doc title + meta (top-right) ----
+  doc.setFont('helvetica','bold'); doc.setFontSize(18);
+  doc.text(docTitle, PW-M, y+14, {align:'right'});
+  doc.setFont('helvetica','normal'); doc.setFontSize(9);
+  let my = y+34;
+  const meta = [
+    ['Number', inv.number],
+    ['Date', inv.status==='draft'?'—':fmtDate(inv.date)],
+    ['Due Date', fmtDate(inv.dueDate)],
+  ];
+  if(biz.businessVatNo) meta.push(['VAT No', biz.businessVatNo]);
+  meta.forEach(([k,v])=>{
+    doc.setTextColor(120); doc.text(k.toUpperCase()+':', PW-M-120, my, {align:'left'});
+    doc.setTextColor(20); doc.text(String(v), PW-M, my, {align:'right'});
+    my += 14;
+  });
+
+  // company name under logo
+  y += 100;
+  doc.setTextColor(20); doc.setFont('helvetica','bold'); doc.setFontSize(14);
+  doc.text(biz.businessName||'', M, y);
+  y += 6;
+  // business address
+  doc.setFont('helvetica','normal'); doc.setFontSize(9); doc.setTextColor(90);
+  addrLines(biz.businessAddress).forEach(line=>{ y+=12; doc.text(line, M, y); });
+
+  // ---- Bill To ----
+  y += 26;
+  doc.setTextColor(120); doc.setFontSize(8); doc.text('BILL TO', M, y);
+  y += 14; doc.setTextColor(20); doc.setFont('helvetica','bold'); doc.setFontSize(12);
+  doc.text(cust.name||'—', M, y);
+  doc.setFont('helvetica','normal'); doc.setFontSize(9); doc.setTextColor(90);
+  addrLines(cust.address).forEach(line=>{ y+=12; doc.text(line, M, y); });
+
+  // ---- Line items table ----
+  y += 24;
+  const cols = [
+    {t:'Description', x:M, w:200, align:'left'},
+    {t:'Qty', x:M+210, w:40, align:'right'},
+    {t:'Excl. Price', x:M+250, w:70, align:'right'},
+    {t:'VAT %', x:M+325, w:45, align:'right'},
+    {t:'Excl. Total', x:M+375, w:70, align:'right'},
+    {t:'Incl. Total', x:PW-M, w:70, align:'right'},
+  ];
+  doc.setFillColor(20); doc.setDrawColor(20);
+  doc.setFont('helvetica','bold'); doc.setFontSize(8.5); doc.setTextColor(40);
+  cols.forEach(c=> doc.text(c.t.toUpperCase(), c.align==='right'? (c.x) : c.x, y, {align:c.align}));
+  y += 5; doc.setLineWidth(1); doc.line(M, y, PW-M, y); y += 14;
+
+  doc.setFont('helvetica','normal'); doc.setFontSize(9.5); doc.setTextColor(30);
+  inv.lines.forEach(l=>{
+    const excl = lineSubtotal(l);
+    const incl = excl * (1 + (inv.taxRate||0)/100);
+    // wrap description if long
+    const descLines = doc.splitTextToSize(l.desc||'', 200);
+    doc.text(descLines, M, y);
+    doc.text(String(l.qty), M+210, y, {align:'right'});
+    doc.text(fmt(l.price), M+250, y, {align:'right'});
+    doc.text((inv.taxRate||0).toFixed(0)+'%', M+325, y, {align:'right'});
+    doc.text(fmt(excl), M+375, y, {align:'right'});
+    doc.text(fmt(incl), PW-M, y, {align:'right'});
+    y += Math.max(14, descLines.length*12);
+    doc.setDrawColor(235); doc.setLineWidth(0.5); doc.line(M, y-5, PW-M, y-5);
+  });
+
+  // ---- Footer pinned near bottom: bank details (left) + totals (right) ----
+  const footTop = PH - 150;
+  const fy0 = Math.max(y+20, footTop);
+  // bank details
+  doc.setFontSize(9); doc.setTextColor(60);
+  let by = fy0;
+  if(biz.bankName){ doc.text('Bank: '+biz.bankName, M, by); by+=13; }
+  if(biz.bankBranch){ doc.text('Branch Code: '+biz.bankBranch, M, by); by+=13; }
+  if(biz.bankAccountNumber){ doc.text('Account Number: '+biz.bankAccountNumber, M, by); by+=13; }
+  // totals (right)
+  const tx = PW-M; const tlx = PW-M-180;
+  let ty = fy0;
+  const totRow = (label, val, bold)=>{
+    doc.setFont('helvetica', bold?'bold':'normal'); doc.setTextColor(bold?20:80); doc.setFontSize(bold?11:9.5);
+    doc.text(label, tlx, ty); doc.text(money(val), tx, ty, {align:'right'}); ty += bold?18:14;
+  };
+  totRow('Total Discount', 0);
+  totRow('Total Exclusive', docSubtotal(inv));
+  totRow('Total VAT', docTax(inv));
+  doc.setDrawColor(20); doc.setLineWidth(0.8); doc.line(tlx, ty-4, tx, ty-4); ty+=4;
+  totRow('Grand Total', invoiceTotal(inv), true);
+  // balance due
+  ty += 8;
+  doc.setTextColor(120); doc.setFontSize(8); doc.text('BALANCE DUE', tx, ty, {align:'right'}); ty+=18;
+  doc.setTextColor(10); doc.setFont('helvetica','bold'); doc.setFontSize(18);
+  doc.text(money(status==='draft'?invoiceTotal(inv):docBalanceDue(inv)), tx, ty, {align:'right'});
+
+  // footer note
+  if(biz.invoiceFooterNote){
+    doc.setFont('helvetica','normal'); doc.setFontSize(8); doc.setTextColor(120);
+    const noteLines = doc.splitTextToSize(biz.invoiceFooterNote, PW-2*M);
+    doc.text(noteLines, M, PH-30);
+  }
+
+  const fname = `${(cust.name||'invoice').replace(/[^a-z0-9]+/gi,'-')}-${inv.number}.pdf`;
+  if(mode==='open'){ doc.output('dataurlnewwindow'); }
+  else { doc.save(fname); showToast('Invoice PDF downloaded'); }
+}
+
 // Clean print window for an invoice: no browser header/footer clutter, and the
 // banking details + totals pinned to the BOTTOM of the page.
 function printInvoiceWindow(id){
@@ -2439,7 +2624,8 @@ function printInvoiceWindow(id){
   if(!win){ showToast('Allow pop-ups to print'); return; }
   win.document.write(`<!doctype html><html><head><meta charset="utf-8"><title>${escapeHtml(inv.number)}</title>
     <style>
-      @page { margin: 14mm; }  /* clean margins; ask browser to omit headers/footers */
+      @page { size: A4; margin: 14mm; }  /* clean margins; ask browser to omit headers/footers */
+      @media print { html, body { -webkit-print-color-adjust: exact; } }
       *{ box-sizing:border-box; }
       html,body{ height:100%; }
       body{ font-family:-apple-system,Segoe UI,Roboto,Arial,sans-serif; color:#111; margin:0; font-size:12px; display:flex; flex-direction:column; min-height:100vh; }
@@ -2503,8 +2689,13 @@ function printInvoiceWindow(id){
       </div>
     </div>
     ${biz.invoiceFooterNote? `<div class="note">${escapeHtml(biz.invoiceFooterNote)}</div>`:''}
-    <div class="noprint" style="margin-top:20px; text-align:center;"><button onclick="window.print()" style="padding:9px 18px; font-size:13px; cursor:pointer;">Print / Save as PDF</button>
-      <div style="font-size:11px; color:#888; margin-top:8px;">Tip: in the print dialog, turn off "Headers and footers" for a clean invoice.</div></div>
+    <div class="noprint" style="margin-top:20px; text-align:center; background:#fff8e1; border:1px solid #f0d98a; border-radius:8px; padding:14px;">
+      <button onclick="window.print()" style="padding:9px 18px; font-size:13px; cursor:pointer;">Print / Save as PDF</button>
+      <div style="font-size:12px; color:#8a6d00; margin-top:10px; line-height:1.5;">
+        <strong>To remove the date / URL / page number from the printout:</strong><br>
+        In the print dialog, open <strong>“More settings”</strong> and <strong>untick “Headers and footers.”</strong><br>
+        <span style="color:#aa8; font-size:11px;">(The browser adds those — this is the only way to switch them off. It's remembered next time.)</span>
+      </div></div>
     </body></html>`);
   win.document.close();
   setTimeout(()=>{ try{ win.focus(); win.print(); }catch(e){} }, 400);
