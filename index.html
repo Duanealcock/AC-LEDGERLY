@@ -2308,7 +2308,7 @@ function openInvoiceDetail(id){
   }
   openModal(inv.number, body, actions);
 }
-function issueInvoiceAction(id){ issueInvoice(id); closeModal(); showToast('Invoice issued'); navigate('sales'); }
+function issueInvoiceAction(id){ issueInvoice(id); closeModal(); showToast('Invoice issued'); openInvoicePrintView(id); }
 function voidInvoiceAction(id){ if(confirm('Void this invoice? This reverses its ledger entries.')){ voidInvoice(id); closeModal(); showToast('Invoice voided'); navigate('sales'); } }
 function deleteInvoice(id){ if(confirm('Delete this draft invoice?')){ S.invoices = S.invoices.filter(i=>i.id!==id); closeModal(); showToast('Draft deleted'); navigate('sales'); } }
 function openInvoicePaymentForm(id){
@@ -2347,7 +2347,7 @@ function renderInvoicePrintPage(){
   const status = docStatus(inv);
   setTopbar(inv.number, 'Tax invoice', `
     <button class="btn btn-ghost" onclick="navigate('sales')">← Back to invoices</button>
-    <button class="btn btn-primary" onclick="window.print()">🖶 Print / Save as PDF</button>
+    <button class="btn btn-primary" onclick="printInvoiceWindow('${inv.id}')">🖶 Print / Save as PDF</button>
   `);
   const biz = S.settings;
   const cust = S.contacts.find(c=>c.id===inv.contactId) || {name:'—'};
@@ -2419,6 +2419,95 @@ function renderInvoicePrintPage(){
       ${biz.invoiceFooterNote? `<div style="margin-top:26px; padding-top:14px; border-top:1px solid #eee; font-size:11px; color:#555; white-space:pre-line;">${escapeHtml(biz.invoiceFooterNote)}</div>`:''}
     </div>
   `;
+}
+// Clean print window for an invoice: no browser header/footer clutter, and the
+// banking details + totals pinned to the BOTTOM of the page.
+function printInvoiceWindow(id){
+  const inv = S.invoices.find(i=>i.id===id); if(!inv){ showToast('Invoice not found'); return; }
+  const status = docStatus(inv);
+  const biz = S.settings;
+  const cust = S.contacts.find(c=>c.id===inv.contactId) || {name:'—'};
+  const docTitle = status==='void' ? 'VOID TAX INVOICE' : status==='draft' ? 'PRO FORMA INVOICE' : 'TAX INVOICE';
+  const rows = inv.lines.map(l=>{
+    const excl = lineSubtotal(l);
+    const incl = excl * (1 + (inv.taxRate||0)/100);
+    return `<tr><td>${escapeHtml(l.desc)}</td><td class="r">${l.qty}</td><td class="r">${fmt(l.price)}</td><td class="r">0.00%</td><td class="r">${(inv.taxRate||0).toFixed(2)}%</td><td class="r">${fmt(excl)}</td><td class="r">${fmt(incl)}</td></tr>`;
+  }).join('');
+  const custAddr = addrLines(cust.address);
+  const logo = biz.invoiceLogoDataUrl ? `<img src="${biz.invoiceLogoDataUrl}" style="max-height:90px; max-width:200px; object-fit:contain; margin-bottom:6px;">` : '';
+  const win = window.open('', '_blank');
+  if(!win){ showToast('Allow pop-ups to print'); return; }
+  win.document.write(`<!doctype html><html><head><meta charset="utf-8"><title>${escapeHtml(inv.number)}</title>
+    <style>
+      @page { margin: 14mm; }  /* clean margins; ask browser to omit headers/footers */
+      *{ box-sizing:border-box; }
+      html,body{ height:100%; }
+      body{ font-family:-apple-system,Segoe UI,Roboto,Arial,sans-serif; color:#111; margin:0; font-size:12px; display:flex; flex-direction:column; min-height:100vh; }
+      .r{ text-align:right; } .num{ font-variant-numeric:tabular-nums; }
+      .top{ display:flex; justify-content:space-between; align-items:flex-start; }
+      .co{ font-weight:800; font-size:16px; }
+      .doc-title{ font-size:18px; font-weight:800; text-align:right; }
+      .meta table{ border-collapse:collapse; margin-top:6px; font-size:11px; }
+      .meta td{ padding:1px 4px; } .meta td:first-child{ color:#666; text-transform:uppercase; font-size:10px; }
+      .billto{ margin-top:18px; } .lbl{ font-size:10px; text-transform:uppercase; color:#666; letter-spacing:.4px; }
+      .cust-name{ font-weight:700; font-size:14px; margin-top:2px; }
+      table.items{ width:100%; border-collapse:collapse; margin-top:16px; }
+      table.items th{ font-size:10px; text-transform:uppercase; letter-spacing:.3px; color:#333; border-bottom:2px solid #111; padding:6px 6px; text-align:left; }
+      table.items th.r{ text-align:right; }
+      table.items td{ padding:6px 6px; border-bottom:1px solid #eee; }
+      /* footer pinned to bottom of the page */
+      .foot{ margin-top:auto; padding-top:24px; display:flex; justify-content:space-between; align-items:flex-end; }
+      .bank{ font-size:11px; color:#333; line-height:1.6; }
+      .totals{ min-width:260px; }
+      .totals .row{ display:flex; justify-content:space-between; padding:3px 0; font-size:12px; }
+      .totals .grand{ font-weight:800; border-top:1px solid #111; margin-top:4px; padding-top:6px; }
+      .balance{ margin-top:10px; text-align:right; }
+      .balance .bl{ font-size:10px; text-transform:uppercase; letter-spacing:.5px; color:#666; }
+      .balance .amt{ font-size:22px; font-weight:800; }
+      .note{ margin-top:14px; padding-top:10px; border-top:1px solid #eee; font-size:10px; color:#555; white-space:pre-line; }
+      @media print{ .noprint{ display:none; } }
+    </style></head><body>
+    <div class="top">
+      <div>${logo}<div class="co">${escapeHtml(biz.businessName||'')}</div></div>
+      <div>
+        <div class="doc-title">${docTitle}</div>
+        <div class="meta"><table>
+          <tr><td>Number:</td><td>${escapeHtml(inv.number)}</td></tr>
+          <tr><td>Date:</td><td>${inv.status==='draft'?'—':fmtDate(inv.date)}</td></tr>
+          <tr><td>Due Date:</td><td>${fmtDate(inv.dueDate)}</td></tr>
+          ${biz.businessVatNo?`<tr><td>VAT No:</td><td>${escapeHtml(biz.businessVatNo)}</td></tr>`:''}
+        </table></div>
+      </div>
+    </div>
+    <div class="billto">
+      <div class="lbl">Bill To</div>
+      <div class="cust-name">${escapeHtml(cust.name||'—')}</div>
+      ${custAddr.map(l=>`<div>${escapeHtml(l)}</div>`).join('')}
+    </div>
+    <table class="items">
+      <thead><tr><th>Description</th><th class="r">Qty</th><th class="r">Excl. Price</th><th class="r">Disc %</th><th class="r">VAT %</th><th class="r">Excl. Total</th><th class="r">Incl. Total</th></tr></thead>
+      <tbody>${rows}</tbody>
+    </table>
+    <div class="foot">
+      <div class="bank">
+        ${biz.bankName? `Bank: ${escapeHtml(biz.bankName)}<br>`:''}
+        ${biz.bankBranch? `Branch Code: ${escapeHtml(biz.bankBranch)}<br>`:''}
+        ${biz.bankAccountNumber? `Account Number: ${escapeHtml(biz.bankAccountNumber)}`:''}
+      </div>
+      <div class="totals">
+        <div class="row"><span>Total Discount:</span><span class="num">${fmt(0)}</span></div>
+        <div class="row"><span>Total Exclusive:</span><span class="num">${fmt(docSubtotal(inv))}</span></div>
+        <div class="row"><span>Total VAT:</span><span class="num">${fmt(docTax(inv))}</span></div>
+        <div class="row grand"><span>Grand Total:</span><span class="num">${fmt(invoiceTotal(inv))}</span></div>
+        <div class="balance"><div class="bl">Balance Due</div><div class="amt num">${fmt(status==='draft'?invoiceTotal(inv):docBalanceDue(inv))}</div></div>
+      </div>
+    </div>
+    ${biz.invoiceFooterNote? `<div class="note">${escapeHtml(biz.invoiceFooterNote)}</div>`:''}
+    <div class="noprint" style="margin-top:20px; text-align:center;"><button onclick="window.print()" style="padding:9px 18px; font-size:13px; cursor:pointer;">Print / Save as PDF</button>
+      <div style="font-size:11px; color:#888; margin-top:8px;">Tip: in the print dialog, turn off "Headers and footers" for a clean invoice.</div></div>
+    </body></html>`);
+  win.document.close();
+  setTimeout(()=>{ try{ win.focus(); win.print(); }catch(e){} }, 400);
 }
 
 /* ============================= PURCHASES (mirrors sales) ============================= */
@@ -6939,23 +7028,23 @@ function vatReturnModel(){
   const order = ['standard','zero','exempt','capital','none'];
   const rows=[], rowClasses=[];
   const push=(cells,c)=>{ rows.push(cells); rowClasses.push(c||''); };
-  push(['OUTPUT TAX — SALES & INCOME','','','',''],'section');
+  push(['OUTPUT TAX — SALES & INCOME','','','','','','',''],'section');
   order.forEach(id=>{ const b=bd.output[id]; if(!b||!b.lines.length) return;
-    push([`${b.type.name} — ${b.type.rate}%`,'','','',''],'section');
-    b.lines.slice().sort((x,y)=>(x.date||'').localeCompare(y.date||'')).forEach(l=> push([fmtDateShort(l.date), (l.ref||'')+' '+cleanDesc(l.name||''), round2(l.net), round2(l.net+l.vat), round2(l.vat)]));
-    push([b.type.name+' subtotal','', round2(b.net), round2(b.net+b.vat), round2(b.vat)],'total');
+    push([`${b.type.name} — ${b.type.rate}%`,'','','','','','',''],'section');
+    b.lines.slice().sort((x,y)=>(x.date||'').localeCompare(y.date||'')).forEach(l=> push([fmtDate(l.date), l.type||'', l.account||'', l.ref||'', cleanDesc(l.name||''), round2(l.net), round2(l.net+l.vat), round2(l.vat)]));
+    push([b.type.name+' subtotal','','','','', round2(b.net), round2(b.net+b.vat), round2(b.vat)],'total');
   });
-  push(['Total output '+biz.taxLabel+' (Box 4)','','','', round2(bd.outputTotals.vat)],'total');
-  push(['INPUT TAX — PURCHASES & EXPENSES','','','',''],'section');
+  push(['Total output '+biz.taxLabel+' (Box 4)','','','','','','', round2(bd.outputTotals.vat)],'total');
+  push(['INPUT TAX — PURCHASES & EXPENSES','','','','','','',''],'section');
   order.forEach(id=>{ const b=bd.input[id]; if(!b||!b.lines.length) return;
-    push([`${b.type.name} — ${b.type.rate}%`,'','','',''],'section');
-    b.lines.slice().sort((x,y)=>(x.date||'').localeCompare(y.date||'')).forEach(l=> push([fmtDateShort(l.date), (l.ref||'')+' '+cleanDesc(l.name||''), round2(l.net), round2(l.net+l.vat), round2(l.vat)]));
-    push([b.type.name+' subtotal','', round2(b.net), round2(b.net+b.vat), round2(b.vat)],'total');
+    push([`${b.type.name} — ${b.type.rate}%`,'','','','','','',''],'section');
+    b.lines.slice().sort((x,y)=>(x.date||'').localeCompare(y.date||'')).forEach(l=> push([fmtDate(l.date), l.type||'', l.account||'', l.ref||'', cleanDesc(l.name||''), round2(l.net), round2(l.net+l.vat), round2(l.vat)]));
+    push([b.type.name+' subtotal','','','','', round2(b.net), round2(b.net+b.vat), round2(b.vat)],'total');
   });
-  push(['Total input '+biz.taxLabel+' (Box 14)','','','', round2(bd.inputTotals.vat)],'total');
-  push([(bd.net>=0?'Net '+biz.taxLabel+' payable (Box 20)':'Net '+biz.taxLabel+' refundable (Box 20)'),'','','', round2(Math.abs(bd.net))],'grand');
+  push(['Total input '+biz.taxLabel+' (Box 14)','','','','','','', round2(bd.inputTotals.vat)],'total');
+  push([(bd.net>=0?'Net '+biz.taxLabel+' payable (Box 20)':'Net '+biz.taxLabel+' refundable (Box 20)'),'','','','','','', round2(Math.abs(bd.net))],'grand');
   return { title:'VAT Return', meta:[{label:'Period',value:fmtPeriodLabel(p.from,p.to)},{label:'Ref',value:vatPeriodRef(p.from)},biz.businessVatNo?{label:'VAT No.',value:biz.businessVatNo}:null].filter(Boolean),
-    columns:['Date','Ref / Name', S.settings.currency+' Exclusive', S.settings.currency+' Inclusive', S.settings.currency+' '+biz.taxLabel], rows, rowClasses };
+    columns:['Date','Type','Account','Reference','Description', S.settings.currency+' Exclusive', S.settings.currency+' Inclusive', S.settings.currency+' '+biz.taxLabel], rows, rowClasses };
 }
 function renderVatDetail(){
   const p = (S.vatPeriods||[]).find(x=>x.id===VAT_DETAIL_ID);
