@@ -563,6 +563,7 @@ const NAV = [
   {id:'usage', label:'Time Tracking', ic:'◷'},
   {id:'subscription', label:'Subscription', ic:'◈'},
   {id:'admin-users', label:'Users & Access', ic:'⚿', adminOnly:true},
+  {id:'my-team', label:'My Team', ic:'⚎', firmOwnerOnly:true},
   {id:'settings', label:'Settings', ic:'⚙'},
 ];
 // which nav view belongs to which expandable group, so the group auto-opens
@@ -1126,27 +1127,113 @@ function switchCompany(id){
   saveState(true);
   navigate('dashboard');
 }
+// The two practices (your businesses). Admins group clients under these.
+function getPractices(){
+  if(!WORKSPACE.practices || !WORKSPACE.practices.length){
+    WORKSPACE.practices = [
+      { id:'prac1', name:'Alcock Consulting' },
+      { id:'prac2', name:'Mystique Accounting' },
+    ];
+  }
+  return WORKSPACE.practices;
+}
+function companyPracticeId(co){ return (co.settings && co.settings.practiceId) || null; }
+function practiceName(pid){ const p = getPractices().find(x=>x.id===pid); return p? p.name : 'Unassigned'; }
+
 function openCompanySwitcher(){
   const list = companyList();
   const canManage = canManageWorkspace();
-  const rows = list.map(c=>`
+  const practices = getPractices();
+  const showGroups = reconiIsAdmin && reconiIsAdmin(); // group only for admins
+
+  const rowFor = c => `
     <div style="display:flex; align-items:center; justify-content:space-between; padding:10px 12px; border:1px solid var(--border); border-radius:7px; margin-bottom:8px; ${c.id===WORKSPACE.activeId?'background:var(--surface-2); border-color:var(--accent);':''}">
       <div style="display:flex; align-items:center; gap:9px; cursor:pointer; flex:1;" onclick="switchCompany('${c.id}')">
         <span style="width:9px;height:9px;border-radius:50%;background:${c.id===WORKSPACE.activeId?'var(--accent)':'var(--border-strong)'};display:inline-block;"></span>
         <strong style="font-size:13.5px;">${c.name}</strong>
       </div>
-      ${(canManage && list.length>1) ? `<button class="icon-btn" onclick="event.stopPropagation(); deleteCompanyAction('${c.id}')">Delete</button>` : ''}
-    </div>`).join('');
+      <div style="display:flex; gap:4px;">
+        ${showGroups ? `<button class="icon-btn" title="Assign to practice" onclick="event.stopPropagation(); openAssignPractice('${c.id}')">⇄</button>`:''}
+        ${(canManage && list.length>1) ? `<button class="icon-btn" onclick="event.stopPropagation(); deleteCompanyAction('${c.id}')">Delete</button>` : ''}
+      </div>
+    </div>`;
+
+  let rows = '';
+  if(showGroups){
+    // group under each practice, then an "Unassigned" group for any without one
+    practices.forEach(p=>{
+      const inGroup = list.filter(c=>{ const co=WORKSPACE.companies[c.id]; return companyPracticeId(co)===p.id; });
+      rows += `<div style="font-size:11px; font-weight:700; text-transform:uppercase; letter-spacing:.5px; color:var(--accent-dark); margin:14px 0 8px;">${escapeHtml(p.name)}</div>`;
+      rows += inGroup.length ? inGroup.map(rowFor).join('') : `<div class="hint" style="margin:0 0 6px;">No companies yet</div>`;
+    });
+    const unassigned = list.filter(c=>{ const co=WORKSPACE.companies[c.id]; return !practices.some(p=>p.id===companyPracticeId(co)); });
+    if(unassigned.length){
+      rows += `<div style="font-size:11px; font-weight:700; text-transform:uppercase; letter-spacing:.5px; color:var(--text-muted); margin:14px 0 8px;">Unassigned</div>`;
+      rows += unassigned.map(rowFor).join('');
+    }
+  } else {
+    rows = list.map(rowFor).join('');
+  }
+
   const canAdd = canAddCompany();
-  const body = `${rows}${canAdd
-    ? `<button class="btn btn-ghost" style="width:100%; margin-top:6px; justify-content:center;" onclick="openNewCompanyForm()">+ Add company</button>`
-    : `<div class="hint" style="margin-top:8px; text-align:center;">${escapeHtml(companyLimitMessage())} <a href="#" onclick="event.preventDefault(); closeModal(); navigate('subscription');" style="color:var(--accent-dark);">View plans</a></div>`}`;
+  const body = `${rows}
+    ${canAdd ? `<button class="btn btn-ghost" style="width:100%; margin-top:10px; justify-content:center;" onclick="openNewCompanyForm()">+ Add company</button>`
+      : `<div class="hint" style="margin-top:8px; text-align:center;">${escapeHtml(companyLimitMessage())} <a href="#" onclick="event.preventDefault(); closeModal(); navigate('subscription');" style="color:var(--accent-dark);">View plans</a></div>`}
+    ${showGroups ? `<div style="margin-top:10px; text-align:center;"><a href="#" onclick="event.preventDefault(); openManagePractices();" style="color:var(--text-muted); font-size:12px;">Rename practices</a></div>`:''}`;
   openModal('Switch company', body, []);
+}
+// Assign a company to one of the two practices
+function openAssignPractice(companyId){
+  if(!(reconiIsAdmin && reconiIsAdmin())){ showToast('Only administrators can manage practices'); return; }
+  const co = WORKSPACE.companies[companyId]; if(!co) return;
+  const practices = getPractices();
+  const cur = companyPracticeId(co);
+  const body = `
+    <p style="margin-top:0;">Group <strong>${escapeHtml(co.settings.businessName||'this company')}</strong> under:</p>
+    ${practices.map(p=>`<button class="btn ${cur===p.id?'btn-primary':'btn-ghost'}" style="width:100%; justify-content:flex-start; margin-bottom:8px;" onclick="setCompanyPractice('${companyId}','${p.id}')">${escapeHtml(p.name)}</button>`).join('')}
+    <button class="btn btn-ghost" style="width:100%; justify-content:flex-start; color:var(--text-muted);" onclick="setCompanyPractice('${companyId}','')">Unassigned</button>
+  `;
+  openModal('Assign to practice', body, [{label:'Cancel', cls:'btn-ghost', onclick:'openCompanySwitcher()'}]);
+}
+function setCompanyPractice(companyId, pid){
+  const co = WORKSPACE.companies[companyId]; if(!co) return;
+  co.settings.practiceId = pid || null;
+  saveState(true);
+  openCompanySwitcher();
+}
+// Rename the two practices
+function openManagePractices(){
+  if(!(reconiIsAdmin && reconiIsAdmin())){ showToast('Only administrators can manage practices'); return; }
+  const practices = getPractices();
+  const body = `
+    <div class="field"><label>Practice 1 name</label><input type="text" id="prac-1" value="${escapeHtml(practices[0].name)}"></div>
+    <div class="field"><label>Practice 2 name</label><input type="text" id="prac-2" value="${escapeHtml(practices[1].name)}"></div>
+    <div class="hint">These are your two businesses. Group each client company under one of them from the Switch company screen.</div>
+  `;
+  openModal('Rename practices', body, [
+    {label:'Cancel', cls:'btn-ghost', onclick:'openCompanySwitcher()'},
+    {label:'Save', cls:'btn-primary', onclick:'saveManagePractices()'},
+  ]);
+}
+function saveManagePractices(){
+  const p = getPractices();
+  const n1 = (document.getElementById('prac-1').value||'').trim();
+  const n2 = (document.getElementById('prac-2').value||'').trim();
+  if(n1) p[0].name = n1;
+  if(n2) p[1].name = n2;
+  saveState(true);
+  openCompanySwitcher();
 }
 function openNewCompanyForm(){
   if(!canManageWorkspace()){ showToast('Only an administrator can add companies'); return; }
+  const practices = getPractices();
+  const isAdmin = reconiIsAdmin && reconiIsAdmin();
   const body = `
     <div class="field"><label>Company name</label><input type="text" id="co-name" placeholder="e.g. Second Trading Pty Ltd"></div>
+    ${isAdmin ? `<div class="field"><label>Practice</label><select id="co-practice">
+      ${practices.map(p=>`<option value="${p.id}">${escapeHtml(p.name)}</option>`).join('')}
+      <option value="">Unassigned</option>
+    </select></div>`:''}
     <div class="field-row">
       <div class="field"><label>Currency symbol</label><input type="text" id="co-currency" value="R"></div>
       <div class="field"><label>Default tax rate (%)</label><input type="number" id="co-taxrate" value="15" step="0.1"></div>
@@ -1165,6 +1252,8 @@ function submitNewCompany(){
   const co = newCompanyRecord(name);
   co.settings.currency = currency;
   co.settings.taxRate = taxRate;
+  const practiceSel = document.getElementById('co-practice');
+  if(practiceSel) co.settings.practiceId = practiceSel.value || null;
   if(withSample){ const prevS = S; S = co; seedDemoData(); S = prevS; }
   if(SERVER_MODE){
     // Create on the server first so we use its UUID as the id.
@@ -1862,6 +1951,7 @@ function renderNav(){
   if(activeGroup) NAV_OPEN_GROUPS[activeGroup] = true;
   nav.innerHTML = NAV.map(item=>{
     if(item.adminOnly && !reconiIsAdmin()) return ''; // hide admin-only items from non-admins
+    if(item.firmOwnerOnly && !reconiIsFirmOwner()) return ''; // My Team only for firm owners
     if(item.sec) return `<div class="nav-section-label">${item.sec}</div>`;
     if(item.group){
       const open = !!NAV_OPEN_GROUPS[item.group];
@@ -1929,6 +2019,7 @@ function render(){
     usage: renderUsage,
     subscription: renderSubscription,
     'admin-users': renderAdminUsers,
+    'my-team': renderMyTeam,
     settings: renderSettings,
     'invoice-print': renderInvoicePrintPage,
     'reconcile': renderReconcilePage,
@@ -8455,6 +8546,14 @@ async function startCheckout(planId){
 
 
 function reconiIsAdmin(){ return !!(AUTH_PROFILE && ['owner','admin'].includes(AUTH_PROFILE.role) && !AUTH_PROFILE.is_blocked); }
+function reconiIsFirmOwner(){ return !!(AUTH_PROFILE && AUTH_PROFILE.role==='firm_owner' && !AUTH_PROFILE.is_blocked); }
+// Seat limits per plan (firm owner counts as one seat). Admins unlimited.
+const RECONI_SEAT_LIMITS = { solo:1, practice:3, pro:10 };
+function reconiSeatLimit(){
+  if(reconiIsAdmin()) return null; // unlimited
+  const plan = AUTH_PROFILE && AUTH_PROFILE.plan;
+  return (plan && RECONI_SEAT_LIMITS[plan]!=null) ? RECONI_SEAT_LIMITS[plan] : 1;
+}
 // Central "does this account have active, usable access right now?" — admins always true.
 function reconiHasAccess(){
   if(reconiIsAdmin()) return true;
@@ -8471,6 +8570,131 @@ function reconiCompanyLimit(){
 }
 let ADMIN_USERS = [];        // cached list of profiles
 let ADMIN_USERS_LOADING = false;
+
+/* ============================= MY TEAM (firm owner) ============================= */
+let MY_TEAM = [];
+async function loadMyTeam(){
+  if(!SB || !AUTH_PROFILE) { MY_TEAM = []; return; }
+  // My team members = profiles whose firm_id is me.
+  const { data, error } = await SB.from('profiles').select('id, full_name, email, is_blocked, firm_id').eq('firm_id', AUTH_PROFILE.id);
+  MY_TEAM = error ? [] : (data||[]).filter(u=>u.id!==AUTH_PROFILE.id);
+}
+// Companies this firm owner owns (from the loaded workspace; owner sees own).
+function myOwnedCompanies(){
+  const out = [];
+  const order = WORKSPACE.order || Object.keys(WORKSPACE.companies||{});
+  order.forEach(id=>{ const co=WORKSPACE.companies[id]; if(co) out.push({id: co.serverId||id, name:(co.settings&&co.settings.businessName)||'Company'}); });
+  return out;
+}
+async function renderMyTeam(){
+  setTopbar('My Team', 'Invite staff and give them access to your companies', '');
+  if(!reconiIsFirmOwner() && !reconiIsAdmin()){ document.getElementById('content').innerHTML = `<div class="card"><div class="card-body">This area is for firm owners.</div></div>`; return; }
+  document.getElementById('content').innerHTML = `<div class="card"><div class="card-body">Loading team…</div></div>`;
+  await loadMyTeam();
+  // seat usage
+  const limit = reconiSeatLimit();
+  const used = 1 + MY_TEAM.length; // owner + members
+  const canAdd = (limit==null) || (used < limit);
+  // member→company grants
+  let grantsByUser = {};
+  if(SB){
+    const { data:grants } = await SB.from('user_company_access').select('user_id, company_id');
+    (grants||[]).forEach(g=>{ (grantsByUser[g.user_id] = grantsByUser[g.user_id]||[]).push(g.company_id); });
+  }
+  const owned = myOwnedCompanies();
+  const rows = MY_TEAM.map(u=>{
+    const theirCos = (grantsByUser[u.id]||[]);
+    const coNames = owned.filter(c=>theirCos.includes(c.id)).map(c=>escapeHtml(c.name)).join(', ') || '<span style="color:var(--text-muted);">No companies yet</span>';
+    return `<tr>
+      <td><strong>${escapeHtml(u.full_name||'—')}</strong><div style="font-size:12px;color:var(--text-muted);">${escapeHtml(u.email||'')}</div></td>
+      <td>${u.is_blocked?'<span class="badge badge-void">Blocked</span>':'<span class="badge badge-open">Active</span>'}</td>
+      <td style="font-size:12.5px;">${coNames}</td>
+      <td style="text-align:right; white-space:nowrap;">
+        <button class="icon-btn" onclick="teamManageCompanies('${u.id}')">Companies</button>
+        <button class="icon-btn" style="color:var(--red);" onclick="teamRemoveMember('${u.id}')">Remove</button>
+      </td></tr>`;
+  }).join('');
+
+  document.getElementById('content').innerHTML = `
+    <div class="card" style="margin-bottom:14px;"><div class="card-body" style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:10px;">
+      <div><strong>Team seats:</strong> ${used}${limit==null?'':' of '+limit} used ${limit!=null&&used>=limit?'<span style="color:var(--red);">— limit reached</span>':''}
+        <div class="hint" style="margin:0;">Your plan includes ${limit==null?'unlimited':limit} seat${limit===1?'':'s'} (you count as one).</div></div>
+      ${canAdd? `<button class="btn btn-primary" onclick="teamOpenInvite()">+ Invite member</button>`
+        : `<button class="btn btn-ghost" onclick="navigate('subscription')">Upgrade to add seats</button>`}
+    </div></div>
+    <div class="card">
+      <div class="card-head"><h3>Team members (${MY_TEAM.length})</h3></div>
+      <table><thead><tr><th>Member</th><th>Status</th><th>Companies</th><th></th></tr></thead>
+        <tbody>${rows || `<tr><td colspan="4" style="color:var(--text-muted);">No team members yet. Invite someone to get started.</td></tr>`}</tbody>
+      </table>
+    </div>
+    <div class="card" style="margin-top:16px;"><div class="card-body"><div class="hint" style="margin:0;">Team members only see the companies you grant them. They can't manage users or see other firms' data.</div></div></div>`;
+}
+function teamOpenInvite(){
+  const body = `
+    <div class="field"><label>Full name</label><input type="text" id="tm-name" placeholder="Jane Bookkeeper"></div>
+    <div class="field"><label>Email</label><input type="email" id="tm-email" autocomplete="off" placeholder="jane@example.com"></div>
+    <div class="field"><label>Temporary password</label>
+      <div class="pw-wrap"><input type="password" id="tm-pass" autocomplete="new-password" placeholder="At least 8 characters">
+        <button type="button" class="pw-eye" onclick="togglePasswordVisibility('tm-pass',this)">👁</button></div></div>
+    <div class="hint">Share the email + temporary password with them. They can change it after signing in. You'll then choose which of your companies they can access.</div>
+    <div id="tm-err" class="login-error" style="display:none; margin-top:8px;"></div>`;
+  openModal('Invite team member', body, [
+    {label:'Cancel', cls:'btn-ghost', onclick:'closeModal()'},
+    {label:'Create member', cls:'btn-primary', onclick:'teamSubmitInvite()'},
+  ]);
+}
+async function teamSubmitInvite(){
+  const name=(document.getElementById('tm-name').value||'').trim();
+  const email=(document.getElementById('tm-email').value||'').trim();
+  const pass=document.getElementById('tm-pass').value||'';
+  const err=document.getElementById('tm-err'); const showErr=m=>{ if(err){err.textContent=m; err.style.display='block';} };
+  if(!name){ showErr('Enter a name'); return; }
+  if(!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)){ showErr('Enter a valid email'); return; }
+  if(pass.length<8){ showErr('Password must be at least 8 characters'); return; }
+  // seat check (client-side; server also enforces)
+  const limit=reconiSeatLimit(); if(limit!=null && (1+MY_TEAM.length)>=limit){ showErr('Seat limit reached — upgrade your plan'); return; }
+  if(!SB){ showErr('Not connected'); return; }
+  try{
+    const { data, error } = await SB.functions.invoke('firm-team', { body:{ action:'add_member', email, password:pass, full_name:name } });
+    if(error){ showErr(error.message||'Could not create member'); return; }
+    if(data && data.error){ showErr(data.error); return; }
+    closeModal(); showToast('Team member created'); renderMyTeam();
+  }catch(e){ showErr('Could not create member'); }
+}
+async function teamManageCompanies(memberId){
+  const owned = myOwnedCompanies();
+  let current = [];
+  if(SB){ const { data } = await SB.from('user_company_access').select('company_id').eq('user_id', memberId); current = (data||[]).map(g=>g.company_id); }
+  const body = `
+    <p style="margin-top:0;">Tick the companies this member can access:</p>
+    <div style="max-height:300px; overflow-y:auto;">
+      ${owned.map(c=>`<label style="display:flex; align-items:center; gap:8px; padding:7px 0; cursor:pointer;">
+        <input type="checkbox" value="${c.id}" ${current.includes(c.id)?'checked':''} style="width:auto;"> ${escapeHtml(c.name)}</label>`).join('')}
+    </div>`;
+  openModal('Assign companies', body, [
+    {label:'Cancel', cls:'btn-ghost', onclick:'closeModal()'},
+    {label:'Save', cls:'btn-primary', onclick:`teamSaveCompanies('${memberId}')`},
+  ]);
+  teamManageCompanies._prev = current;
+}
+async function teamSaveCompanies(memberId){
+  const checks = Array.from(document.querySelectorAll('#modal-root input[type=checkbox]'));
+  const want = checks.filter(c=>c.checked).map(c=>c.value);
+  const prev = teamManageCompanies._prev || [];
+  const toGrant = want.filter(id=>!prev.includes(id));
+  const toRevoke = prev.filter(id=>!want.includes(id));
+  try{
+    for(const cid of toGrant){ await SB.rpc('firm_grant_company', { member_id:memberId, company_id:cid }); }
+    for(const cid of toRevoke){ await SB.rpc('firm_revoke_company', { member_id:memberId, company_id:cid }); }
+    closeModal(); showToast('Companies updated'); renderMyTeam();
+  }catch(e){ showToast('Could not update companies'); }
+}
+async function teamRemoveMember(memberId){
+  if(!confirm('Remove this team member? They will lose access to all your companies.')) return;
+  try{ const { error } = await SB.rpc('firm_remove_member', { member_id:memberId }); if(error){ showToast(error.message); return; } showToast('Member removed'); renderMyTeam(); }
+  catch(e){ showToast('Could not remove member'); }
+}
 
 async function renderAdminUsers(){
   setTopbar('Users & Access', 'Approve, block, and manage who can use RECONI', '');
