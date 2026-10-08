@@ -292,6 +292,13 @@
   .alloc-doc-row.picked{ border-color:var(--accent); background:var(--surface-2); }
   .alloc-summary{ display:flex; justify-content:space-between; gap:16px; padding:10px 12px; background:var(--surface-2); border-radius:8px; margin:10px 0; font-size:13px; }
   .cb-recon-dot{ width:9px; height:9px; border-radius:50%; display:inline-block; flex:0 0 auto; }
+  /* two-step company switcher — firm chips */
+  .sw-firm-row{ display:flex; gap:8px; flex-wrap:wrap; }
+  .sw-firm-chip{ display:inline-flex; align-items:center; gap:7px; padding:9px 14px; border:1.5px solid var(--border); border-radius:10px; background:var(--surface); color:var(--text); font-size:13px; font-weight:600; cursor:pointer; transition:all .12s; }
+  .sw-firm-chip:hover{ border-color:var(--accent); }
+  .sw-firm-chip.active{ border-color:var(--accent); background:var(--surface-2); color:var(--accent-dark); }
+  .sw-firm-chip .sw-count{ font-size:11px; font-weight:700; background:var(--border); color:var(--text-muted); border-radius:20px; padding:1px 8px; }
+  .sw-firm-chip.active .sw-count{ background:var(--accent); color:#1a1300; }
   /* searchable account picker */
   .acct-pick{ position:relative; width:100%; }
   .acct-pick-input{ width:100%; box-sizing:border-box; height:32px; padding:0 8px; font-size:12.5px; border:1px solid var(--border); border-radius:7px; background:var(--surface); color:var(--text); }
@@ -1140,12 +1147,48 @@ function getPractices(){
 function companyPracticeId(co){ return (co.settings && co.settings.practiceId) || null; }
 function practiceName(pid){ const p = getPractices().find(x=>x.id===pid); return p? p.name : 'Unassigned'; }
 
+let SWITCHER_FIRM = null;   // which firm (practice) is currently selected in the two-step switcher
 function openCompanySwitcher(){
   const list = companyList();
   const canManage = canManageWorkspace();
   const practices = getPractices();
-  const showGroups = reconiIsAdmin && reconiIsAdmin(); // group only for admins
+  const showGroups = reconiIsAdmin && reconiIsAdmin(); // two-step firm view only for admins
 
+  // Non-admins: simple flat list (they only see their own companies anyway)
+  if(!showGroups){
+    const rowFor = c => `
+      <div style="display:flex; align-items:center; justify-content:space-between; padding:10px 12px; border:1px solid var(--border); border-radius:7px; margin-bottom:8px; ${c.id===WORKSPACE.activeId?'background:var(--surface-2); border-color:var(--accent);':''}">
+        <div style="display:flex; align-items:center; gap:9px; cursor:pointer; flex:1;" onclick="switchCompany('${c.id}')">
+          <span style="width:9px;height:9px;border-radius:50%;background:${c.id===WORKSPACE.activeId?'var(--accent)':'var(--border-strong)'};display:inline-block;"></span>
+          <strong style="font-size:13.5px;">${c.name}</strong>
+        </div>
+        ${(canManage && list.length>1) ? `<button class="icon-btn" onclick="event.stopPropagation(); deleteCompanyAction('${c.id}')">Delete</button>` : ''}
+      </div>`;
+    const canAdd = canAddCompany();
+    openModal('Switch company', list.map(rowFor).join('') +
+      (canAdd ? `<button class="btn btn-ghost" style="width:100%; margin-top:10px; justify-content:center;" onclick="openNewCompanyForm()">+ Add company</button>`
+        : `<div class="hint" style="margin-top:8px; text-align:center;">${escapeHtml(companyLimitMessage())} <a href="#" onclick="event.preventDefault(); closeModal(); navigate('subscription');" style="color:var(--accent-dark);">View plans</a></div>`), []);
+    return;
+  }
+
+  // ----- ADMIN: two-step. Default SWITCHER_FIRM to the active company's firm, or last used -----
+  if(SWITCHER_FIRM===null){
+    const activeCo = WORKSPACE.companies[WORKSPACE.activeId];
+    SWITCHER_FIRM = companyPracticeId(activeCo) || (WORKSPACE.uiPrefs && WORKSPACE.uiPrefs.lastFirm) || practices[0].id;
+  }
+
+  // Count companies per firm (for the chips)
+  const countFor = pid => list.filter(c=> companyPracticeId(WORKSPACE.companies[c.id])===pid ).length;
+  const unassignedList = list.filter(c=> !practices.some(p=>p.id===companyPracticeId(WORKSPACE.companies[c.id])) );
+
+  // Step 1: firm chooser (chips)
+  const chip = (id,label,count,active)=>`<button class="sw-firm-chip ${active?'active':''}" onclick="selectSwitcherFirm('${id}')">${escapeHtml(label)}<span class="sw-count">${count}</span></button>`;
+  let chips = practices.map(p=>chip(p.id, p.name, countFor(p.id), SWITCHER_FIRM===p.id)).join('');
+  if(unassignedList.length) chips += chip('__unassigned__','Unassigned', unassignedList.length, SWITCHER_FIRM==='__unassigned__');
+
+  // Step 2: companies under the selected firm
+  const inFirm = SWITCHER_FIRM==='__unassigned__' ? unassignedList
+    : list.filter(c=> companyPracticeId(WORKSPACE.companies[c.id])===SWITCHER_FIRM );
   const rowFor = c => `
     <div style="display:flex; align-items:center; justify-content:space-between; padding:10px 12px; border:1px solid var(--border); border-radius:7px; margin-bottom:8px; ${c.id===WORKSPACE.activeId?'background:var(--surface-2); border-color:var(--accent);':''}">
       <div style="display:flex; align-items:center; gap:9px; cursor:pointer; flex:1;" onclick="switchCompany('${c.id}')">
@@ -1153,34 +1196,30 @@ function openCompanySwitcher(){
         <strong style="font-size:13.5px;">${c.name}</strong>
       </div>
       <div style="display:flex; gap:4px;">
-        ${showGroups ? `<button class="icon-btn" title="Assign to practice" onclick="event.stopPropagation(); openAssignPractice('${c.id}')">⇄</button>`:''}
+        <button class="icon-btn" title="Move to another firm" onclick="event.stopPropagation(); openAssignPractice('${c.id}')">⇄ Move</button>
         ${(canManage && list.length>1) ? `<button class="icon-btn" onclick="event.stopPropagation(); deleteCompanyAction('${c.id}')">Delete</button>` : ''}
       </div>
     </div>`;
-
-  let rows = '';
-  if(showGroups){
-    // group under each practice, then an "Unassigned" group for any without one
-    practices.forEach(p=>{
-      const inGroup = list.filter(c=>{ const co=WORKSPACE.companies[c.id]; return companyPracticeId(co)===p.id; });
-      rows += `<div style="font-size:11px; font-weight:700; text-transform:uppercase; letter-spacing:.5px; color:var(--accent-dark); margin:14px 0 8px;">${escapeHtml(p.name)}</div>`;
-      rows += inGroup.length ? inGroup.map(rowFor).join('') : `<div class="hint" style="margin:0 0 6px;">No companies yet</div>`;
-    });
-    const unassigned = list.filter(c=>{ const co=WORKSPACE.companies[c.id]; return !practices.some(p=>p.id===companyPracticeId(co)); });
-    if(unassigned.length){
-      rows += `<div style="font-size:11px; font-weight:700; text-transform:uppercase; letter-spacing:.5px; color:var(--text-muted); margin:14px 0 8px;">Unassigned</div>`;
-      rows += unassigned.map(rowFor).join('');
-    }
-  } else {
-    rows = list.map(rowFor).join('');
-  }
+  const companiesHtml = inFirm.length ? inFirm.map(rowFor).join('')
+    : `<div class="hint" style="text-align:center; padding:16px 0;">No companies under this firm yet.</div>`;
 
   const canAdd = canAddCompany();
-  const body = `${rows}
-    ${canAdd ? `<button class="btn btn-ghost" style="width:100%; margin-top:10px; justify-content:center;" onclick="openNewCompanyForm()">+ Add company</button>`
+  const firmLabel = SWITCHER_FIRM==='__unassigned__' ? 'Unassigned' : practiceName(SWITCHER_FIRM);
+  const body = `
+    <div style="font-size:11px; color:var(--text-muted); text-transform:uppercase; letter-spacing:.5px; margin-bottom:8px;">Select firm</div>
+    <div class="sw-firm-row">${chips}</div>
+    <div style="font-size:11px; color:var(--text-muted); text-transform:uppercase; letter-spacing:.5px; margin:16px 0 8px;">${escapeHtml(firmLabel)} — companies</div>
+    ${companiesHtml}
+    ${canAdd ? `<button class="btn btn-ghost" style="width:100%; margin-top:10px; justify-content:center;" onclick="openNewCompanyForm()">+ Add company to ${escapeHtml(firmLabel)}</button>`
       : `<div class="hint" style="margin-top:8px; text-align:center;">${escapeHtml(companyLimitMessage())} <a href="#" onclick="event.preventDefault(); closeModal(); navigate('subscription');" style="color:var(--accent-dark);">View plans</a></div>`}
-    ${showGroups ? `<div style="margin-top:10px; text-align:center;"><a href="#" onclick="event.preventDefault(); openManagePractices();" style="color:var(--text-muted); font-size:12px;">Rename practices</a></div>`:''}`;
+    <div style="margin-top:12px; text-align:center;"><a href="#" onclick="event.preventDefault(); openManagePractices();" style="color:var(--text-muted); font-size:12px;">Rename firms</a></div>`;
   openModal('Switch company', body, []);
+}
+function selectSwitcherFirm(firmId){
+  SWITCHER_FIRM = firmId;
+  // remember last firm (not the unassigned pseudo-group)
+  if(firmId!=='__unassigned__'){ WORKSPACE.uiPrefs = WORKSPACE.uiPrefs||{}; WORKSPACE.uiPrefs.lastFirm = firmId; saveState(); }
+  openCompanySwitcher();
 }
 // Assign a company to one of the two practices
 function openAssignPractice(companyId){
@@ -1230,9 +1269,9 @@ function openNewCompanyForm(){
   const isAdmin = reconiIsAdmin && reconiIsAdmin();
   const body = `
     <div class="field"><label>Company name</label><input type="text" id="co-name" placeholder="e.g. Second Trading Pty Ltd"></div>
-    ${isAdmin ? `<div class="field"><label>Practice</label><select id="co-practice">
-      ${practices.map(p=>`<option value="${p.id}">${escapeHtml(p.name)}</option>`).join('')}
-      <option value="">Unassigned</option>
+    ${isAdmin ? `<div class="field"><label>Firm</label><select id="co-practice">
+      ${practices.map(p=>`<option value="${p.id}" ${(typeof SWITCHER_FIRM!=='undefined'&&SWITCHER_FIRM===p.id)?'selected':''}>${escapeHtml(p.name)}</option>`).join('')}
+      <option value="" ${(typeof SWITCHER_FIRM!=='undefined'&&SWITCHER_FIRM==='__unassigned__')?'selected':''}>Unassigned</option>
     </select></div>`:''}
     <div class="field-row">
       <div class="field"><label>Currency symbol</label><input type="text" id="co-currency" value="R"></div>
@@ -2679,10 +2718,13 @@ function downloadInvoicePdf(id, mode){
   totRow('Total Discount', 0);
   totRow('Total Exclusive', docSubtotal(inv));
   totRow('Total VAT', docTax(inv));
-  doc.setDrawColor(20); doc.setLineWidth(0.8); doc.line(tlx, ty-4, tx, ty-4); ty+=4;
+  // rule sits in the gap: a bit below the last baseline, with clear space before Grand Total
+  ty += 4;
+  doc.setDrawColor(20); doc.setLineWidth(0.8); doc.line(tlx, ty, tx, ty);
+  ty += 16;                         // push Grand Total baseline well clear of the rule
   totRow('Grand Total', invoiceTotal(inv), true);
   // balance due
-  ty += 8;
+  ty += 10;
   doc.setTextColor(120); doc.setFontSize(8); doc.text('BALANCE DUE', tx, ty, {align:'right'}); ty+=18;
   doc.setTextColor(10); doc.setFont('helvetica','bold'); doc.setFontSize(18);
   doc.text(money(status==='draft'?invoiceTotal(inv):docBalanceDue(inv)), tx, ty, {align:'right'});
@@ -4206,9 +4248,15 @@ function acctPickKey(e, input){
   const items = Array.from(list.querySelectorAll('.acct-pick-item'));
   if(!items.length) return;
   let idx = items.findIndex(x=>x.classList.contains('active'));
-  if(e.key==='ArrowDown'){ e.preventDefault(); idx=Math.min(items.length-1, idx+1); }
-  else if(e.key==='ArrowUp'){ e.preventDefault(); idx=Math.max(0, idx-1); }
-  else if(e.key==='Enter'){ e.preventDefault(); if(items[idx]){ const rowId=wrap.getAttribute('data-row'); acctPickChoose(rowId, items[idx].getAttribute('data-acc')); } return; }
+  if(e.key==='ArrowDown'){ e.preventDefault(); idx=Math.min(items.length-1, (idx<0?-1:idx)+1); }
+  else if(e.key==='ArrowUp'){ e.preventDefault(); idx=Math.max(0, (idx<0?0:idx)-1); }
+  else if(e.key==='Enter'){
+    e.preventDefault();
+    // If nothing is highlighted yet, pick the FIRST match (natural "type then Enter").
+    if(idx<0) idx = 0;
+    if(items[idx]){ const rowId=wrap.getAttribute('data-row'); acctPickChoose(rowId, items[idx].getAttribute('data-acc')); }
+    return;
+  }
   else if(e.key==='Escape'){ list.style.display='none'; return; }
   else return;
   items.forEach(x=>x.classList.remove('active')); if(items[idx]){ items[idx].classList.add('active'); items[idx].scrollIntoView({block:'nearest'}); }
