@@ -2625,7 +2625,8 @@ function downloadInvoicePdf(id, mode){
   const M = 40;                                   // margin
   let y = M;
 
-  // ---- Logo + company name (top-left) ----
+  // ================= HEADER (logo + title + meta table) =================
+  // ---- Logo (top-left) ----
   let logoBottom = y;
   if(biz.invoiceLogoDataUrl){
     try{
@@ -2634,42 +2635,75 @@ function downloadInvoicePdf(id, mode){
       logoBottom = y + 130;
     }catch(e){}
   }
-  // ---- Doc title + meta (top-right) ----
-  doc.setFont('helvetica','bold'); doc.setFontSize(18);
-  doc.text(docTitle, PW-M, y+14, {align:'right'});
+  // ---- Doc title (top-right) ----
+  doc.setFont('helvetica','bold'); doc.setFontSize(18); doc.setTextColor(20);
+  doc.text(docTitle, PW-M, y+16, {align:'right'});
+
+  // ---- Meta table (top-right, label left / value right) ----
   doc.setFont('helvetica','normal'); doc.setFontSize(9);
-  let my = y+34;
+  let my = y+40;
+  const metaLabelX = PW - M - 150;   // left edge of the meta block
+  const discPct = (inv.overallDiscount!=null ? inv.overallDiscount : 0);
   const meta = [
-    ['Number', inv.number],
-    ['Date', inv.status==='draft'?'—':fmtDate(inv.date)],
-    ['Due Date', fmtDate(inv.dueDate)],
+    ['NUMBER', inv.number || '', true],
+    ['REFERENCE', inv.reference || ''],
+    ['DATE', inv.status==='draft' ? '' : fmtDate(inv.date), true],
+    ['DUE DATE', fmtDate(inv.dueDate), true],
+    ['SALES REP', inv.salesRep || ''],
+    ['OVERALL DISCOUNT %', discPct.toFixed(2)+'%'],
+    ['PAGE', '1/1'],
   ];
-  if(biz.businessVatNo) meta.push(['VAT No', biz.businessVatNo]);
-  meta.forEach(([k,v])=>{
-    doc.setTextColor(120); doc.text(k.toUpperCase()+':', PW-M-120, my, {align:'left'});
-    doc.setTextColor(20); doc.text(String(v), PW-M, my, {align:'right'});
-    my += 14;
+  meta.forEach(([k,v,bold])=>{
+    doc.setTextColor(110); doc.setFont('helvetica','normal');
+    doc.text(k+':', metaLabelX, my, {align:'left'});
+    doc.setTextColor(20); doc.setFont('helvetica', bold?'bold':'normal');
+    doc.text(String(v), PW-M, my, {align:'right'});
+    my += 13.5;
   });
 
-  // company name under logo (sits below whichever is lower: logo or meta block)
-  y = Math.max(logoBottom + 20, my + 6);
-  doc.setTextColor(20); doc.setFont('helvetica','bold'); doc.setFontSize(14);
-  doc.text(biz.businessName||'', M, y);
-  y += 6;
-  // business address
-  doc.setFont('helvetica','normal'); doc.setFontSize(9); doc.setTextColor(90);
-  addrLines(biz.businessAddress).forEach(line=>{ y+=12; doc.text(line, M, y); });
+  // ================= FROM / TO two-column block =================
+  // helpers for one party column
+  const custPostal = addrLines(cust.postalAddress || cust.address);
+  const custPhysical = addrLines(cust.physicalAddress || cust.address);
+  const bizPostal = addrLines(biz.businessPostalAddress || biz.businessAddress);
+  const bizPhysical = addrLines(biz.businessPhysicalAddress || biz.businessAddress);
 
-  // ---- Bill To ----
-  y += 26;
-  doc.setTextColor(120); doc.setFontSize(8); doc.text('BILL TO', M, y);
-  y += 14; doc.setTextColor(20); doc.setFont('helvetica','bold'); doc.setFontSize(12);
-  doc.text(cust.name||'—', M, y);
-  doc.setFont('helvetica','normal'); doc.setFontSize(9); doc.setTextColor(90);
-  addrLines(cust.address).forEach(line=>{ y+=12; doc.text(line, M, y); });
+  let fromTopY = Math.max(logoBottom + 28, my + 10);
+  const colL = M;                       // FROM column x
+  const colR = M + (PW-2*M)/2 + 10;     // TO column x
+  const subColGap = 115;                // gap between Postal and Physical sub-columns
+
+  // Returns the y after drawing a party block at column x
+  function drawParty(x, heading, name, vatLabel, vatNo, postal, physical){
+    let yy = fromTopY;
+    doc.setFont('helvetica','normal'); doc.setFontSize(8); doc.setTextColor(130);
+    doc.text(heading, x, yy); yy += 16;
+    doc.setFont('helvetica','bold'); doc.setFontSize(12.5); doc.setTextColor(20);
+    const nameLines = doc.splitTextToSize((name||'—').toUpperCase(), (PW-2*M)/2 - 20);
+    doc.text(nameLines, x, yy); yy += nameLines.length*14 + 4;
+    // VAT no
+    doc.setFont('helvetica','bold'); doc.setFontSize(8.5); doc.setTextColor(40);
+    doc.text(vatLabel+':', x, yy);
+    doc.setFont('helvetica','normal'); doc.setTextColor(60);
+    doc.text(' '+(vatNo||''), x + doc.getTextWidth(vatLabel+':') , yy); yy += 16;
+    // Postal / Physical sub-headers
+    const addrTop = yy;
+    doc.setFont('helvetica','bold'); doc.setFontSize(8); doc.setTextColor(60);
+    doc.text('POSTAL ADDRESS:', x, addrTop);
+    doc.text('PHYSICAL ADDRESS:', x + subColGap, addrTop);
+    // address lines
+    doc.setFont('helvetica','normal'); doc.setFontSize(9); doc.setTextColor(70);
+    let py = addrTop + 13, phy = addrTop + 13;
+    postal.forEach(l=>{ doc.text(l, x, py); py += 12; });
+    physical.forEach(l=>{ doc.text(l, x + subColGap, phy); phy += 12; });
+    return Math.max(py, phy);
+  }
+
+  const yFrom = drawParty(colL, 'FROM', biz.businessName, 'VAT NO', biz.businessVatNo, bizPostal, bizPhysical);
+  const yTo   = drawParty(colR, 'TO', cust.name, 'CUSTOMER VAT NO', cust.vatNo, custPostal, custPhysical);
+  y = Math.max(yFrom, yTo) + 24;
 
   // ---- Line items table ----
-  y += 24;
   const cols = [
     {t:'Description', x:M, w:200, align:'left'},
     {t:'Qty', x:M+210, w:40, align:'right'},
@@ -8084,6 +8118,50 @@ function gateShowPending(){
   box.style.display='block';
   gateEl('gate-sub').textContent='Account pending approval';
 }
+// Choose-a-plan gate: shown to a confirmed user who has no active subscription yet.
+// Starting a plan sends them through PayFast; the webhook then sets them active+approved.
+function gateShowChoosePlan(profile, isRenew){
+  gateEl('gate-form').style.display='none';
+  const pend = gateEl('gate-pending');
+  const plans = (typeof RECONI_PLANS!=='undefined') ? RECONI_PLANS : [];
+  const vat = (typeof RECONI_VAT_RATE!=='undefined') ? RECONI_VAT_RATE : 0.15;
+  const trialDays = (typeof RECONI_TRIAL_DAYS!=='undefined') ? RECONI_TRIAL_DAYS : 14;
+  const inc = p => Math.round(p.priceExVat*(1+vat)*100)/100;
+  const cards = plans.map(p=>`
+    <div style="border:1.5px solid ${p.popular?'var(--accent)':'var(--border)'}; border-radius:12px; padding:14px; margin-bottom:10px; text-align:left;">
+      <div style="display:flex; justify-content:space-between; align-items:baseline;">
+        <strong style="font-size:15px;">${escapeHtml(p.name)}</strong>
+        <span><strong style="font-size:17px;">R${p.priceExVat}</strong><span style="font-size:11px; color:var(--text-muted);">/mo +VAT</span></span>
+      </div>
+      <div style="font-size:11.5px; color:var(--text-muted); margin:3px 0 8px;">${escapeHtml(p.tagline||'')} · R${inc(p)} incl. VAT</div>
+      <button class="btn ${p.popular?'btn-primary':'btn-ghost'}" style="width:100%; justify-content:center;" onclick="gateStartPlan('${p.id}')">${isRenew?'Renew with':'Start '+trialDays+'-day trial —'} ${escapeHtml(p.name)}</button>
+    </div>`).join('');
+  pend.innerHTML = `
+    <div style="text-align:left;">
+      <div style="font-weight:700; margin-bottom:4px;">${isRenew? 'Renew your subscription' : 'Choose your plan'}</div>
+      <div style="font-size:12.5px; color:var(--text-muted); margin-bottom:14px;">
+        ${isRenew? 'Your subscription is no longer active. Pick a plan to restore access.' : `Start with a ${trialDays}-day free trial — you won't be charged until it ends, and you can cancel any time before then.`}
+      </div>
+      ${cards}
+      <div style="font-size:11px; color:var(--text-muted); text-align:center; margin-top:4px;">Secure payment by PayFast.
+        <a href="#" onclick="event.preventDefault(); openPolicy('refund')" style="color:var(--text-muted);">Refund policy</a></div>
+      <button class="btn btn-ghost" style="width:100%; justify-content:center; margin-top:12px;" onclick="gateSignOut()">Sign out</button>
+    </div>`;
+  pend.style.display='block';
+  gateEl('gate-sub').textContent = isRenew? 'Renew subscription' : 'Choose your plan';
+}
+async function gateStartPlan(planId){
+  if(!SB){ showToast('Please try again in a moment.'); return; }
+  try{
+    const { data, error } = await SB.functions.invoke('payfast-checkout', { body:{ planId } });
+    if(error){ gateShowError('Checkout error: '+error.message); return; }
+    if(!data || !data.processUrl || !data.params){ gateShowError('Could not start checkout — please try again.'); return; }
+    const form = document.createElement('form');
+    form.method='POST'; form.action=data.processUrl;
+    Object.keys(data.params).forEach(k=>{ const i=document.createElement('input'); i.type='hidden'; i.name=k; i.value=data.params[k]; form.appendChild(i); });
+    document.body.appendChild(form); form.submit();
+  }catch(e){ gateShowError('Could not start checkout. Please try again.'); }
+}
 // Friendlier wording for common Supabase auth errors.
 function friendlyAuthError(msg){
   const m = (msg||'').toLowerCase();
@@ -8173,16 +8251,23 @@ async function afterAuthenticated(){
   if(!profile){ gateShowPending(); return; } // trigger may lag; treat as pending
   AUTH_PROFILE = profile;
   const isAdmin = ['owner','admin'].includes(profile.role) && profile.is_blocked!==true;
+  if(profile.is_blocked){ gateShowError('Your account has been blocked. Contact the administrator.'); await SB.auth.signOut(); return; }
   // Admins/owners always have full access — never trial-gated, never billing-restricted.
-  const active = isAdmin || (profile.is_approved===true && profile.is_blocked!==true
-    && ['none','trialing','active'].includes(profile.subscription_status||'none'));
-  if(!active){
-    if(profile.is_blocked){ gateShowError('Your account has been blocked. Contact the administrator.'); await SB.auth.signOut(); return; }
-    gateShowPending();
-    return;
+  if(isAdmin){ enterAppAfterGate(profile); return; }
+
+  const sub = profile.subscription_status || 'none';
+  // Active or on trial → in.  (is_approved is auto-set by the payment webhook.)
+  if(profile.is_approved===true && ['trialing','active'].includes(sub)){
+    enterAppAfterGate(profile); return;
   }
-  // Approved → enter the app. Data remains local for now.
-  enterAppAfterGate(profile);
+  // Already approved by an admin manually (legacy/no-plan) → in.
+  if(profile.is_approved===true && sub==='none'){
+    enterAppAfterGate(profile); return;
+  }
+  // Past-due or cancelled → show a renew screen (choose a plan again).
+  if(['past_due','canceled'].includes(sub)){ gateShowChoosePlan(profile, true); return; }
+  // New / confirmed but no plan yet → let them choose a plan and start a trial.
+  gateShowChoosePlan(profile, false);
 }
 function enterAppAfterGate(profile){
   document.getElementById('auth-gate').style.display = 'none';
