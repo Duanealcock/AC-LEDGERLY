@@ -2343,7 +2343,12 @@ function openInvoiceForm(editId){
   const body = `
     ${editInv && docStatus(editInv)!=='draft' ? `<div class="hint" style="margin-bottom:12px; border-left:3px solid var(--gold); padding-left:10px;">Editing an issued invoice will re-post its ledger entry with the new values.</div>`:''}
     <div class="field-row">
-      <div class="field"><label>Customer</label><select id="f-contact">${customers.map(c=>`<option value="${c.id}" ${editInv&&editInv.contactId===c.id?'selected':''}>${c.name}</option>`).join('')}</select></div>
+      <div class="field"><label>Customer</label>
+        <div style="display:flex; gap:6px;">
+          <select id="f-contact" style="flex:1;">${customers.map(c=>`<option value="${c.id}" ${(editInv&&editInv.contactId===c.id)||(INVOICE_QUICK_SELECT&&INVOICE_QUICK_SELECT===c.id)?'selected':''}>${c.name}</option>`).join('')}</select>
+          <button type="button" class="btn btn-ghost btn-sm" style="flex:0 0 auto; white-space:nowrap;" onclick="quickAddCustomer()">+ New</button>
+        </div>
+      </div>
       <div class="field"><label>Invoice date</label><input type="date" id="f-date" value="${editInv&&editInv.date&&editInv.status!=='draft'?editInv.date:today}"></div>
     </div>
     <div class="field-row">
@@ -2371,6 +2376,7 @@ function openInvoiceForm(editId){
     : [{label:'Save as draft', cls:'btn-ghost', onclick:`submitInvoiceForm(false)`},{label:'Save & issue', cls:'btn-primary', onclick:`submitInvoiceForm(true)`}];
   openModal(editInv?('Edit '+editInv.number):'New Invoice', body, actions, true);
   recalcInvoiceForm();
+  INVOICE_QUICK_SELECT = null;   // consumed — don't carry to the next fresh invoice
 }
 function selectedVatType(){
   const el = document.getElementById('f-tax');
@@ -2704,31 +2710,36 @@ function downloadInvoicePdf(id, mode){
   y = Math.max(yFrom, yTo) + 24;
 
   // ---- Line items table ----
-  const cols = [
-    {t:'Description', x:M, w:200, align:'left'},
-    {t:'Qty', x:M+210, w:40, align:'right'},
-    {t:'Excl. Price', x:M+250, w:70, align:'right'},
-    {t:'VAT %', x:M+325, w:45, align:'right'},
-    {t:'Excl. Total', x:M+375, w:70, align:'right'},
-    {t:'Incl. Total', x:PW-M, w:70, align:'right'},
-  ];
-  doc.setFillColor(20); doc.setDrawColor(20);
-  doc.setFont('helvetica','bold'); doc.setFontSize(8.5); doc.setTextColor(40);
-  cols.forEach(c=> doc.text(c.t.toUpperCase(), c.align==='right'? (c.x) : c.x, y, {align:c.align}));
-  y += 5; doc.setLineWidth(1); doc.line(M, y, PW-M, y); y += 14;
+  // Right-edge x positions for each numeric column, spaced so nothing overlaps.
+  // Usable width ≈ PW-2M (~515pt). Columns right-aligned at these x values.
+  const xIncl  = PW - M;          // Incl. Total (far right)
+  const xExcl  = PW - M - 95;     // Excl. Total
+  const xVat   = PW - M - 175;    // VAT %
+  const xPrice = PW - M - 235;    // Excl. Price
+  const xQty   = PW - M - 315;    // Qty
+  const descW  = (xQty - 30) - M; // description wraps before the Qty column
+
+  doc.setDrawColor(20);
+  doc.setFont('helvetica','bold'); doc.setFontSize(8); doc.setTextColor(40);
+  doc.text('DESCRIPTION', M, y, {align:'left'});
+  doc.text('QTY', xQty, y, {align:'right'});
+  doc.text('EXCL. PRICE', xPrice, y, {align:'right'});
+  doc.text('VAT %', xVat, y, {align:'right'});
+  doc.text('EXCL. TOTAL', xExcl, y, {align:'right'});
+  doc.text('INCL. TOTAL', xIncl, y, {align:'right'});
+  y += 6; doc.setLineWidth(1); doc.line(M, y, PW-M, y); y += 14;
 
   doc.setFont('helvetica','normal'); doc.setFontSize(9.5); doc.setTextColor(30);
   inv.lines.forEach(l=>{
     const excl = lineSubtotal(l);
     const incl = excl * (1 + (inv.taxRate||0)/100);
-    // wrap description if long
-    const descLines = doc.splitTextToSize(l.desc||'', 200);
+    const descLines = doc.splitTextToSize(l.desc||'', descW);
     doc.text(descLines, M, y);
-    doc.text(String(l.qty), M+210, y, {align:'right'});
-    doc.text(fmt(l.price), M+250, y, {align:'right'});
-    doc.text((inv.taxRate||0).toFixed(0)+'%', M+325, y, {align:'right'});
-    doc.text(fmt(excl), M+375, y, {align:'right'});
-    doc.text(fmt(incl), PW-M, y, {align:'right'});
+    doc.text(String(l.qty), xQty, y, {align:'right'});
+    doc.text(fmt(l.price), xPrice, y, {align:'right'});
+    doc.text((inv.taxRate||0).toFixed(0)+'%', xVat, y, {align:'right'});
+    doc.text(fmt(excl), xExcl, y, {align:'right'});
+    doc.text(fmt(incl), xIncl, y, {align:'right'});
     y += Math.max(14, descLines.length*12);
     doc.setDrawColor(235); doc.setLineWidth(0.5); doc.line(M, y-5, PW-M, y-5);
   });
@@ -3339,7 +3350,7 @@ function renderBanking(){
         </div>
         <div style="display:flex; align-items:center; gap:12px;">
           <span class="num" style="font-weight:700;">${fmt(getAccountBalance(acc.id))}</span>
-          <button class="btn btn-ghost btn-sm" onclick="openReconcile('${acc.id}')">☑ Reconcile</button>
+          <button class="btn btn-primary" style="font-size:14px; padding:10px 20px; font-weight:700; box-shadow:0 2px 10px rgba(201,162,39,.35);" onclick="openReconcile('${acc.id}')">☑ Reconcile account</button>
         </div>
       </div>
       <div style="padding:9px 18px; border-bottom:1px solid var(--border); background:var(--surface-2); display:flex; align-items:center; justify-content:space-between; font-size:12px; flex-wrap:wrap; gap:8px;">
@@ -3424,6 +3435,17 @@ function reconUnclearedLines(){
     return true;
   });
 }
+// Already-reconciled lines (within the current date range) — shown so a finished
+// period's reconciled transactions stay visible.
+function reconClearedLines(){
+  const df = RECON.from||'', dt = RECON.to||'';
+  return getBankLinesForAccount(RECON.accountId).filter(l=>{
+    if(!l.reconciled) return false;
+    if(df && (l.date||'') < df) return false;
+    if(dt && (l.date||'') > dt) return false;
+    return true;
+  });
+}
 function reconTotals(){
   const lines = reconUnclearedLines();
   let inTotal=0, outTotal=0;
@@ -3449,8 +3471,8 @@ function renderReconcilePage(){
           <div class="field"><label>Statement closing balance</label><input type="number" id="rc-close" value="${RECON.closing}" step="0.01" onchange="RECON.closing=Number(this.value)||0; recalcRecon();"></div>
         </div>
         <div class="field-row3" style="margin-top:4px;">
-          <div class="field"><label>Show transactions from</label><input type="date" id="rc-from" value="${RECON.from||''}" onchange="RECON.from=this.value; renderReconcilePage();"></div>
-          <div class="field"><label>to</label><input type="date" id="rc-to" value="${RECON.to||''}" onchange="RECON.to=this.value; renderReconcilePage();"></div>
+          <div class="field"><label>Show transactions from</label><input type="date" id="rc-from" value="${RECON.from||''}" oninput="RECON.from=this.value;" onblur="renderReconcilePage();"></div>
+          <div class="field"><label>to</label><input type="date" id="rc-to" value="${RECON.to||''}" oninput="RECON.to=this.value;" onblur="renderReconcilePage();"></div>
           <div class="field" style="display:flex; align-items:flex-end;">${(RECON.from||RECON.to)? `<button class="btn btn-ghost btn-sm" onclick="RECON.from=''; RECON.to=''; renderReconcilePage();">Clear date range</button>`:''}</div>
         </div>
         <div class="hint">Book balance right now: <strong class="num">${fmt(getAccountBalance(acc.id))}</strong>${(RECON.from||RECON.to)? ` · showing ${lines.length} uncleared transaction${lines.length===1?'':'s'} in range` : ''}</div>
@@ -3458,10 +3480,10 @@ function renderReconcilePage(){
     </div>
     <div class="card" style="margin-bottom:16px;">
       <div class="card-head"><h3>Uncleared transactions</h3>
-        <span style="font-size:12px; color:var(--text-muted);">
-          <a href="#" onclick="setAllReconTicks(true); return false;" style="color:var(--money-pos); font-weight:600;">Tick all</a> ·
-          <a href="#" onclick="setAllReconTicks(false); return false;" style="color:var(--text-muted); font-weight:600;">Clear all</a>
-        </span>
+        <div style="display:flex; gap:8px;">
+          <button class="btn btn-sm" style="background:var(--money-pos); color:#fff; font-weight:600;" onclick="setAllReconTicks(true)">✓ Tick all</button>
+          <button class="btn btn-ghost btn-sm" onclick="setAllReconTicks(false)">✕ Clear all</button>
+        </div>
       </div>
       ${lines.length? `<table><thead><tr><th style="width:34px;"></th><th>Date</th><th>Description</th><th class="amt">Money in</th><th class="amt">Money out</th></tr></thead><tbody id="rc-rows">
         ${lines.map(l=>`<tr>
@@ -3472,6 +3494,27 @@ function renderReconcilePage(){
         </tr>`).join('')}
       </tbody></table>` : emptyState('Nothing to reconcile', 'Every transaction in this account is already cleared.', null)}
     </div>
+    ${(function(){
+      const cleared = reconClearedLines();
+      if(!cleared.length) return '';
+      const inT = cleared.reduce((s,l)=>s+(l.debit||0),0), outT = cleared.reduce((s,l)=>s+(l.credit||0),0);
+      return `<div class="card" style="margin-bottom:16px;">
+        <div class="card-head"><h3>Reconciled transactions <span style="font-size:12px; color:var(--text-muted); font-weight:400;">(${cleared.length})</span></h3>
+          <span style="font-size:12px; color:var(--money-pos); font-weight:600;">✓ Cleared${(RECON.from||RECON.to)?' in range':''}</span>
+        </div>
+        <table><thead><tr><th style="width:34px;"></th><th>Date</th><th>Description</th><th class="amt">Money in</th><th class="amt">Money out</th></tr></thead><tbody>
+          ${cleared.map(l=>`<tr style="opacity:.78;">
+            <td style="text-align:center; color:var(--money-pos);" title="Reconciled">✓</td>
+            <td>${fmtDateShort(l.date)}</td><td>${escapeHtml(l.desc)}</td>
+            <td class="amt num pos">${l.debit? fmt(l.debit):''}</td>
+            <td class="amt num neg">${l.credit? fmt(l.credit):''}</td>
+          </tr>`).join('')}
+          <tr class="li-total-row"><td></td><td colspan="2" style="text-align:right; font-weight:700;">Reconciled total</td>
+            <td class="amt num pos">${fmt(inT)}</td><td class="amt num neg">${fmt(outT)}</td></tr>
+        </tbody></table>
+        <div class="card-body" style="border-top:1px solid var(--border);"><div class="hint" style="margin:0;">These transactions were already reconciled. They stay listed here so you can see the full picture of the period, but they don't need re-ticking.</div></div>
+      </div>`;
+    })()}
     <div class="card">
       <div class="card-body">
         <div class="report-row"><span>Statement opening balance</span><span class="num" id="rc-sum-open">${fmt(RECON.opening)}</span></div>
@@ -4368,7 +4411,12 @@ function renderOpeningBalances(){
     <div class="card" style="margin-bottom:14px;"><div class="card-body" style="display:flex; align-items:center; gap:14px; flex-wrap:wrap;">
       <div style="display:flex; align-items:center; gap:8px;"><label style="margin:0;">Opening balances as at</label>
         <input type="date" id="ob-date" value="${OB_AS_OF}" onchange="OB_AS_OF=this.value;" style="width:150px;"></div>
-      <div class="hint" style="margin:0; flex:1; min-width:200px;">Enter each account's opening balance in the Debit or Credit column. The totals at the bottom must balance (Difference = 0) before you can save.</div>
+      <div style="display:flex; gap:8px; margin-left:auto;">
+        <button class="btn btn-ghost btn-sm" onclick="document.getElementById('ob-csv-input').click()">⬆ Import CSV</button>
+        <button class="btn btn-ghost btn-sm" onclick="downloadOpeningBalanceTemplate()">⬇ Template</button>
+        <input type="file" id="ob-csv-input" accept=".csv,text/csv" style="display:none;" onchange="handleOpeningBalanceCsv(event)">
+      </div>
+      <div class="hint" style="margin:0; flex:1 1 100%;">Enter each account's opening balance in the Debit or Credit column, or <strong>Import CSV</strong>. The totals at the bottom must balance (Difference = 0) before you can save.</div>
     </div></div>
 
     <div class="card">
@@ -4416,6 +4464,87 @@ function obRefreshTotals(){
   if(btn) btn.disabled = !t.balanced;
 }
 function obReset(){ obInitValues(); renderOpeningBalances(); }
+
+// ---- Import opening balances from CSV ----
+// Expected columns (header row, case-insensitive): Code (or Account Code),
+// optional Name, Debit, Credit.  OR a single signed Balance/Amount column.
+// Matches accounts by code first, then by name.
+function downloadOpeningBalanceTemplate(){
+  const lines = [['Account Code','Account Name','Debit','Credit']];
+  S.accounts.slice().sort((a,b)=>(a.code||'').localeCompare(b.code||'')).forEach(a=>{
+    lines.push([a.code||'', a.name||'', '', '']);
+  });
+  const csv = lines.map(r=>r.map(csvCell).join(',')).join('\r\n');
+  downloadBlob('﻿'+csv, `opening-balances-template-${todayStr()}.csv`, 'text/csv;charset=utf-8;');
+  showToast('Template downloaded — fill Debit/Credit and import');
+}
+function handleOpeningBalanceCsv(ev){
+  const file = ev.target.files && ev.target.files[0];
+  if(!file) return;
+  const reader = new FileReader();
+  reader.onload = e => {
+    try{ importOpeningBalancesFromRows(parseCSV(String(e.target.result))); }
+    catch(err){ showToast('Could not read CSV: '+err.message); }
+    ev.target.value = ''; // allow re-importing the same file
+  };
+  reader.readAsText(file);
+}
+function importOpeningBalancesFromRows(rows){
+  if(!rows || rows.length<2){ showToast('CSV has no data rows'); return; }
+  const headers = rows[0];
+  const cCode = guessColumn(headers, ['account code','code','acc code','account']);
+  const cName = guessColumn(headers, ['account name','name','description']);
+  const cDebit = guessColumn(headers, ['debit','dr']);
+  const cCredit = guessColumn(headers, ['credit','cr']);
+  const cBal = guessColumn(headers, ['balance','amount','net']);
+  if(cCode<0 && cName<0){ showToast('CSV needs an Account Code or Name column'); return; }
+  if(cDebit<0 && cCredit<0 && cBal<0){ showToast('CSV needs Debit/Credit columns or a Balance column'); return; }
+
+  // Build lookup maps for matching.
+  const byCode = {}; const byName = {};
+  S.accounts.forEach(a=>{ if(a.code) byCode[String(a.code).trim().toLowerCase()] = a; byName[String(a.name).trim().toLowerCase()] = a; });
+
+  if(!OB_VALUES) obInitValues();
+  let matched=0, unmatched=[], touched=0;
+  const num = v => { const n = Number(String(v==null?'':v).replace(/[^0-9.\-]/g,'')); return isNaN(n)?0:n; };
+
+  for(let i=1;i<rows.length;i++){
+    const r = rows[i];
+    const codeKey = cCode>-1 ? String(r[cCode]||'').trim().toLowerCase() : '';
+    const nameKey = cName>-1 ? String(r[cName]||'').trim().toLowerCase() : '';
+    const acc = (codeKey && byCode[codeKey]) || (nameKey && byName[nameKey]) || null;
+    if(!acc){ if(codeKey||nameKey) unmatched.push(r[cCode>-1?cCode:cName]||''); continue; }
+    // skip system/locked accounts
+    const locked = acc.system && ['acc_equity','acc_ar','acc_ap','acc_vatr','acc_vatp','acc_sales','acc_share_capital'].includes(acc.id);
+    if(locked) continue;
+    let debit=0, credit=0;
+    if(cDebit>-1 || cCredit>-1){
+      debit = cDebit>-1 ? num(r[cDebit]) : 0;
+      credit = cCredit>-1 ? num(r[cCredit]) : 0;
+    } else if(cBal>-1){
+      const bal = num(r[cBal]);
+      // positive balance goes to the account's normal side
+      if(accountNormalIsDebit(acc.type)){ if(bal>=0) debit=bal; else credit=-bal; }
+      else { if(bal>=0) credit=bal; else debit=-bal; }
+    }
+    if(debit>0 || credit>0){
+      OB_VALUES[acc.id] = { debit: round2(debit), credit: round2(credit) };
+      matched++; touched++;
+    }
+  }
+  renderOpeningBalances();
+  let msg = `Imported ${matched} opening balance${matched===1?'':'s'}.`;
+  if(unmatched.length) msg += ` ${unmatched.length} row${unmatched.length===1?'':'s'} didn't match an account (check codes/names).`;
+  showToast(msg);
+  if(unmatched.length){
+    setTimeout(()=>{
+      openModal('Import — unmatched rows', `<p style="margin-top:0;">${unmatched.length} CSV row${unmatched.length===1?'':'s'} could not be matched to an account by code or name:</p>
+        <div style="max-height:220px; overflow-y:auto; font-size:13px; background:var(--surface-2); border-radius:8px; padding:10px;">${unmatched.slice(0,50).map(u=>escapeHtml(String(u))).join('<br>')}</div>
+        <div class="hint" style="margin-top:10px;">Tip: download the Template to get the exact account codes, fill in the Debit/Credit columns, and re-import.</div>`,
+        [{label:'OK', cls:'btn-primary', onclick:'closeModal()'}]);
+    }, 400);
+  }
+}
 function saveOpeningBalances(){
   const t = obTotals();
   if(!t.balanced){ showToast('Debits and credits must balance before saving'); return; }
@@ -6477,6 +6606,47 @@ function renderContacts(){
     </div>
   `;
 }
+// Quick-add a customer from within the New Invoice form, without losing the
+// invoice you're building. Adds the contact and selects it in the dropdown.
+function quickAddCustomer(){
+  const sel = document.getElementById('f-contact');
+  if(!sel) return;
+  // simple prompt-based quick add keeps it in one modal; capture the essentials
+  const body = `
+    <div class="field"><label>Customer name *</label><input type="text" id="qa-name" placeholder="Company or person name"></div>
+    <div class="field-row">
+      <div class="field"><label>Email</label><input type="email" id="qa-email" placeholder="Optional"></div>
+      <div class="field"><label>Phone</label><input type="text" id="qa-phone" placeholder="Optional"></div>
+    </div>
+    <div class="field"><label>VAT number</label><input type="text" id="qa-vat" placeholder="Optional — shown on tax invoices"></div>
+    <div class="field"><label>Address</label><textarea id="qa-address" rows="3" placeholder="Optional — one line per address line"></textarea></div>
+    <div class="hint">This customer is added to your contacts and selected on the invoice. You can edit full details later under Customers.</div>
+    <div id="qa-err" class="login-error" style="display:none; margin-top:8px;"></div>`;
+  openModal('New customer', body, [
+    {label:'Cancel', cls:'btn-ghost', onclick:'closeModal(); openInvoiceForm()'},
+    {label:'Add & select', cls:'btn-primary', onclick:'submitQuickCustomer()'},
+  ]);
+}
+function submitQuickCustomer(){
+  const name = (document.getElementById('qa-name').value||'').trim();
+  const err = document.getElementById('qa-err');
+  if(!name){ if(err){ err.textContent='Enter a customer name.'; err.style.display='block'; } return; }
+  const c = {
+    id: uid('ct'), name, type:'customer',
+    email:(document.getElementById('qa-email').value||'').trim(),
+    phone:(document.getElementById('qa-phone').value||'').trim(),
+    vatNo:(document.getElementById('qa-vat').value||'').trim(),
+    address:(document.getElementById('qa-address').value||'').trim(),
+  };
+  S.contacts.push(c);
+  saveState(true);
+  showToast('Customer added');
+  // Re-open the invoice form with the new customer pre-selected.
+  INVOICE_QUICK_SELECT = c.id;
+  closeModal();
+  openInvoiceForm();
+}
+let INVOICE_QUICK_SELECT = null;
 function openContactForm(presetType, editId){
   const editing = editId ? S.contacts.find(c=>c.id===editId) : null;
   const body = `
@@ -6575,7 +6745,7 @@ function renderAssets(){
     <div class="card" style="margin-bottom:16px;">
       <div class="card-head" style="flex-wrap:wrap;"><h3>Asset report — book values as at</h3>
         <div style="display:flex; gap:8px; align-items:center; margin-left:auto;">
-          <input type="date" value="${asOf}" style="width:150px;" onchange="ASSET_AS_OF=this.value; renderAssets();">
+          <input type="date" value="${asOf}" style="width:150px;" oninput="ASSET_AS_OF=this.value;" onblur="renderAssets();">
           <button class="btn btn-ghost btn-sm" onclick="exportReportCsv(assetReportModel())" title="Export to Excel (CSV)">⊞ Excel</button>
           <button class="btn btn-ghost btn-sm" onclick="exportReportPdf(assetReportModel())" title="Export to PDF">⎙ PDF</button>
         </div>
@@ -6871,7 +7041,7 @@ function renderBS(asOf){
   const totalEquity = equityTotal + netProfitToDate;
   document.getElementById('content').querySelector('#report-body');
   document.getElementById('report-body').innerHTML = `<div class="card">
-    <div class="card-head" style="flex-wrap:wrap;"><h3>As of</h3><div style="display:flex; gap:8px; align-items:center; margin-left:auto;"><input type="date" value="${asOf}" style="width:150px;" onchange="window._rTo=this.value; renderReports();">${reportExportButtons('bsReportModel')}</div></div>
+    <div class="card-head" style="flex-wrap:wrap;"><h3>As of</h3><div style="display:flex; gap:8px; align-items:center; margin-left:auto;"><input type="date" value="${asOf}" style="width:150px;" oninput="window._rTo=this.value;" onblur="renderReports();">${reportExportButtons('bsReportModel')}</div></div>
     <div class="card-body">
       <div class="section-title">Assets</div>
       ${assets.map(a=>`<div class="report-row indent"><span>${a.name}</span><span class="num">${fmt(getAccountBalance(a.id,asOf))}</span></div>`).join('')}
@@ -7014,7 +7184,7 @@ function renderTB(asOf){
     <td class="amt num">${r.debit?fmt(r.debit):''}</td><td class="amt num">${r.credit?fmt(r.credit):''}</td></tr>`;
 
   document.getElementById('report-body').innerHTML = `<div class="card">
-    <div class="card-head" style="flex-wrap:wrap;"><h3>As of</h3><div style="display:flex; gap:8px; align-items:center; margin-left:auto;"><input type="date" value="${asOf}" style="width:150px;" onchange="window._rTo=this.value; renderReports();">${reportExportButtons('tbReportModel')}<button class="btn btn-ghost btn-sm" onclick="fsExportTrialBalanceCsv()" title="Export trial balance for a financial statement system (CSV)">↗ FS CSV</button><button class="btn btn-ghost btn-sm" onclick="fsExportTrialBalanceJson()" title="Export trial balance for a financial statement system (JSON)">↗ FS JSON</button></div></div>
+    <div class="card-head" style="flex-wrap:wrap;"><h3>As of</h3><div style="display:flex; gap:8px; align-items:center; margin-left:auto;"><input type="date" value="${asOf}" style="width:150px;" oninput="window._rTo=this.value;" onblur="renderReports();">${reportExportButtons('tbReportModel')}<button class="btn btn-ghost btn-sm" onclick="fsExportTrialBalanceCsv()" title="Export trial balance for a financial statement system (CSV)">↗ FS CSV</button><button class="btn btn-ghost btn-sm" onclick="fsExportTrialBalanceJson()" title="Export trial balance for a financial statement system (JSON)">↗ FS JSON</button></div></div>
     <div class="card-body" style="padding-bottom:0;">
       <label style="display:flex; align-items:center; gap:8px; cursor:pointer; text-transform:none; letter-spacing:normal; font-weight:500; color:var(--text); font-size:13px;">
         <input type="checkbox" style="width:auto;" ${includeOpening?'checked':''} onchange="window._rIncludeOpening=this.checked; renderReports();">
@@ -7097,9 +7267,9 @@ function renderGL(from, to){
         <option value="all" ${GL_ACCOUNT==='all'?'selected':''}>All accounts</option>
         ${accounts.map(a=>`<option value="${a.id}" ${a.id===GL_ACCOUNT?'selected':''}>${escapeHtml(a.code+' '+a.name)}</option>`).join('')}
       </select>
-      <input type="date" value="${from}" style="width:150px;" onchange="window._rFrom=this.value; renderReports();">
+      <input type="date" value="${from}" style="width:150px;" oninput="window._rFrom=this.value;" onblur="renderReports();">
       <span style="color:var(--text-muted);">to</span>
-      <input type="date" value="${to}" style="width:150px;" onchange="window._rTo=this.value; renderReports();">
+      <input type="date" value="${to}" style="width:150px;" oninput="window._rTo=this.value;" onblur="renderReports();">
       ${reportExportButtons('glReportModel')}
     </div></div>`;
 
@@ -7653,9 +7823,9 @@ function renderUsage(){
     <div class="card" style="margin-bottom:16px;">
       <div class="card-head" style="flex-wrap:wrap;"><h3>Filter</h3>
         <div style="display:flex; gap:8px; align-items:center; margin-left:auto; flex-wrap:wrap;">
-          <input type="date" value="${from}" style="width:150px;" onchange="USAGE_FROM=this.value; renderUsage();" title="From date">
+          <input type="date" value="${from}" style="width:150px;" oninput="USAGE_FROM=this.value;" onblur="renderUsage();" title="From date">
           <span style="color:var(--text-muted);">to</span>
-          <input type="date" value="${to}" style="width:150px;" onchange="USAGE_TO=this.value; renderUsage();" title="To date">
+          <input type="date" value="${to}" style="width:150px;" oninput="USAGE_TO=this.value;" onblur="renderUsage();" title="To date">
           ${(from||to)? `<button class="btn btn-ghost btn-sm" onclick="USAGE_FROM=''; USAGE_TO=''; renderUsage();">Clear</button>`:''}
           <button class="btn btn-ghost btn-sm" onclick="exportReportCsv(usageReportModel())" title="Export to Excel (CSV)">⊞ Excel</button>
           <button class="btn btn-ghost btn-sm" onclick="exportReportPdf(usageReportModel())" title="Export to PDF">⎙ PDF</button>
@@ -8124,16 +8294,14 @@ function gateShowChoosePlan(profile, isRenew){
   gateEl('gate-form').style.display='none';
   const pend = gateEl('gate-pending');
   const plans = (typeof RECONI_PLANS!=='undefined') ? RECONI_PLANS : [];
-  const vat = (typeof RECONI_VAT_RATE!=='undefined') ? RECONI_VAT_RATE : 0.15;
   const trialDays = (typeof RECONI_TRIAL_DAYS!=='undefined') ? RECONI_TRIAL_DAYS : 14;
-  const inc = p => Math.round(p.priceExVat*(1+vat)*100)/100;
   const cards = plans.map(p=>`
     <div style="border:1.5px solid ${p.popular?'var(--accent)':'var(--border)'}; border-radius:12px; padding:14px; margin-bottom:10px; text-align:left;">
       <div style="display:flex; justify-content:space-between; align-items:baseline;">
         <strong style="font-size:15px;">${escapeHtml(p.name)}</strong>
-        <span><strong style="font-size:17px;">R${p.priceExVat}</strong><span style="font-size:11px; color:var(--text-muted);">/mo +VAT</span></span>
+        <span><strong style="font-size:17px;">R${p.priceInc}</strong><span style="font-size:11px; color:var(--text-muted);">/mo incl. VAT</span></span>
       </div>
-      <div style="font-size:11.5px; color:var(--text-muted); margin:3px 0 8px;">${escapeHtml(p.tagline||'')} · R${inc(p)} incl. VAT</div>
+      <div style="font-size:11.5px; color:var(--text-muted); margin:3px 0 8px;">${escapeHtml(p.tagline||'')}</div>
       <button class="btn ${p.popular?'btn-primary':'btn-ghost'}" style="width:100%; justify-content:center;" onclick="gateStartPlan('${p.id}')">${isRenew?'Renew with':'Start '+trialDays+'-day trial —'} ${escapeHtml(p.name)}</button>
     </div>`).join('');
   pend.innerHTML = `
@@ -8469,7 +8637,7 @@ const RECONI_LEGAL = {
 
 **2. Accounts.** You must register with a valid email address and keep your credentials confidential. You are responsible for all activity under your account. We may approve, suspend or decline any account at our discretion.
 
-**3. Subscriptions, trial and billing.** RECONI is offered on a monthly subscription. Prices are shown in the app excluding VAT; 15% VAT is added at checkout. New subscriptions include a 14-day free trial — you are not charged during the trial, and unless you cancel before it ends the subscription continues and the first payment is collected at the end of the trial. Fees are billed monthly in advance via our payment provider (PayFast). You authorise us, via PayFast, to charge the recurring fee until you cancel.
+**3. Subscriptions, trial and billing.** RECONI is offered on a monthly subscription. Prices shown in the app are VAT-inclusive (they include 15% VAT). New subscriptions include a 14-day free trial — you are not charged during the trial, and unless you cancel before it ends the subscription continues and the first payment is collected at the end of the trial. Fees are billed monthly in advance via our payment provider (PayFast). You authorise us, via PayFast, to charge the recurring fee until you cancel.
 
 **4. Cancellation.** You may cancel at any time. On cancellation your access continues until the end of the current paid period, after which it ends. See our Refund and Cancellation Policy.
 
@@ -8524,21 +8692,25 @@ function openPolicy(which){
 }
 
 /* ============================= SUBSCRIPTION / PLANS (Step: payments UI) ============================= */
-// ▼▼▼ EDIT YOUR PRICES HERE ▼▼▼  (prices are VAT-EXCLUSIVE; 15% VAT added at checkout)
+// ▼▼▼ EDIT YOUR PRICES HERE ▼▼▼  (priceInc = the VAT-INCLUSIVE amount shown & charged)
 const RECONI_VAT_RATE = 0.15;          // South African VAT
 const RECONI_TRIAL_DAYS = 14;          // free trial length
 const RECONI_PLANS = [
-  { id:'solo',     name:'Solo',     priceExVat:149, companies:1,   users:1,   tagline:'For a single business',
+  { id:'solo',     name:'Solo',     priceInc:199,  companies:1,   users:1,   tagline:'For a single business',
     features:['1 company','1 user','Full accounting & VAT','Cashbook & bank recon','All reports & exports'] },
-  { id:'practice', name:'Practice', priceExVat:349, companies:5,   users:3,   popular:true, tagline:'For bookkeepers with a few clients',
+  { id:'practice', name:'Practice', priceInc:499,  companies:5,   users:3,   tagline:'For bookkeepers with a few clients',
     features:['Up to 5 companies','Up to 3 users','Everything in Solo','Multi-company switching','Priority email support'] },
-  { id:'pro',      name:'Pro',      priceExVat:699, companies:null, users:null, tagline:'For accounting practices',
-    features:['Unlimited companies','Unlimited users','Everything in Practice','Time tracking & assets','Automated bank recon'] },
+  { id:'semipro',  name:'Semi-Pro', priceInc:999,  companies:15,  users:6,   popular:true, tagline:'For growing practices',
+    features:['Up to 15 companies','Up to 6 users','Everything in Practice','Team management','Priority support'] },
+  { id:'pro',      name:'Pro',      priceInc:2999, companies:null, users:10,  tagline:'For accounting firms',
+    features:['Unlimited companies','Up to 10 users','Everything in Semi-Pro','Time tracking & assets','Automated bank recon'] },
 ];
 // ▲▲▲ EDIT YOUR PRICES ABOVE ▲▲▲
 
-function planPriceInc(p){ return Math.round(p.priceExVat * (1+RECONI_VAT_RATE) * 100)/100; }
-function planVatAmount(p){ return Math.round(p.priceExVat * RECONI_VAT_RATE * 100)/100; }
+// Prices are VAT-INCLUSIVE. These helpers break out the VAT portion within the price.
+function planPriceInc(p){ return p.priceInc; }
+function planPriceExVat(p){ return Math.round(p.priceInc / (1+RECONI_VAT_RATE) * 100)/100; }
+function planVatAmount(p){ return Math.round((p.priceInc - p.priceInc/(1+RECONI_VAT_RATE)) * 100)/100; }
 function currentPlanId(){ return (AUTH_PROFILE && AUTH_PROFILE.plan) || null; }
 function subStatus(){ return (AUTH_PROFILE && AUTH_PROFILE.subscription_status) || 'none'; }
 function trialDaysLeft(){
@@ -8591,8 +8763,8 @@ function renderSubscription(){
       ${p.popular?`<div class="plan-badge">Most popular</div>`:''}
       <div class="plan-name">${escapeHtml(p.name)}</div>
       <div class="plan-tagline">${escapeHtml(p.tagline)}</div>
-      <div class="plan-price"><span class="cur">R</span>${p.priceExVat}<span class="per">/mo</span></div>
-      <div class="plan-vat">excl. VAT · R${planPriceInc(p)} incl. VAT</div>
+      <div class="plan-price"><span class="cur">R</span>${p.priceInc}<span class="per">/mo</span></div>
+      <div class="plan-vat">incl. VAT (R${planVatAmount(p).toFixed(2)} VAT)</div>
       <ul class="plan-features">${p.features.map(f=>`<li>${escapeHtml(f)}</li>`).join('')}</ul>
       ${isCurrent
         ? `<button class="btn btn-ghost" style="width:100%; justify-content:center;" disabled>Current plan</button>`
@@ -8604,7 +8776,7 @@ function renderSubscription(){
     ${banner}
     <div class="plans-grid">${cards}</div>
     <div class="card" style="margin-top:18px;"><div class="card-body">
-      <div class="hint" style="margin:0;">All plans include a ${RECONI_TRIAL_DAYS}-day free trial. Prices are shown excluding VAT; 15% VAT is added at checkout. You can upgrade, downgrade, or cancel at any time. Payment is processed securely by PayFast.</div>
+      <div class="hint" style="margin:0;">All plans include a ${RECONI_TRIAL_DAYS}-day free trial. Prices shown are VAT-inclusive (15% VAT included). You can upgrade, downgrade, or cancel at any time. Payment is processed securely by PayFast.</div>
     </div></div>
     ${(status==='active'||status==='trialing')? `<div class="card" style="margin-top:16px;"><div class="card-body" style="display:flex; justify-content:space-between; align-items:center; gap:12px; flex-wrap:wrap;">
       <div><strong>Cancel subscription</strong><div class="hint" style="margin:0;">Your access continues until the end of the current paid period.</div></div>
@@ -8640,9 +8812,9 @@ function choosePlan(planId){
       <div style="color:var(--text-muted); font-size:13px;">${escapeHtml(p.tagline)}</div>
     </div>
     <div style="background:var(--surface-2); border-radius:10px; padding:14px; margin:14px 0;">
-      <div style="display:flex; justify-content:space-between; padding:4px 0;"><span>Subscription (excl. VAT)</span><span>R${p.priceExVat.toFixed(2)}</span></div>
+      <div style="display:flex; justify-content:space-between; padding:4px 0;"><span>Subscription (excl. VAT)</span><span>R${planPriceExVat(p).toFixed(2)}</span></div>
       <div style="display:flex; justify-content:space-between; padding:4px 0;"><span>VAT (15%)</span><span>R${planVatAmount(p).toFixed(2)}</span></div>
-      <div style="display:flex; justify-content:space-between; padding:8px 0 0; margin-top:6px; border-top:1px solid var(--border); font-weight:700;"><span>Total per month</span><span>R${planPriceInc(p).toFixed(2)}</span></div>
+      <div style="display:flex; justify-content:space-between; padding:8px 0 0; margin-top:6px; border-top:1px solid var(--border); font-weight:700;"><span>Total per month (incl. VAT)</span><span>R${planPriceInc(p).toFixed(2)}</span></div>
     </div>
     <div class="hint" style="margin:0;">Your ${RECONI_TRIAL_DAYS}-day free trial starts today — you won't be charged until it ends. Cancel any time before then at no cost.</div>
   `;
@@ -8681,7 +8853,7 @@ async function startCheckout(planId){
 function reconiIsAdmin(){ return !!(AUTH_PROFILE && ['owner','admin'].includes(AUTH_PROFILE.role) && !AUTH_PROFILE.is_blocked); }
 function reconiIsFirmOwner(){ return !!(AUTH_PROFILE && AUTH_PROFILE.role==='firm_owner' && !AUTH_PROFILE.is_blocked); }
 // Seat limits per plan (firm owner counts as one seat). Admins unlimited.
-const RECONI_SEAT_LIMITS = { solo:1, practice:3, pro:10 };
+const RECONI_SEAT_LIMITS = { solo:1, practice:3, semipro:6, pro:10 };
 function reconiSeatLimit(){
   if(reconiIsAdmin()) return null; // unlimited
   const plan = AUTH_PROFILE && AUTH_PROFILE.plan;
