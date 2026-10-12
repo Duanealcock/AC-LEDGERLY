@@ -4263,7 +4263,7 @@ function printImportReconReport(){
 }
 
 /* ============================= JOURNAL ENTRIES (manual) ============================= */
-let JOURNAL_FILTER = 'all';
+let JOURNAL_FILTER = 'manual';   // default: show only manual journals; system ones hidden behind the filter
 function accountOptionsHtml(selectedId){
   const types = ['Income','Expense','Non-Current Assets','Current Assets','Equity','Non-Current Liabilities','Current Liabilities','Asset','Liability'];
   return types.map(t=>{
@@ -4577,8 +4577,9 @@ function renderJournal(){
   document.getElementById('content').innerHTML = `
     <div class="toolbar">
       <div class="filter-pills">
-        ${['all','manual','system','opening'].map(f=>`<span class="pill ${JOURNAL_FILTER===f?'active':''}" onclick="JOURNAL_FILTER='${f}'; renderJournal();">${f==='opening'?'Opening balances':f[0].toUpperCase()+f.slice(1)}</span>`).join('')}
+        ${[['manual','Manual journals'],['system','System journals'],['opening','Opening balances'],['all','All']].map(([f,lbl])=>`<span class="pill ${JOURNAL_FILTER===f?'active':''}" onclick="JOURNAL_FILTER='${f}'; renderJournal();">${lbl}</span>`).join('')}
       </div>
+      <div class="hint" style="margin:0 0 0 auto; align-self:center; font-size:11.5px;">${JOURNAL_FILTER==='manual'?'Showing your manual journals. System journals (from invoices, payments, cashbook) are under "System journals".':''}</div>
     </div>
     <div class="card">
       ${list.length? `<table><thead><tr><th>Date</th><th>Description</th><th>Accounts</th><th class="amt">Debit</th><th class="amt">Credit</th><th>Source</th></tr></thead><tbody>
@@ -9221,41 +9222,55 @@ function findUserApproved(id){ const u=ADMIN_USERS.find(x=>x.id===id); return u?
 
 // ---- Company assignment ----
 async function adminManageCompanies(userId){
-  if(!SB) return;
-  const u = ADMIN_USERS.find(x=>x.id===userId); if(!u) return;
-  // load this workspace's companies (local) + current grants (server)
-  const companies = companyList(); // local companies in this browser
-  let grants = [];
+  if(!SB){ showToast('Sign in online to manage company access'); return; }
+  const u = (ADMIN_USERS||[]).find(x=>x.id===userId);
+  if(!u){ showToast('User not found'); return; }
+  openModal('Assign companies', `<div class="hint">Loading companies…</div>`, []);
+  // Pull the full company list from the server (an admin can grant any company),
+  // plus this user's current grants.
+  let companies = [], grants = [];
   try{
-    const { data } = await SB.from('user_company_access').select('company_id, access').eq('user_id', userId);
+    const { data:cos, error:cErr } = await SB.from('companies').select('id, name');
+    if(cErr) throw cErr;
+    companies = cos||[];
+  }catch(e){
+    // fall back to local workspace companies
+    companies = (WORKSPACE.order||Object.keys(WORKSPACE.companies||{})).map(id=>({ id, name:(WORKSPACE.companies[id]&&WORKSPACE.companies[id].settings.businessName)||'Untitled' }));
+  }
+  try{
+    const { data } = await SB.from('user_company_access').select('company_id').eq('user_id', userId);
     grants = data||[];
-  }catch(e){}
+  }catch(e){ grants = []; }
+
+  const grantedIds = new Set(grants.map(g=>g.company_id));
   const body = `
-    <p style="margin-top:0; font-size:13px; color:var(--text-muted);">Choose which companies <strong>${escapeHtml(u.full_name||u.email)}</strong> may access. (Admins and owners can see every company regardless.)</p>
-    ${companies.length? companies.map(c=>{
-      const g = grants.find(x=>x.company_id===c.id);
-      return `<label style="display:flex; align-items:center; gap:10px; padding:8px 10px; border:1px solid var(--border); border-radius:8px; margin-bottom:6px;">
-        <input type="checkbox" style="width:auto;" ${g?'checked':''} onchange="adminToggleCompany('${userId}','${c.id}', this.checked)">
-        <span style="flex:1;">${escapeHtml(c.settings.businessName||'Untitled')}</span>
-        <span style="font-size:11px; color:var(--text-muted);">${g? (g.access||'write') : ''}</span>
+    <p style="margin-top:0; font-size:13px; color:var(--text-muted);">Tick the companies <strong>${escapeHtml(u.full_name||u.email)}</strong> may access. They will see only the ticked companies. (Admins/owners see every company regardless.)</p>
+    ${companies.length ? companies.map(c=>{
+      const name = c.name || 'Untitled';
+      return `<label style="display:flex; align-items:center; gap:10px; padding:9px 11px; border:1px solid var(--border); border-radius:8px; margin-bottom:6px; cursor:pointer;">
+        <input type="checkbox" style="width:auto;" ${grantedIds.has(c.id)?'checked':''} onchange="adminToggleCompany('${userId}','${c.id}', this.checked)">
+        <span style="flex:1;">${escapeHtml(name)}</span>
       </label>`;
-    }).join('') : `<div class="hint">No companies exist in this browser yet.</div>`}
-    <div class="hint" style="margin-top:10px;">Note: company data is still stored locally in this build, so these grants take full effect once data moves to the server (a later step). They're saved now so you don't have to redo them.</div>
+    }).join('') : `<div class="hint">No companies found on the server yet. Create or open a company first so it exists on the server, then assign it here.</div>`}
+    <div class="hint" style="margin-top:10px;">Changes save as you tick. The user sees the change next time they sign in.</div>
   `;
-  openModal('Assign companies', body, [{label:'Done', cls:'btn-primary', onclick:'closeModal(); renderAdminUsers();'}]);
+  openModal('Assign companies — '+escapeHtml(u.full_name||u.email), body, [{label:'Done', cls:'btn-primary', onclick:'closeModal(); renderAdminUsers();'}]);
 }
 async function adminToggleCompany(userId, companyId, on){
   if(!SB) return;
   try{
     if(on){
-      // ensure the company row exists server-side (so the FK is valid), then grant.
-      const c = WORKSPACE.companies[companyId];
-      await SB.from('companies').upsert({ id:companyId, name:(c&&c.settings.businessName)||'Untitled' }, { onConflict:'id' });
       const { error } = await SB.rpc('admin_grant_company', { target:userId, cid:companyId, access_level:'write' });
-      if(error){ showToast('Grant failed: '+error.message); return; }
+      if(error){
+        // retry without access_level in case the RPC signature differs
+        const { error:e2 } = await SB.rpc('admin_grant_company', { target:userId, cid:companyId });
+        if(e2){ showToast('Grant failed: '+(error.message||e2.message)); return; }
+      }
+      showToast('Company granted');
     } else {
       const { error } = await SB.rpc('admin_revoke_company', { target:userId, cid:companyId });
       if(error){ showToast('Revoke failed: '+error.message); return; }
+      showToast('Company removed');
     }
   }catch(e){ showToast('Company assignment failed'); }
 }
