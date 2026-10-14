@@ -6760,6 +6760,12 @@ function renderContacts(){
   setTopbar('Contacts', 'Customers and suppliers', `<button class="btn btn-primary" onclick="openContactForm()">+ New Contact</button>`);
   const list = [...S.contacts].sort((a,b)=>a.name.localeCompare(b.name));
   document.getElementById('content').innerHTML = `
+    <div class="toolbar" style="display:flex; gap:8px; flex-wrap:wrap; align-items:center;">
+      <button class="btn btn-ghost btn-sm" onclick="document.getElementById('contacts-csv-input').click()">⬆ Import customers (CSV)</button>
+      <button class="btn btn-ghost btn-sm" onclick="downloadCustomerTemplate()">⬇ Template</button>
+      <input type="file" id="contacts-csv-input" accept=".csv,text/csv" style="display:none;" onchange="handleCustomerCsv(event)">
+      <span class="hint" style="margin:0;">Import a customer list exported from Sage or any spreadsheet. Matches by name (updates existing, adds new).</span>
+    </div>
     <div class="card">
       ${list.length? `<table><thead><tr><th>Name</th><th>Type</th><th>Email</th><th>Phone</th><th></th></tr></thead><tbody>
         ${list.map(c=>`<tr>
@@ -6771,6 +6777,98 @@ function renderContacts(){
       </tbody></table>` : emptyState('No contacts yet', 'Add a customer or supplier to get started.', "openContactForm()", '+ New Contact')}
     </div>
   `;
+}
+// ---- Import customers from CSV (Sage-style export or the template) ----
+// Recognised headers (case-insensitive): Name/Customer/Company, Contact Name,
+// VAT/Tax No, Email, Telephone/Phone/Mobile, Address/Postal Address, Physical/Delivery Address.
+function downloadCustomerTemplate(){
+  const headers = ['Name','Contact Name','VAT Number','Email','Telephone','Mobile','Postal Address','Physical Address'];
+  const sample = ['Example Customer (Pty) Ltd','Jane Doe','4123456789','accounts@example.co.za','021 555 0100','082 555 0100','PO Box 1, Cape Town, 8000','1 Main Road, Cape Town, 8001'];
+  const csv = [headers, sample].map(r=>r.map(csvCell).join(',')).join('\r\n');
+  downloadBlob('﻿'+csv, `reconi-customer-import-template-${todayStr()}.csv`, 'text/csv;charset=utf-8;');
+  showToast('Template downloaded — fill it in and import');
+}
+function handleCustomerCsv(ev){
+  const file = ev.target.files && ev.target.files[0];
+  if(!file) return;
+  const reader = new FileReader();
+  reader.onload = e => {
+    try{ importCustomersFromRows(parseCSV(String(e.target.result))); }
+    catch(err){ showToast('Could not read CSV: '+(err&&err.message||err)); }
+    ev.target.value = ''; // allow re-importing the same file
+  };
+  reader.readAsText(file);
+}
+function importCustomersFromRows(rows){
+  if(!rows || rows.length<2){ showToast('CSV has no data rows'); return; }
+  const headers = rows[0];
+  const cName    = guessColumn(headers, ['name','customer','customer name','company','company name','account name']);
+  const cContact = guessColumn(headers, ['contact name','contact','attention']);
+  const cVat     = guessColumn(headers, ['vat number','vat no','vat','tax number','tax no','tax reg']);
+  const cEmail   = guessColumn(headers, ['email','e-mail','email address']);
+  const cTel     = guessColumn(headers, ['telephone','phone','tel','landline','work phone']);
+  const cMobile  = guessColumn(headers, ['mobile','cell','cellphone','cell phone']);
+  const cPostal  = guessColumn(headers, ['postal address','postal','post address','address','billing address']);
+  const cPhysical= guessColumn(headers, ['physical address','delivery address','physical','street address','shipping address']);
+  if(cName<0){ showToast('CSV needs a Name (or Customer/Company) column'); return; }
+
+  const get = (r,i)=> (i>-1 && r[i]!=null) ? String(r[i]).trim() : '';
+  // existing customers by lowercased name for de-dupe
+  const byName = {};
+  S.contacts.forEach(c=>{ byName[String(c.name||'').trim().toLowerCase()] = c; });
+
+  let added=0, updated=0, skipped=0;
+  for(let i=1;i<rows.length;i++){
+    const r = rows[i];
+    const name = get(r,cName);
+    if(!name){ skipped++; continue; }
+    const email  = get(r,cEmail);
+    const phone  = get(r,cTel) || get(r,cMobile);
+    const vatNo  = get(r,cVat);
+    const postal = get(r,cPostal);
+    const physical = get(r,cPhysical);
+    const contactName = get(r,cContact);
+    // address: prefer a combined, else postal; keep physical separately if given
+    const address = postal || physical || '';
+    const key = name.toLowerCase();
+    let c = byName[key];
+    if(c){
+      // update blanks only (don't clobber existing data), fill what's new
+      if(email && !c.email) c.email = email;
+      if(phone && !c.phone) c.phone = phone;
+      if(vatNo && !c.vatNo) c.vatNo = vatNo;
+      if(address && !c.address) c.address = address;
+      if(postal && !c.postalAddress) c.postalAddress = postal;
+      if(physical && !c.physicalAddress) c.physicalAddress = physical;
+      if(contactName && !c.contactName) c.contactName = contactName;
+      updated++;
+    } else {
+      c = { id:uid('ct'), type:'customer', name, email, phone, vatNo, address };
+      if(postal) c.postalAddress = postal;
+      if(physical) c.physicalAddress = physical;
+      if(contactName) c.contactName = contactName;
+      S.contacts.push(c);
+      byName[key] = c;
+      added++;
+    }
+  }
+  saveState(true);
+  renderContacts();
+  let msg = `Imported customers: ${added} added`;
+  if(updated) msg += `, ${updated} updated`;
+  if(skipped) msg += `, ${skipped} skipped (no name)`;
+  showToast(msg+'.');
+  // summary modal
+  setTimeout(()=>{
+    openModal('Customer import complete', `
+      <div style="display:flex; gap:24px; flex-wrap:wrap; font-size:14px;">
+        <div><div class="hint" style="margin:0;">Added</div><strong style="font-size:20px; color:var(--money-pos);">${added}</strong></div>
+        <div><div class="hint" style="margin:0;">Updated</div><strong style="font-size:20px;">${updated}</strong></div>
+        <div><div class="hint" style="margin:0;">Skipped</div><strong style="font-size:20px; color:${skipped?'var(--red)':'var(--text)'};">${skipped}</strong></div>
+      </div>
+      <div class="hint" style="margin-top:12px;">Existing customers were matched by name and only had blank fields filled in — nothing was overwritten. Review any under Customers.</div>
+    `, [{label:'Done', cls:'btn-primary', onclick:'closeModal()'}]);
+  }, 300);
 }
 // Quick-add a customer from within the New Invoice form, without losing the
 // invoice you're building. Adds the contact and selects it in the dropdown.
