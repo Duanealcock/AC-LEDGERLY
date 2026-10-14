@@ -4503,9 +4503,20 @@ function acctPickBlur(input){
   }, 150);
 }
 function acctPickChoose(rowId, accId){
-  const wrap = document.querySelector(`.acct-pick[data-row="${rowId}"]`);
+  // save the selection onto the draft row
   updateCashbookField(rowId, 'accountSelection', accId);
-  // updateCashbookField re-renders, so no manual DOM update needed
+  // update the on-screen picker immediately (updateCashbookField does NOT re-render
+  // for accountSelection, so we close the list and show the chosen account here)
+  const wrap = document.querySelector(`.acct-pick[data-row="${rowId}"]`);
+  if(wrap){
+    const input = wrap.querySelector('.acct-pick-input');
+    const list = wrap.querySelector('.acct-pick-list');
+    const a = S.accounts.find(x=>x.id===accId);
+    if(input){ input._acctPicked = true; input.value = a ? `${a.code} ${a.name}` : ''; input.blur(); }
+    if(list){ list.style.display = 'none'; list.innerHTML = ''; }
+  }
+  // re-render the row so VAT / direction recompute with the new account
+  renderCashbook();
 }
 function entryTotals(e){
   return { debit: e.lines.reduce((s,l)=>s+(l.debit||0),0), credit: e.lines.reduce((s,l)=>s+(l.credit||0),0) };
