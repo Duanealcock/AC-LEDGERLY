@@ -1118,6 +1118,18 @@ function companyLimitMessage(){
   if(limit==null) return '';
   return `Your current plan allows ${limit} compan${limit===1?'y':'ies'}. Upgrade your subscription to add more.`;
 }
+// ---- Remember the last company each user opened (per-user, this device) ----
+function lastCompanyKey(){
+  const uid_ = (typeof AUTH_PROFILE!=='undefined' && AUTH_PROFILE && AUTH_PROFILE.id) ? AUTH_PROFILE.id
+             : (CURRENT_USER && CURRENT_USER.id) ? CURRENT_USER.id : 'local';
+  return 'reconi:lastCompany:'+uid_;
+}
+function rememberLastCompany(id){
+  try{ if(id) localStorage.setItem(lastCompanyKey(), id); }catch(e){}
+}
+function recallLastCompany(){
+  try{ return localStorage.getItem(lastCompanyKey()) || null; }catch(e){ return null; }
+}
 function switchCompany(id){
   if(!WORKSPACE.companies[id]) return;
   if(WORKSPACE.authEnabled && CURRENT_USER && !CURRENT_USER.isAdmin && !(CURRENT_USER.companyIds||[]).includes(id)){
@@ -1129,6 +1141,7 @@ function switchCompany(id){
   if(SERVER_MODE && outgoing && outgoing!==id){ saveCompanyToServer(outgoing); }
   WORKSPACE.activeId = id;
   S = WORKSPACE.companies[id];
+  rememberLastCompany(id);   // so next login reopens this company
   TIME_LAST_TICK = Date.now(); TIME_LAST_ACTIVE = Date.now();
   closeModal();
   saveState(true);
@@ -8689,10 +8702,13 @@ async function loadWorkspaceFromServer(){
     companiesMap[row.id] = co;
     order.push(row.id);
   });
+  // Reopen the last company this user worked on (if it still exists), else the first.
+  const remembered = recallLastCompany();
+  const startId = (remembered && companiesMap[remembered]) ? remembered : order[0];
   WORKSPACE = {
     companies: companiesMap,
     order,
-    activeId: order[0],
+    activeId: startId,
     users: [],
     authEnabled: false,
     timeLog: (WORKSPACE && WORKSPACE.timeLog) || { entries:[] },
