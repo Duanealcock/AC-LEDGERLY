@@ -2147,28 +2147,80 @@ function statusBadge(s){
 
 /* ============================= SALES ============================= */
 let SALES_FILTER = 'all';
+let SALES_SEARCH = '';
+let SALES_SORT = 'issued';   // number | customer | issued | due | total | balance
+let SALES_SORT_DIR = -1;     // 1 = ascending, -1 = descending
+function salesSetSort(col){
+  if(SALES_SORT===col){ SALES_SORT_DIR = -SALES_SORT_DIR; }
+  else { SALES_SORT = col; SALES_SORT_DIR = (col==='customer'||col==='number') ? 1 : -1; }
+  renderSales();
+}
+function salesSortArrow(col){
+  if(SALES_SORT!==col) return '<span style="opacity:.25;">⇅</span>';
+  return SALES_SORT_DIR===1 ? '▲' : '▼';
+}
 function renderSales(){
   setTopbar('Sales / Invoices', 'Create and track customer invoices',
     `<button class="btn btn-primary" onclick="openInvoiceForm()">+ New Invoice</button>`);
-  const list = S.invoices.filter(i=> SALES_FILTER==='all' || docStatus(i)===SALES_FILTER)
-    .sort((a,b)=>b.date.localeCompare(a.date));
+  const q = (SALES_SEARCH||'').trim().toLowerCase();
+  let list = S.invoices.filter(i=> SALES_FILTER==='all' || docStatus(i)===SALES_FILTER);
+  if(q){
+    list = list.filter(i=>{
+      const num = (i.number||'').toLowerCase();
+      const cust = (contactName(i.contactId)||'').toLowerCase();
+      return num.includes(q) || cust.includes(q);
+    });
+  }
+  // sorting
+  const dir = SALES_SORT_DIR;
+  const cmp = {
+    number:   (a,b)=> (a.number||'').localeCompare(b.number||'', undefined, {numeric:true}),
+    customer: (a,b)=> (contactName(a.contactId)||'').localeCompare(contactName(b.contactId)||''),
+    issued:   (a,b)=> (a.date||'').localeCompare(b.date||''),
+    due:      (a,b)=> (a.dueDate||'').localeCompare(b.dueDate||''),
+    total:    (a,b)=> invoiceTotal(a) - invoiceTotal(b),
+    balance:  (a,b)=> docBalanceDue(a) - docBalanceDue(b),
+  }[SALES_SORT] || ((a,b)=> (a.date||'').localeCompare(b.date||''));
+  list = list.slice().sort((a,b)=> cmp(a,b)*dir);
+
+  const th = (label, col, amt)=> `<th class="sortable${amt?' amt':''}" style="cursor:pointer; user-select:none;" onclick="salesSetSort('${col}')">${label} <span style="font-size:10px;">${salesSortArrow(col)}</span></th>`;
+
   document.getElementById('content').innerHTML = `
-    <div class="toolbar">
+    <div class="toolbar" style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:10px;">
       <div class="filter-pills">
         ${['all','draft','open','partial','paid','void'].map(f=>`<span class="pill ${SALES_FILTER===f?'active':''}" onclick="SALES_FILTER='${f}'; renderSales();">${f[0].toUpperCase()+f.slice(1)}</span>`).join('')}
       </div>
+      <div style="position:relative;">
+        <input type="text" id="sales-search" placeholder="Search number or customer…" value="${escapeHtml(SALES_SEARCH)}"
+          oninput="SALES_SEARCH=this.value; salesApplySearch();" autocomplete="off"
+          style="width:260px; max-width:60vw; padding:7px 30px 7px 12px;">
+        ${SALES_SEARCH?`<span onclick="SALES_SEARCH=''; renderSales();" title="Clear" style="position:absolute; right:10px; top:50%; transform:translateY(-50%); cursor:pointer; color:var(--text-muted);">✕</span>`:''}
+      </div>
     </div>
     <div class="card">
-      ${list.length? `<table><thead><tr><th>Number</th><th>Customer</th><th>Issued</th><th>Due</th><th class="amt">Total</th><th class="amt">Balance due</th><th>Status</th></tr></thead><tbody>
+      ${list.length? `<table><thead><tr>
+          ${th('Number','number')}${th('Customer','customer')}${th('Issued','issued')}${th('Due','due')}${th('Total','total',true)}${th('Balance due','balance',true)}<th>Status</th>
+        </tr></thead><tbody>
         ${list.map(i=>`<tr class="clickable" onclick="openInvoiceDetail('${i.id}')">
           <td class="mono">${i.number}</td><td>${contactName(i.contactId)}</td>
           <td>${i.status==='draft'?'—':fmtDateShort(i.date)}</td><td>${fmtDateShort(i.dueDate)}</td>
           <td class="amt num">${fmt(invoiceTotal(i))}</td>
           <td class="amt num ${docBalanceDue(i)>0?'neg':''}">${docStatus(i)==='void'?'—':fmt(docBalanceDue(i))}</td>
           <td>${statusBadge(docStatus(i))}</td></tr>`).join('')}
-      </tbody></table>` : emptyState('No invoices here', 'Create your first invoice to start billing customers.', "openInvoiceForm()", '+ New Invoice')}
+      </tbody></table>
+      <div class="hint" style="padding:8px 14px; margin:0; border-top:1px solid var(--border);">${list.length} invoice${list.length===1?'':'s'}${q?` matching “${escapeHtml(SALES_SEARCH)}”`:''}</div>`
+        : (q ? `<div class="card-body"><div class="hint" style="margin:0;">No invoices match “${escapeHtml(SALES_SEARCH)}”. <a href="#" onclick="event.preventDefault(); SALES_SEARCH=''; renderSales();">Clear search</a></div></div>`
+             : emptyState('No invoices here', 'Create your first invoice to start billing customers.', "openInvoiceForm()", '+ New Invoice'))}
     </div>
   `;
+}
+// Re-filter the table without rebuilding the search box (keeps keyboard focus)
+function salesApplySearch(){
+  const input = document.getElementById('sales-search');
+  const caret = input ? input.selectionStart : null;
+  renderSales();
+  const again = document.getElementById('sales-search');
+  if(again){ again.focus(); try{ if(caret!=null) again.setSelectionRange(caret, caret); }catch(e){} }
 }
 function emptyState(title, sub, onclick, btnLabel){
   return `<div class="empty"><div class="big">◆</div><strong>${title}</strong><p>${sub}</p>${onclick?`<button class="btn btn-primary btn-sm" onclick="${onclick}">${btnLabel}</button>`:''}</div>`;
@@ -2183,7 +2235,9 @@ function addMonthsIso(iso, n){
   // clamp to end of month
   const lastDay = new Date(d.getFullYear(), d.getMonth()+1, 0).getDate();
   d.setDate(Math.min(day, lastDay));
-  return d.toISOString().slice(0,10);
+  // format in LOCAL terms (toISOString would shift the date back a day in +HH timezones)
+  const pad = x => String(x).padStart(2,'0');
+  return `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())}`;
 }
 // Generate any due recurring invoices (drafts). Returns how many were created.
 function generateDueRecurringInvoices(){
@@ -2308,6 +2362,67 @@ function generateRecurringNow(id){
   saveState(true);
   showToast('Draft invoice created — review it in Sales');
   navigate('sales');
+}
+// ---- Turn an EXISTING invoice into a monthly recurring template (one click) ----
+// Copies ALL line items + VAT; re-drafts on the chosen day of the month.
+function makeInvoiceRecurring(invId){
+  const inv = S.invoices.find(i=>i.id===invId); if(!inv){ showToast('Invoice not found'); return; }
+  if(!inv.lines || !inv.lines.length){ showToast('This invoice has no line items'); return; }
+  // default day-of-month = the invoice's own date day
+  const invDay = (()=>{ try{ return Number((inv.date||todayStr()).slice(8,10))||1; }catch(e){ return 1; } })();
+  const total = inv.lines.reduce((s,l)=> s + (Number(l.qty)||0)*(Number(l.price)||0), 0);
+  const body = `
+    <p style="margin-top:0;">Create a monthly recurring template from <strong>${escapeHtml(inv.number)}</strong> for <strong>${escapeHtml(contactName(inv.contactId))}</strong>.</p>
+    <p style="font-size:13px; color:var(--text-muted); margin-top:-4px;">${inv.lines.length} line item${inv.lines.length===1?'':'s'} · ${fmt(total)} excl VAT will be copied.</p>
+    <div class="field-row">
+      <div class="field"><label>Re-draft on day of month</label>
+        <input type="number" id="mkrec-day" min="1" max="31" value="${invDay}">
+      </div>
+      <div class="field"><label>First re-draft date</label>
+        <input type="date" id="mkrec-next" value="${recNextDateForDay(invDay)}">
+      </div>
+    </div>
+    <div class="hint" style="margin-bottom:0;">A <strong>draft</strong> copy will be created on that date and every month after, for you to review and send. The original invoice is unchanged.</div>
+  `;
+  openModal('Make recurring — '+escapeHtml(inv.number), body, [
+    {label:'Cancel', cls:'btn-ghost', onclick:'closeModal()'},
+    {label:'Create recurring', cls:'btn-primary', onclick:`submitMakeInvoiceRecurring('${invId}')`}
+  ]);
+  // keep the date in sync when the day changes
+  setTimeout(()=>{ const d=document.getElementById('mkrec-day'); if(d){ d.oninput=()=>{ const nx=document.getElementById('mkrec-next'); if(nx) nx.value = recNextDateForDay(Number(d.value)||1); }; } }, 50);
+}
+// next future date that lands on `day` of a month (this month if not yet passed, else next month)
+function recNextDateForDay(day){
+  day = Math.min(Math.max(Number(day)||1,1),31);
+  const now = new Date(); const y=now.getFullYear(), m=now.getMonth(), todayD=now.getDate();
+  const clampDay = (yy,mm)=> Math.min(day, new Date(yy, mm+1, 0).getDate());
+  let yy=y, mm=m;
+  if(todayD > clampDay(yy,mm)){ mm++; if(mm>11){ mm=0; yy++; } }
+  const dd = clampDay(yy,mm);
+  // format in LOCAL terms (avoid toISOString's UTC shift pushing the date back a day)
+  const pad = n => String(n).padStart(2,'0');
+  return `${yy}-${pad(mm+1)}-${pad(dd)}`;
+}
+function submitMakeInvoiceRecurring(invId){
+  const inv = S.invoices.find(i=>i.id===invId); if(!inv) return;
+  const nextDue = document.getElementById('mkrec-next').value;
+  if(!nextDue){ showToast('Choose the first re-draft date'); return; }
+  const lines = inv.lines.map(l=>({desc:l.desc, qty:Number(l.qty)||0, price:Number(l.price)||0, accountId:l.accountId||'acc_sales'}));
+  S.recurringInvoices = S.recurringInvoices || [];
+  S.recurringInvoices.push({
+    id: uid('rec'),
+    contactId: inv.contactId,
+    lines,
+    vatType: inv.vatType || docVatTypeId(inv),
+    nextDue,
+    notes: 'From '+inv.number,
+    active: true,
+    lastGenerated: null,
+  });
+  saveState(true);
+  closeModal();
+  showToast('Recurring template created — see Recurring Invoices');
+  navigate('recurring');
 }
 
 let INVOICE_EDIT_ID = null;
@@ -2487,13 +2602,16 @@ function openInvoiceDetail(id){
   } else if(status==='open'){
     // issued but no payments yet → editable in place
     actions.push({label:'Edit', cls:'btn-ghost', onclick:`closeModal(); openInvoiceForm('${inv.id}')`});
+    actions.push({label:'Make recurring', cls:'btn-ghost', onclick:`makeInvoiceRecurring('${inv.id}')`});
     actions.push({label:'Void', cls:'btn-danger', onclick:`voidInvoiceAction('${inv.id}')`});
     actions.push({label:'Record payment', cls:'btn-primary', onclick:`openInvoicePaymentForm('${inv.id}')`});
   } else if(status==='partial'){
     // has payments → not directly editable
+    actions.push({label:'Make recurring', cls:'btn-ghost', onclick:`makeInvoiceRecurring('${inv.id}')`});
     actions.push({label:'Void', cls:'btn-danger', onclick:`voidInvoiceAction('${inv.id}')`});
     actions.push({label:'Record payment', cls:'btn-primary', onclick:`openInvoicePaymentForm('${inv.id}')`});
   } else if(status==='paid'){
+    actions.push({label:'Make recurring', cls:'btn-ghost', onclick:`makeInvoiceRecurring('${inv.id}')`});
     actions.push({label:'Void', cls:'btn-danger', onclick:`voidInvoiceAction('${inv.id}')`});
   }
   openModal(inv.number, body, actions);
