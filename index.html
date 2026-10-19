@@ -7909,6 +7909,42 @@ function renderVatDetail(){
   const anyOutput = Object.keys(bd.output).length>0;
   const anyInput = Object.keys(bd.input).length>0;
 
+  // ---- Summary by VAT type (every type pulls through, incl. Zero-rated, Exempt, No-VAT) ----
+  const typeLabel = { standard:'Standard (15%)', zero:'Zero-rated (0%)', exempt:'Exempt', capital:'Capital goods (15%)', none:'No VAT' };
+  const summaryRows = order.map(id=>{
+    const o = bd.output[id], i = bd.input[id];
+    if(!o && !i) return '';   // skip types with no activity at all
+    const oNet = o?o.net:0, oVat = o?o.vat:0, iNet = i?i.net:0, iVat = i?i.vat:0;
+    return `<tr>
+      <td>${typeLabel[id]||id}</td>
+      <td class="amt num">${fmt(oNet)}</td>
+      <td class="amt num">${fmt(oVat)}</td>
+      <td class="amt num">${fmt(iNet)}</td>
+      <td class="amt num">${fmt(iVat)}</td>
+    </tr>`;
+  }).join('');
+  const summaryTable = `
+    <div class="section-title" style="margin-top:4px;">Summary by VAT type</div>
+    <table style="margin:0;">
+      <thead><tr>
+        <th>VAT type</th>
+        <th class="amt">Output (sales) excl.</th>
+        <th class="amt">Output ${biz.taxLabel}</th>
+        <th class="amt">Input (purchases) excl.</th>
+        <th class="amt">Input ${biz.taxLabel}</th>
+      </tr></thead>
+      <tbody>
+        ${summaryRows || `<tr><td colspan="5" style="color:var(--text-muted);">No transactions in this period.</td></tr>`}
+        <tr class="li-total-row">
+          <td><strong>Totals</strong></td>
+          <td class="amt num"><strong>${fmt(bd.outputTotals.net)}</strong></td>
+          <td class="amt num"><strong>${fmt(bd.outputTotals.vat)}</strong></td>
+          <td class="amt num"><strong>${fmt(bd.inputTotals.net)}</strong></td>
+          <td class="amt num"><strong>${fmt(bd.inputTotals.vat)}</strong></td>
+        </tr>
+      </tbody>
+    </table>`;
+
   body.innerHTML = `
     <div class="card">
       <div class="card-head" style="gap:10px;">
@@ -7930,6 +7966,10 @@ function renderVatDetail(){
         <div class="section-title" style="margin-top:22px;">Input tax — purchases &amp; expenses, by VAT type</div>
         ${anyInput ? orderedBlocks(bd.input) : '<div class="hint" style="margin:6px 0;">No input transactions in this period.</div>'}
         <div class="report-row total" style="margin-top:10px;"><span>Total input ${biz.taxLabel} (Box 14)</span><span class="num">${fmt(bd.inputTotals.vat)}</span></div>
+
+        <div style="margin-top:24px; border-top:2px solid var(--border-strong); padding-top:12px;">
+          ${summaryTable}
+        </div>
 
         <div class="report-row total" style="font-size:15px; margin-top:20px; border-top:2px solid var(--border-strong); padding-top:12px;">
           <span>${net>=0? `Net ${biz.taxLabel} payable to SARS` : `Net ${biz.taxLabel} refundable`} (Box 20)</span>
