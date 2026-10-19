@@ -4256,8 +4256,19 @@ function confirmCsvImport(){
     if(r.amount>0) draft.received = Math.abs(r.amount);
     else draft.spent = Math.abs(r.amount);
     if(draft.type==='account'){
-      // use the preview's category if set, else auto-apply a saved description→account mapping
-      draft.accountSelection = r.categoryId || mappedAccountFor(r.desc) || null; // null => Unallocated holding account
+      // use the preview's category if set, else auto-apply a saved description→account mapping.
+      if(r.categoryId){
+        draft.accountSelection = r.categoryId;
+      } else {
+        const map = findAccountMapping(r.desc);
+        if(map){
+          draft.accountSelection = map.accountId;
+          // apply the mapping's VAT type too (bug fix: was only applying the account, VAT stayed 0%)
+          if(map.vatType){ draft.vatType = map.vatType; draft.vatRate = vatTypeRate(map.vatType); }
+        } else {
+          draft.accountSelection = null; // null => Unallocated holding account
+        }
+      }
     } else {
       draft.contactSelection = r.contactId || null;
       draft.matchDocId = r.matchDocId || null;
@@ -7691,10 +7702,20 @@ function computeVatBreakdown(from, to){
     net: round2(outputTotals.vat - inputTotals.vat),
   };
 }
+// Headline payable/refundable derived from the SAME by-type breakdown as the
+// detailed VAT report, so the summary card and the report never disagree.
+function vatSummaryFromBreakdown(from, to){
+  const bd = computeVatBreakdown(from, to);
+  const net = round2(bd.net);  // output VAT − input VAT
+  return { net, payable: net>0?net:0, refundable: net<0?-net:0,
+           outputVat: bd.outputTotals.vat, inputVat: bd.inputTotals.vat };
+}
 function fmtPeriodLabel(from, to){ return fmtDateShort(from)+' – '+fmtDateShort(to); }
-function vatPeriodRef(from){
-  // e.g. "06/2026" from the END month is conventional; use the 'to' month of the period actually.
-  const d = new Date(from+'T00:00:00');
+function vatPeriodRef(from, to){
+  // SA convention: the VAT period is referenced by its END (tax) month, e.g. a
+  // 01/08–30/09 period is "09/2026". Fall back to `from` if no end supplied.
+  const ref = to || from;
+  const d = new Date(ref+'T00:00:00');
   return String(d.getMonth()+1).padStart(2,'0')+'/'+d.getFullYear();
 }
 
@@ -7722,11 +7743,13 @@ function renderVatReport(){
   html += `<div class="card" style="margin-bottom:20px;">
     <div class="card-head"><h3>Current VAT Period and Return</h3>${openPeriod? `<button class="btn btn-primary btn-sm" onclick="closeVatPeriod('${openPeriod.id}')">Close VAT Period</button>`:''}</div>`;
   if(openPeriod){
-    const r = computeVatReturn(openPeriod.from, openPeriod.to);
+    // Use the SAME by-type breakdown the detailed report uses, so the headline
+    // figure always equals the return you actually submit (Box 20).
+    const r = vatSummaryFromBreakdown(openPeriod.from, openPeriod.to);
     html += `<table><thead><tr><th>Period Status</th><th>Ref</th><th>VAT Period</th><th class="amt">VAT Payable</th><th class="amt">VAT Refundable</th><th>VAT Report</th></tr></thead><tbody>
       <tr>
         <td><span class="badge badge-open">Open</span></td>
-        <td class="mono">${vatPeriodRef(openPeriod.from)}</td>
+        <td class="mono">${vatPeriodRef(openPeriod.from, openPeriod.to)}</td>
         <td>${fmtPeriodLabel(openPeriod.from, openPeriod.to)}</td>
         <td class="amt num ${r.payable>0?'neg':''}">${r.payable>0?fmt(r.payable):'—'}</td>
         <td class="amt num ${r.refundable>0?'pos':''}">${r.refundable>0?fmt(r.refundable):'—'}</td>
@@ -7755,11 +7778,11 @@ function renderVatReport(){
       <th class="amt">VAT Payable</th><th class="amt">VAT Refundable</th><th>VAT Report</th>
     </tr></thead><tbody>
       ${closed.map(p=>{
-        const r = computeVatReturn(p.from, p.to);
+        const r = vatSummaryFromBreakdown(p.from, p.to);
         return `<tr>
           <td><a class="link-btn" onclick="reopenVatPeriod('${p.id}')">reopen</a></td>
           <td><span class="badge badge-void">Closed</span></td>
-          <td class="mono">${vatPeriodRef(p.from)}</td>
+          <td class="mono">${vatPeriodRef(p.from, p.to)}</td>
           <td>${fmtPeriodLabel(p.from, p.to)}</td>
           <td class="amt num ${r.payable>0?'neg':''}">${r.payable>0?fmt(r.payable):'—'}</td>
           <td class="amt num ${r.refundable>0?'pos':''}">${r.refundable>0?fmt(r.refundable):'—'}</td>
@@ -7844,7 +7867,7 @@ function vatReturnModel(){
   });
   push(['Total input '+biz.taxLabel+' (Box 14)','','','','','','', round2(bd.inputTotals.vat)],'total');
   push([(bd.net>=0?'Net '+biz.taxLabel+' payable (Box 20)':'Net '+biz.taxLabel+' refundable (Box 20)'),'','','','','','', round2(Math.abs(bd.net))],'grand');
-  return { title:'VAT Return', meta:[{label:'Period',value:fmtPeriodLabel(p.from,p.to)},{label:'Ref',value:vatPeriodRef(p.from)},biz.businessVatNo?{label:'VAT No.',value:biz.businessVatNo}:null].filter(Boolean),
+  return { title:'VAT Return', meta:[{label:'Period',value:fmtPeriodLabel(p.from,p.to)},{label:'Ref',value:vatPeriodRef(p.from,p.to)},biz.businessVatNo?{label:'VAT No.',value:biz.businessVatNo}:null].filter(Boolean),
     columns:['Date','Type','Account','Reference','Description', S.settings.currency+' Exclusive', S.settings.currency+' Inclusive', S.settings.currency+' '+biz.taxLabel], rows, rowClasses };
 }
 function renderVatDetail(){
@@ -7891,7 +7914,7 @@ function renderVatDetail(){
       <div class="card-head" style="gap:10px;">
         <div>
           <h3>VAT Return — ${fmtPeriodLabel(p.from, p.to)}</h3>
-          <div style="font-size:11.5px; color:var(--text-muted); margin-top:2px;">Ref ${vatPeriodRef(p.from)} · ${p.status==='open'?'Open':'Closed'}${biz.businessVatNo? ' · VAT No. '+escapeHtml(biz.businessVatNo):''}</div>
+          <div style="font-size:11.5px; color:var(--text-muted); margin-top:2px;">Ref ${vatPeriodRef(p.from,p.to)} · ${p.status==='open'?'Open':'Closed'}${biz.businessVatNo? ' · VAT No. '+escapeHtml(biz.businessVatNo):''}</div>
         </div>
         <div style="display:flex; gap:8px;">
           <button class="btn btn-ghost btn-sm" onclick="backToVatList()">← Back</button>
