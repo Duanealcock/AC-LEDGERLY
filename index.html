@@ -694,6 +694,7 @@ function migrateCompanyShape(co){
   co.assets = co.assets || [];
   co.contactJournals = co.contactJournals || [];
   co.recurringInvoices = co.recurringInvoices || [];
+  co.vatReconAdjustments = co.vatReconAdjustments || {};
   const s = co.settings || (co.settings={});
   if(s.nextQuoteNo==null) s.nextQuoteNo = 3001;
   if(s.nextSuppQuoteNo==null) s.nextSuppQuoteNo = 3501;
@@ -7293,6 +7294,23 @@ function renderVatRecon(){
   const dash = v => v===0 ? '<span style="color:var(--text-muted);">-</span>' : fmt(v);
   const signCls = v => v>0?'neg':(v<0?'pos':'');
 
+  // ---- manual adjustment lines (saved per FY) ----
+  const adjustments = vatReconAdjList(fy);
+  const adjTotal = vatReconAdjTotal(fy);
+  const residual = round2(controlDiff - adjTotal);
+  // context for live residual updates while typing
+  window._VAT_RECON_CTX = { controlDiff, fy };
+  const adjLinesHtml = adjustments.map(a=>`
+    <div class="report-row" style="gap:8px;">
+      <input type="text" value="${escapeHtml(a.desc||'')}" placeholder="Description (e.g. Prior period VAT)"
+        oninput="vatReconSetAdjDesc('${a.id}', this.value)"
+        style="flex:1; min-width:0; padding:5px 8px; font-size:13px;">
+      <input type="number" step="0.01" value="${a.amount||''}" placeholder="0.00"
+        oninput="vatReconSetAdjAmount('${a.id}', this.value)"
+        style="width:120px; text-align:right; padding:5px 8px; font-size:13px;">
+      <button class="icon-btn" style="color:var(--red); flex:0 0 auto;" title="Remove line" onclick="vatReconRemoveAdjustment('${a.id}')">✕</button>
+    </div>`).join('');
+
   document.getElementById('content').innerHTML = `
     <div class="card" style="margin-bottom:14px;"><div class="card-body" style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:10px;">
       <div>
@@ -7339,12 +7357,62 @@ function renderVatRecon(){
 
           <div class="report-row"><span>Net VAT per this recon (Output − Input)</span><span class="num">${fmt(tDiff)}</span></div>
           <div class="report-row"><span>VAT Control account as per TB</span><span class="num ${signCls(vatControlTB)}">${fmt(vatControlTB)}</span></div>
-          <div class="report-row total" style="border-top:2px solid var(--border-strong);"><span>Difference</span><span class="num ${signCls(controlDiff)}">${fmt(controlDiff)}</span></div>
+          <div class="report-row total" style="border-top:1px solid var(--border);"><span>Difference before adjustments</span><span class="num ${signCls(controlDiff)}">${fmt(controlDiff)}</span></div>
+
+          ${adjLinesHtml}
+
+          <div style="margin:8px 0 2px;"><button class="btn btn-ghost btn-sm" onclick="vatReconAddAdjustment()">+ Add adjustment line</button></div>
+
+          <div class="report-row total" style="border-top:2px solid var(--border-strong); font-size:15px;">
+            <span>Difference remaining</span>
+            <span id="vatrecon-residual" class="num ${signCls(residual)}">${fmt(residual)}${Math.abs(residual)<0.005?' <span style="color:var(--money-pos); font-weight:700;">✓</span>':''}</span>
+          </div>
         </div>
-        <div class="hint" style="margin-top:12px;">A reasonability check: the taxable turnover declared for VAT should agree to sales per the income statement (less zero-rated), and the net VAT over the year should agree to the VAT control account on the trial balance. Small timing differences and manual VAT journals can create a residual — investigate larger gaps.</div>
+        <div class="hint" style="margin-top:12px;">Add adjustment lines (e.g. <em>Prior period VAT</em>, <em>SARS reversal</em>, <em>Other immaterial</em>) to explain the difference between the net VAT per this recon and the VAT control account, until <strong>Difference remaining</strong> is 0.00. Lines are saved per financial year.</div>
       </div>
     </div>`;
   window._VAT_RECON_PRINT = { fy, b, months, rows:null }; // marker for print
+}
+// ---- VAT recon manual adjustment lines (saved per FY on the company) ----
+function vatReconAdjList(fy){
+  S.vatReconAdjustments = S.vatReconAdjustments || {};
+  if(!Array.isArray(S.vatReconAdjustments[fy])) S.vatReconAdjustments[fy] = [];
+  return S.vatReconAdjustments[fy];
+}
+function vatReconAdjTotal(fy){
+  return round2(vatReconAdjList(fy).reduce((s,a)=> s + (Number(a.amount)||0), 0));
+}
+function vatReconAddAdjustment(){
+  const fy = vatReconFyLabel();
+  vatReconAdjList(fy).push({ id:uid('vadj'), desc:'', amount:0 });
+  saveState(true);
+  renderVatRecon();
+}
+function vatReconRemoveAdjustment(id){
+  const fy = vatReconFyLabel();
+  S.vatReconAdjustments[fy] = vatReconAdjList(fy).filter(a=>a.id!==id);
+  saveState(true);
+  renderVatRecon();
+}
+function vatReconSetAdjDesc(id, val){
+  const fy = vatReconFyLabel();
+  const a = vatReconAdjList(fy).find(x=>x.id===id);
+  if(a){ a.desc = val; saveState(); }
+}
+function vatReconSetAdjAmount(id, val){
+  const fy = vatReconFyLabel();
+  const a = vatReconAdjList(fy).find(x=>x.id===id);
+  if(a){ a.amount = round2(Number(val)||0); saveState(); renderVatReconResidual(); }
+}
+// live-update just the residual line while typing an amount, without a full re-render
+function renderVatReconResidual(){
+  const el = document.getElementById('vatrecon-residual');
+  if(!el || window._VAT_RECON_CTX==null) return;
+  const { controlDiff, fy } = window._VAT_RECON_CTX;
+  const residual = round2(controlDiff - vatReconAdjTotal(fy));
+  const cls = residual>0?'neg':(residual<0?'pos':'');
+  el.className = 'num '+cls;
+  el.innerHTML = fmt(residual)+(Math.abs(residual)<0.005?' <span style="color:var(--money-pos); font-weight:700;">✓</span>':'');
 }
 function printVatRecon(){
   // simplest reliable print: print the current page section
