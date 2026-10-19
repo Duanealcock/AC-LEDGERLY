@@ -558,6 +558,7 @@ const NAV = [
   {id:'contacts', label:'All Contacts', ic:'☰'},
   {id:'accounts', label:'Chart of Accounts', ic:'≡'},
   {id:'assets', label:'Asset Register', ic:'◆'},
+  {id:'vat-recon', label:'VAT Recon', ic:'⊞'},
   {sec:'Insights'},
   {group:'reports', label:'Reports', ic:'▦', children:[
     {id:'rep-tb', label:'Trial Balance'},
@@ -2061,6 +2062,7 @@ function render(){
     contacts: renderContacts,
     accounts: renderAccounts,
     assets: renderAssets,
+    'vat-recon': renderVatRecon,
     reports: renderReports,
     'rep-tb': ()=>{ REPORT_TAB='tb'; renderReports(); },
     'rep-pl': ()=>{ REPORT_TAB='pl'; renderReports(); },
@@ -7206,6 +7208,147 @@ function codeInRange(code, type){
   if(isNaN(n)) return false;
   const r = accountRangeFor(type);
   return n>=r.min && n<=r.max;
+}
+/* ============================= VAT RECONCILIATION (Reasonability) ============================= */
+// A month-by-month VAT reasonability working paper, auto-populated from the VAT
+// breakdown (invoices, bills, cashbook), the Income Statement, and the VAT control
+// account on the trial balance. Mirrors the classic reviewer's "VAT Reasonability".
+function vatReconFyLabel(){
+  // use the active FY if set, else the FY containing today
+  return (typeof ACTIVE_FY!=='undefined' && ACTIVE_FY!=null) ? ACTIVE_FY : currentFyLabel();
+}
+function vatReconMonths(fy){
+  // 12 month windows across the financial year
+  const b = fyBounds(fy);
+  const out = [];
+  let d = new Date(b.from+'T00:00:00');
+  for(let i=0;i<12;i++){
+    const y=d.getFullYear(), m=d.getMonth();
+    const from = `${y}-${String(m+1).padStart(2,'0')}-01`;
+    const lastDay = new Date(y, m+1, 0).getDate();
+    const to = `${y}-${String(m+1).padStart(2,'0')}-${String(lastDay).padStart(2,'0')}`;
+    out.push({ from, to, label: d.toLocaleString('en-ZA',{month:'short'})+'-'+String(y).slice(2) });
+    d.setMonth(d.getMonth()+1);
+  }
+  return out;
+}
+function renderVatRecon(){
+  setTopbar('VAT Recon', 'VAT reasonability — monthly output/input vs the income statement & VAT control', '');
+  const biz = S.settings||{};
+  const fy = vatReconFyLabel();
+  const b = fyBounds(fy);
+  const months = vatReconMonths(fy);
+
+  // Zero-rated output VAT type id(s)
+  const isZero = tId => tId==='zero';
+
+  // Per-month figures from the VAT breakdown
+  let tGross=0, tOutVat=0, tZero=0, tNett=0, tInVat=0;
+  const rows = months.map(mo=>{
+    const bd = computeVatBreakdown(mo.from, mo.to);
+    // Output side: taxable (standard+capital) net + zero-rated net; gross = net + output VAT
+    let taxableNet=0, zeroNet=0, outVat=0;
+    Object.keys(bd.output).forEach(tId=>{
+      const e = bd.output[tId];
+      if(isZero(tId)) zeroNet += e.net;
+      else { taxableNet += e.net; }
+      outVat += e.vat;
+    });
+    const nett = round2(taxableNet);            // taxable turnover excl VAT (ex zero-rated)
+    const zero = round2(zeroNet);
+    const gross = round2(nett + outVat + zero); // total turnover incl VAT (zero-rated adds net only)
+    const inVat = round2(bd.inputTotals.vat);
+    const diff = round2(outVat - inVat);
+    tGross+=gross; tOutVat+=outVat; tZero+=zero; tNett+=nett; tInVat+=inVat;
+    const dash = v => v===0 ? '<span style="color:var(--text-muted);">-</span>' : fmt(v);
+    const diffCls = diff>0?'neg':(diff<0?'pos':'');
+    return `<tr>
+      <td>${mo.label}</td>
+      <td class="amt num">${dash(gross)}</td>
+      <td class="amt num">${dash(outVat)}</td>
+      <td class="amt num">${dash(zero)}</td>
+      <td class="amt num">${dash(nett)}</td>
+      <td class="amt num">${dash(inVat)}</td>
+      <td class="amt num ${diffCls}">${dash(round2(outVat-inVat))}</td>
+    </tr>`;
+  }).join('');
+  tGross=round2(tGross); tOutVat=round2(tOutVat); tZero=round2(tZero); tNett=round2(tNett); tInVat=round2(tInVat);
+  const tDiff = round2(tOutVat - tInVat);
+
+  // ---- Reconciliation block ----
+  // Sales per Income Statement (all Income accounts) over the FY
+  const salesIS = round2(S.accounts.filter(a=>a.type==='Income')
+    .reduce((s,a)=>s+periodMovement(a.id, b.from, b.to), 0));
+  const salesExZero = round2(salesIS - tZero);
+  // Reasonability: taxable turnover per VAT (tNett) should ≈ sales per IS less zero-rated
+  const salesDiff = round2(tNett - salesExZero);
+
+  // VAT control account per trial balance (net of output payable − input receivable), as at FY end
+  const vatp = periodMovement('acc_vatp', '0000-01-01', b.to); // liability credit-normal (payable)
+  const vatr = periodMovement('acc_vatr', '0000-01-01', b.to); // asset debit-normal (input)
+  const vatControlTB = round2(vatp - vatr); // net payable to SARS per the books
+  // Reasonability: net VAT per this recon (tDiff) vs VAT control on the TB
+  const controlDiff = round2(tDiff - vatControlTB);
+
+  const dash = v => v===0 ? '<span style="color:var(--text-muted);">-</span>' : fmt(v);
+  const signCls = v => v>0?'neg':(v<0?'pos':'');
+
+  document.getElementById('content').innerHTML = `
+    <div class="card" style="margin-bottom:14px;"><div class="card-body" style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:10px;">
+      <div>
+        <strong>VAT Reasonability — FY${fy}</strong>
+        <div class="hint" style="margin:2px 0 0;">${fmtDateShort(b.from)} – ${fmtDateShort(b.to)} · auto-populated from invoices, bills, cashbook, the income statement and the VAT control account. Switch the year in the top bar.</div>
+      </div>
+      <button class="btn btn-ghost btn-sm" onclick="printVatRecon()">⎙ Print</button>
+    </div></div>
+
+    <div class="card">
+      <div style="overflow-x:auto;"><table>
+        <thead><tr>
+          <th>Month</th>
+          <th class="amt">Gross Turnover</th>
+          <th class="amt">Output VAT</th>
+          <th class="amt">Zero Rated</th>
+          <th class="amt">Nett Turnover</th>
+          <th class="amt">Input VAT</th>
+          <th class="amt">Difference</th>
+        </tr></thead>
+        <tbody>${rows}</tbody>
+        <tfoot>
+          <tr class="li-total-row">
+            <td><strong>Total</strong></td>
+            <td class="amt num"><strong>${fmt(tGross)}</strong></td>
+            <td class="amt num"><strong>${fmt(tOutVat)}</strong></td>
+            <td class="amt num"><strong>${fmt(tZero)}</strong></td>
+            <td class="amt num"><strong>${fmt(tNett)}</strong></td>
+            <td class="amt num"><strong>${fmt(tInVat)}</strong></td>
+            <td class="amt num ${signCls(tDiff)}"><strong>${fmt(tDiff)}</strong></td>
+          </tr>
+        </tfoot>
+      </table></div>
+
+      <div class="card-body" style="border-top:1px solid var(--border);">
+        <div style="max-width:560px; margin-left:auto;">
+          <div class="report-row"><span>Sales as per Income Statement</span><span class="num">${fmt(salesIS)}</span></div>
+          <div class="report-row"><span>Less Zero Rated Sales</span><span class="num">${fmt(tZero)}</span></div>
+          <div class="report-row total" style="border-top:1px solid var(--border);"><span>Taxable sales per IS</span><span class="num" style="color:var(--money-pos);">${fmt(salesExZero)}</span></div>
+          <div class="report-row"><span>Taxable turnover per VAT recon</span><span class="num">${fmt(tNett)}</span></div>
+          <div class="report-row total"><span>Difference</span><span class="num ${signCls(salesDiff)}">${fmt(salesDiff)}</span></div>
+
+          <div style="height:14px;"></div>
+
+          <div class="report-row"><span>Net VAT per this recon (Output − Input)</span><span class="num">${fmt(tDiff)}</span></div>
+          <div class="report-row"><span>VAT Control account as per TB</span><span class="num ${signCls(vatControlTB)}">${fmt(vatControlTB)}</span></div>
+          <div class="report-row total" style="border-top:2px solid var(--border-strong);"><span>Difference</span><span class="num ${signCls(controlDiff)}">${fmt(controlDiff)}</span></div>
+        </div>
+        <div class="hint" style="margin-top:12px;">A reasonability check: the taxable turnover declared for VAT should agree to sales per the income statement (less zero-rated), and the net VAT over the year should agree to the VAT control account on the trial balance. Small timing differences and manual VAT journals can create a residual — investigate larger gaps.</div>
+      </div>
+    </div>`;
+  window._VAT_RECON_PRINT = { fy, b, months, rows:null }; // marker for print
+}
+function printVatRecon(){
+  // simplest reliable print: print the current page section
+  window.print();
 }
 let REPORT_TAB = 'pl';
 function renderReports(){
