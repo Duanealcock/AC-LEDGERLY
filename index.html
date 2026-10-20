@@ -4725,8 +4725,10 @@ function importOpeningBalancesFromRows(rows){
     let debit=0, credit=0;
     const haveDrCr = (cDebit>-1 || cCredit>-1);
     if(haveDrCr){
-      debit = cDebit>-1 ? num(r[cDebit]) : 0;
-      credit = cCredit>-1 ? num(r[cCredit]) : 0;
+      // a value in the Debit/Credit column IS that side — use its magnitude, since
+      // some exports show credits as negative numbers (e.g. "-2 571 791.31").
+      debit = cDebit>-1 ? Math.abs(num(r[cDebit])) : 0;
+      credit = cCredit>-1 ? Math.abs(num(r[cCredit])) : 0;
     } else if(cBal>-1){
       // we need the account's type to split a signed balance; handled after we know acc
     }
