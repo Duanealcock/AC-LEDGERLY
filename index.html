@@ -2097,9 +2097,53 @@ function render(){
 }
 
 /* ============================= DASHBOARD ============================= */
+// Work out this company's current VAT period and whether its return is due/overdue,
+// based on today's date and the registered SARS category. Used for the dashboard alert.
+function vatDueStatus(){
+  const cat = (S.settings && S.settings.vatCategory) || 'A';
+  const months = (typeof vatCatMonths==='function') ? vatCatMonths(cat) : (cat==='C'?1:cat==='D'?6:cat==='E'?12:2);
+  const today = new Date(todayStr()+'T00:00:00');
+  const pad = n=>String(n).padStart(2,'0');
+  const iso = d=>`${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())}`;
+  // find the most recently ENDED period for this category, walking back from today
+  // bi-monthly A ends odd months, B ends even; C every month; D ends Feb/Aug; E ends Feb.
+  function endsOn(d){
+    const hm = d.getMonth()+1; // 1..12
+    if(cat==='C') return true;
+    if(cat==='A') return hm%2===1;
+    if(cat==='B') return hm%2===0;
+    if(cat==='D') return (hm===2 || hm===8);
+    if(cat==='E') return hm===2;
+    return hm%2===1;
+  }
+  // last day of a month
+  const lastDayOf = (y,m)=> new Date(y, m+1, 0);
+  // walk back month-by-month to the latest period-end on/before today
+  let probe = new Date(today.getFullYear(), today.getMonth(), 1);
+  let endDate = null;
+  for(let i=0;i<14;i++){
+    const le = lastDayOf(probe.getFullYear(), probe.getMonth());
+    if(endsOn(probe) && le <= today){ endDate = le; break; }
+    probe.setMonth(probe.getMonth()-1);
+  }
+  if(!endDate) return null;
+  // period start = first day, (months-1) months before the end month
+  const startMonth = new Date(endDate.getFullYear(), endDate.getMonth()-(months-1), 1);
+  const from = iso(startMonth), to = iso(endDate);
+  // SARS due = 25th of the month after the period end
+  const due = new Date(endDate.getFullYear(), endDate.getMonth()+1, 25);
+  const ref = `${endDate.getFullYear()}${pad(endDate.getMonth()+1)}`;
+  // has this period been closed/submitted in the app?
+  const submitted = (S.vatPeriods||[]).some(p=> p.status==='closed' && p.from<=from && p.to>=to);
+  const daysToDue = Math.round((due - today)/86400000);
+  return { cat, from, to, ref, due: iso(due), dueDate:due, daysToDue, submitted,
+           overdue: !submitted && daysToDue<0,
+           dueSoon: !submitted && daysToDue>=0 && daysToDue<=10 };
+}
 function renderDashboard(){
   const fy = activeFyBounds();
   setTopbar('Dashboard', S.settings.businessName + (fy? ` · FY${ACTIVE_FY}`:''), '');
+  const vatDue = vatDueStatus();
   // balances: as-of the FY end when a year is selected, else current
   const asOf = fy ? fy.to : undefined;
   const bank = getAccountBalance('acc_bank', asOf);
@@ -2121,7 +2165,29 @@ function renderDashboard(){
   const recentInvoices = [...invPool].filter(i=>i.status!=='draft').sort((a,b)=>b.date.localeCompare(a.date)).slice(0,5);
   const overdue = S.invoices.filter(i=>docStatus(i)!=='paid' && i.status==='open' && i.dueDate < todayStr());
 
+  // VAT due banner (live by date)
+  let vatBanner = '';
+  if(vatDue){
+    const catName = {A:'bi-monthly',B:'bi-monthly',C:'monthly',D:'6-monthly',E:'annual'}[vatDue.cat]||'';
+    if(vatDue.overdue){
+      vatBanner = `<div class="card" style="margin-bottom:14px; border-left:4px solid var(--red);"><div class="card-body" style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:10px;">
+        <div><strong style="color:var(--red);">⚠ VAT return overdue</strong> — period <span class="mono">${vatDue.ref}</span> (${catName}) was due <strong>${fmtDateShort(vatDue.due)}</strong> (${Math.abs(vatDue.daysToDue)} day${Math.abs(vatDue.daysToDue)===1?'':'s'} ago).</div>
+        <button class="btn btn-primary btn-sm" onclick="navigate('rep-vat')">Go to VAT</button>
+      </div></div>`;
+    } else if(vatDue.dueSoon){
+      vatBanner = `<div class="card" style="margin-bottom:14px; border-left:4px solid var(--gold);"><div class="card-body" style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:10px;">
+        <div><strong style="color:var(--gold);">⏳ VAT return due soon</strong> — period <span class="mono">${vatDue.ref}</span> (${catName}) is due <strong>${fmtDateShort(vatDue.due)}</strong> (${vatDue.daysToDue===0?'today':'in '+vatDue.daysToDue+' day'+(vatDue.daysToDue===1?'':'s')}).</div>
+        <button class="btn btn-primary btn-sm" onclick="navigate('rep-vat')">Go to VAT</button>
+      </div></div>`;
+    } else if(!vatDue.submitted){
+      vatBanner = `<div class="card" style="margin-bottom:14px; border-left:4px solid var(--border-strong);"><div class="card-body" style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:10px;">
+        <div><span style="color:var(--text-muted);">Next VAT return:</span> period <span class="mono">${vatDue.ref}</span> (${catName}) due <strong>${fmtDateShort(vatDue.due)}</strong>.</div>
+        <button class="btn btn-ghost btn-sm" onclick="navigate('rep-vat')">View</button>
+      </div></div>`;
+    }
+  }
   document.getElementById('content').innerHTML = `
+    ${vatBanner}
     ${fy? `<div class="hint" style="margin-bottom:14px;">Showing <strong>FY${ACTIVE_FY}</strong> (${fmtDateShort(fy.from)} – ${fmtDateShort(fy.to)}). Balances are as at ${fmtDateShort(fy.to)}. Switch years in the top bar; you can still edit any transaction.</div>`:''}
     <div class="grid-4">
       <div class="kpi"><div class="label">Bank Balance</div><div class="value num">${fmt(bank)}</div><div class="delta">${fy? 'As at '+fmtDateShort(fy.to):'Business Bank Account'}</div></div>
