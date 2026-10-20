@@ -7306,7 +7306,6 @@ function openAccountForm(editId){
     ${(!isSystem && hasTxns)? `<div class="hint">This account has transactions. You can rename or recode it; changing its <strong>type</strong> will move its balance between the P&amp;L and the Balance Sheet, so only do that if it was set up under the wrong type.</div>`:''}
   `;
   openModal(a?'Edit account':'New account', body, [
-    {label:'Cancel', cls:'btn-ghost', onclick:'closeModal()'},
     {label:a?'Save changes':'Create account', cls:'btn-primary', onclick:'submitAccountForm()'}
   ]);
   updateAccountRangeHint();
@@ -8385,6 +8384,13 @@ function computeVatBreakdown(from, to){
     const vat = round2(gross-net);
     const isIn = (m.received||0)>0;
     const acc = m.accountSelection ? S.accounts.find(a=>a.id===m.accountSelection) : null;
+    // Only income-coded receipts are turnover (output); only expense-coded payments are
+    // input purchases. A receipt/payment coded to a balance-sheet account (loan, asset,
+    // liability, equity) is NOT a sale or a purchase — e.g. a loan deposit — so skip it.
+    if(acc){
+      if(isIn && acc.type!=='Income') return;
+      if(!isIn && acc.type!=='Expense') return;
+    }
     const accLabel = acc ? (acc.code+'/000') : (isIn?'1000/000':'3000/000');
     const line = {date:m.date, ref:m.reference||m.id||'Cashbook', name:cleanDesc(m.payee||m.description||'Cashbook entry'), net, vat, type: isIn?'CB Receipts':'CB Payments', account:accLabel};
     if(isIn) add(output, tId, net, vat, line); else add(input, tId, net, vat, line);
@@ -9231,14 +9237,18 @@ async function resetData(){
 /* ============================= MODAL ============================= */
 function openModal(title, bodyHtml, actions, wide){
   const root = document.getElementById('modal-root');
+  const acts = actions||[];
+  // Only add the default Cancel when the caller hasn't supplied its own close/cancel
+  // button (avoids the duplicate "Cancel Cancel" some forms had).
+  const hasCancel = acts.some(a=> /closeModal\(\)/.test(a.onclick||'') && /^(cancel|close|done)$/i.test((a.label||'').trim()));
   root.innerHTML = `
     <div class="overlay" onclick="if(event.target===this) closeModal()">
       <div class="modal ${wide?'wide':''}">
         <div class="modal-head"><h3>${title}</h3><button class="x-close" onclick="closeModal()">✕</button></div>
         <div class="modal-body">${bodyHtml}</div>
         <div class="modal-foot">
-          <button class="btn btn-ghost" onclick="closeModal()">Cancel</button>
-          ${(actions||[]).map(a=>`<button class="btn ${a.cls}" onclick="${a.onclick}">${a.label}</button>`).join('')}
+          ${hasCancel? '' : `<button class="btn btn-ghost" onclick="closeModal()">Cancel</button>`}
+          ${acts.map(a=>`<button class="btn ${a.cls}" onclick="${a.onclick}">${a.label}</button>`).join('')}
         </div>
       </div>
     </div>`;
