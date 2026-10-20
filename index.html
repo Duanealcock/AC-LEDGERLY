@@ -4590,12 +4590,16 @@ function renderOpeningBalances(){
     <div class="card" style="margin-bottom:14px;"><div class="card-body" style="display:flex; align-items:center; gap:14px; flex-wrap:wrap;">
       <div style="display:flex; align-items:center; gap:8px;"><label style="margin:0;">Opening balances as at</label>
         <input type="date" id="ob-date" value="${OB_AS_OF}" onchange="OB_AS_OF=this.value;" style="width:150px;"></div>
-      <div style="display:flex; gap:8px; margin-left:auto;">
+      <div style="display:flex; gap:8px; margin-left:auto; align-items:center;">
+        <label style="display:flex; align-items:center; gap:6px; font-size:12px; color:var(--text); text-transform:none; letter-spacing:normal; cursor:pointer; white-space:nowrap;">
+          <input type="checkbox" id="ob-autocreate" style="width:auto;" ${window._OB_AUTOCREATE?'checked':''} onchange="window._OB_AUTOCREATE=this.checked;">
+          Create accounts that don't exist
+        </label>
         <button class="btn btn-ghost btn-sm" onclick="document.getElementById('ob-csv-input').click()">⬆ Import CSV</button>
         <button class="btn btn-ghost btn-sm" onclick="downloadOpeningBalanceTemplate()">⬇ Template</button>
         <input type="file" id="ob-csv-input" accept=".csv,text/csv" style="display:none;" onchange="handleOpeningBalanceCsv(event)">
       </div>
-      <div class="hint" style="margin:0; flex:1 1 100%;">Enter each account's opening balance in the Debit or Credit column, or <strong>Import CSV</strong>. The totals at the bottom must balance (Difference = 0) before you can save.</div>
+      <div class="hint" style="margin:0; flex:1 1 100%;">Enter each account's opening balance in the Debit or Credit column, or <strong>Import CSV</strong>. Tick <strong>Create accounts that don't exist</strong> to auto-add any new codes on import (include a <strong>Type</strong> column, or it's inferred from the code range). The totals at the bottom must balance (Difference = 0) before you can save.</div>
     </div></div>
 
     <div class="card">
@@ -4649,9 +4653,9 @@ function obReset(){ obInitValues(); renderOpeningBalances(); }
 // optional Name, Debit, Credit.  OR a single signed Balance/Amount column.
 // Matches accounts by code first, then by name.
 function downloadOpeningBalanceTemplate(){
-  const lines = [['Account Code','Account Name','Debit','Credit']];
+  const lines = [['Account Code','Account Name','Type','Debit','Credit']];
   S.accounts.slice().sort((a,b)=>(a.code||'').localeCompare(b.code||'')).forEach(a=>{
-    lines.push([a.code||'', a.name||'', '', '']);
+    lines.push([a.code||'', a.name||'', a.type||'', '', '']);
   });
   const csv = lines.map(r=>r.map(csvCell).join(',')).join('\r\n');
   downloadBlob('﻿'+csv, `opening-balances-template-${todayStr()}.csv`, 'text/csv;charset=utf-8;');
@@ -4668,41 +4672,87 @@ function handleOpeningBalanceCsv(ev){
   };
   reader.readAsText(file);
 }
+// Infer an account type for a new account from an explicit Type cell, else the code
+// range + which side the balance is on.
+function obInferAccountType(typeCell, code, isDebit){
+  const t = String(typeCell||'').trim().toLowerCase();
+  const map = {
+    'income':'Income','sales':'Income','revenue':'Income',
+    'expense':'Expense','expenses':'Expense','cost of sales':'Expense',
+    'current asset':'Current Assets','current assets':'Current Assets',
+    'non-current asset':'Non-Current Assets','non current asset':'Non-Current Assets','non-current assets':'Non-Current Assets','fixed asset':'Non-Current Assets','fixed assets':'Non-Current Assets',
+    'current liability':'Current Liabilities','current liabilities':'Current Liabilities',
+    'non-current liability':'Non-Current Liabilities','non current liability':'Non-Current Liabilities','non-current liabilities':'Non-Current Liabilities','long-term liability':'Non-Current Liabilities',
+    'equity':'Equity','capital':'Equity',
+    'asset':'Current Assets','liability':'Current Liabilities',
+  };
+  if(t && map[t]) return map[t];
+  // infer from code range + balance side
+  const n = parseInt(String(code).replace(/[^0-9]/g,''),10) || 0;
+  if(n>=1000 && n<=4999){ return isDebit ? 'Expense' : 'Income'; }           // P&L range
+  return isDebit ? 'Current Assets' : 'Current Liabilities';                   // Balance sheet range
+}
 function importOpeningBalancesFromRows(rows){
   if(!rows || rows.length<2){ showToast('CSV has no data rows'); return; }
   const headers = rows[0];
   const cCode = guessColumn(headers, ['account code','code','acc code','account']);
   const cName = guessColumn(headers, ['account name','name','description']);
+  const cType = guessColumn(headers, ['type','account type','category','class']);
   const cDebit = guessColumn(headers, ['debit','dr']);
   const cCredit = guessColumn(headers, ['credit','cr']);
   const cBal = guessColumn(headers, ['balance','amount','net']);
   if(cCode<0 && cName<0){ showToast('CSV needs an Account Code or Name column'); return; }
   if(cDebit<0 && cCredit<0 && cBal<0){ showToast('CSV needs Debit/Credit columns or a Balance column'); return; }
+  const autoCreate = !!window._OB_AUTOCREATE;
 
   // Build lookup maps for matching.
   const byCode = {}; const byName = {};
   S.accounts.forEach(a=>{ if(a.code) byCode[String(a.code).trim().toLowerCase()] = a; byName[String(a.name).trim().toLowerCase()] = a; });
 
   if(!OB_VALUES) obInitValues();
-  let matched=0, unmatched=[], touched=0;
+  let matched=0, unmatched=[], touched=0, created=0;
   const num = v => { const n = Number(String(v==null?'':v).replace(/[^0-9.\-]/g,'')); return isNaN(n)?0:n; };
 
   for(let i=1;i<rows.length;i++){
     const r = rows[i];
-    const codeKey = cCode>-1 ? String(r[cCode]||'').trim().toLowerCase() : '';
-    const nameKey = cName>-1 ? String(r[cName]||'').trim().toLowerCase() : '';
-    const acc = (codeKey && byCode[codeKey]) || (nameKey && byName[nameKey]) || null;
-    if(!acc){ if(codeKey||nameKey) unmatched.push(r[cCode>-1?cCode:cName]||''); continue; }
-    // skip system/locked accounts
-    const locked = acc.system && ['acc_equity','acc_ar','acc_ap','acc_vatr','acc_vatp','acc_sales','acc_share_capital'].includes(acc.id);
-    if(locked) continue;
+    const rawCode = cCode>-1 ? String(r[cCode]||'').trim() : '';
+    const rawName = cName>-1 ? String(r[cName]||'').trim() : '';
+    const codeKey = rawCode.toLowerCase();
+    const nameKey = rawName.toLowerCase();
+    let acc = (codeKey && byCode[codeKey]) || (nameKey && byName[nameKey]) || null;
+
+    // work out the debit/credit for this row first (needed to infer a new account's type)
     let debit=0, credit=0;
-    if(cDebit>-1 || cCredit>-1){
+    const haveDrCr = (cDebit>-1 || cCredit>-1);
+    if(haveDrCr){
       debit = cDebit>-1 ? num(r[cDebit]) : 0;
       credit = cCredit>-1 ? num(r[cCredit]) : 0;
     } else if(cBal>-1){
+      // we need the account's type to split a signed balance; handled after we know acc
+    }
+
+    if(!acc){
+      // create it if asked and we have enough to do so
+      if(autoCreate && rawCode){
+        if(S.accounts.some(a=>String(a.code).trim().toLowerCase()===codeKey)){
+          // code exists under a different name mismatch — skip to avoid dup
+        } else {
+          const isDebitSide = haveDrCr ? (debit>credit) : (num(r[cBal])>=0 ? true : false);
+          const type = obInferAccountType(cType>-1?r[cType]:'', rawCode, isDebitSide);
+          acc = { id:uid('acc'), code:rawCode, name: rawName || ('Account '+rawCode), type, isBank:false, isFixedAsset:false };
+          S.accounts.push(acc);
+          byCode[codeKey] = acc; if(nameKey) byName[nameKey] = acc;
+          created++;
+        }
+      }
+      if(!acc){ if(codeKey||nameKey) unmatched.push(rawCode||rawName||''); continue; }
+    }
+    // skip system/locked accounts
+    const locked = acc.system && ['acc_equity','acc_ar','acc_ap','acc_vatr','acc_vatp','acc_sales','acc_share_capital'].includes(acc.id);
+    if(locked) continue;
+    // if we only had a signed Balance column, split it now using the account's type
+    if(!haveDrCr && cBal>-1){
       const bal = num(r[cBal]);
-      // positive balance goes to the account's normal side
       if(accountNormalIsDebit(acc.type)){ if(bal>=0) debit=bal; else credit=-bal; }
       else { if(bal>=0) credit=bal; else debit=-bal; }
     }
@@ -4711,9 +4761,12 @@ function importOpeningBalancesFromRows(rows){
       matched++; touched++;
     }
   }
+  if(created){ saveState(true); }
   renderOpeningBalances();
-  let msg = `Imported ${matched} opening balance${matched===1?'':'s'}.`;
-  if(unmatched.length) msg += ` ${unmatched.length} row${unmatched.length===1?'':'s'} didn't match an account (check codes/names).`;
+  let msg = `Imported ${matched} opening balance${matched===1?'':'s'}`;
+  if(created) msg += `, created ${created} new account${created===1?'':'s'}`;
+  msg += '.';
+  if(unmatched.length) msg += ` ${unmatched.length} row${unmatched.length===1?'':'s'} didn't match an account${autoCreate?' (no code to create from)':' — tick “Create accounts that don’t exist” to add them'}.`;
   showToast(msg);
   if(unmatched.length){
     setTimeout(()=>{
@@ -6991,7 +7044,7 @@ function renderAccounts(){
       <table><thead><tr><th style="width:70px;">Code</th><th>Name</th><th class="amt">Balance</th><th></th></tr></thead><tbody>
       ${accs.map(a=>`<tr><td class="mono">${a.code}</td><td>${a.name}${a.isBank?' <span class="badge badge-open">Bank</span>':''}${a.isFixedAsset?' <span class="badge badge-draft">Fixed asset</span>':''}</td>
         <td class="amt num">${fmt(getAccountBalance(a.id))}</td>
-        <td style="text-align:right; white-space:nowrap;">${isAssetType(a.type) && !a.isBank ? `<button class="icon-btn" onclick="toggleFixedAsset('${a.id}')" title="Mark whether purchases to this account are fixed assets">${a.isFixedAsset?'Unmark fixed':'Mark fixed asset'}</button>`:''} ${a.system?'':`<button class="icon-btn" onclick="deleteAccount('${a.id}')">Delete</button>`}</td></tr>`).join('')}
+        <td style="text-align:right; white-space:nowrap;"><button class="icon-btn" onclick="openAccountForm('${a.id}')">Edit</button> ${isAssetType(a.type) && !a.isBank ? `<button class="icon-btn" onclick="toggleFixedAsset('${a.id}')" title="Mark whether purchases to this account are fixed assets">${a.isFixedAsset?'Unmark fixed':'Mark fixed asset'}</button>`:''} ${a.system?'':`<button class="icon-btn" onclick="deleteAccount('${a.id}')">Delete</button>`}</td></tr>`).join('')}
       </tbody></table></div>`;
   });
   document.getElementById('content').innerHTML = html;
@@ -7144,21 +7197,33 @@ function assetReportModel(){
     columns:['Asset','Purchased', S.settings.currency+' Cost', S.settings.currency+' Annual dep.', S.settings.currency+' Accum. dep.', S.settings.currency+' Book value'],
     rows, rowClasses };
 }
-function openAccountForm(){
+let ACCOUNT_EDIT_ID = null;
+function openAccountForm(editId){
+  const a = editId ? S.accounts.find(x=>x.id===editId) : null;
+  ACCOUNT_EDIT_ID = editId || null;
+  const isSystem = !!(a && a.system);
+  const hasTxns = a ? S.journal.some(e=>e.lines.some(l=>l.accountId===a.id)) : false;
+  const typeOpt = (val, label)=> `<option value="${val}" ${a&&a.type===val?'selected':''}>${label||val}</option>`;
   const body = `
     <div class="field-row">
-      <div class="field"><label>Code</label><input type="text" id="a-code" placeholder="e.g. 3060"></div>
-      <div class="field"><label>Type</label><select id="a-type" onchange="updateAccountRangeHint()">
-        <optgroup label="Income Statement (1000–4999)"><option>Income</option><option>Expense</option></optgroup>
-        <optgroup label="Balance Sheet (5000–9999)"><option>Non-Current Assets</option><option>Current Assets</option><option>Equity</option><option>Non-Current Liabilities</option><option>Current Liabilities</option></optgroup>
+      <div class="field"><label>Code</label><input type="text" id="a-code" placeholder="e.g. 3060" value="${a?escapeHtml(a.code||''):''}" ${isSystem?'disabled':''}></div>
+      <div class="field"><label>Type</label><select id="a-type" onchange="updateAccountRangeHint()" ${isSystem?'disabled':''}>
+        <optgroup label="Income Statement (1000–4999)">${typeOpt('Income')}${typeOpt('Expense')}</optgroup>
+        <optgroup label="Balance Sheet (5000–9999)">${typeOpt('Non-Current Assets')}${typeOpt('Current Assets')}${typeOpt('Equity')}${typeOpt('Non-Current Liabilities')}${typeOpt('Current Liabilities')}</optgroup>
+        ${a && (a.type==='Asset'||a.type==='Liability') ? `<optgroup label="Legacy">${typeOpt('Asset')}${typeOpt('Liability')}</optgroup>`:''}
       </select></div>
     </div>
     <div id="a-range-hint" class="hint" style="margin-top:-4px;"></div>
-    <div class="field"><label>Account name</label><input type="text" id="a-name" placeholder="e.g. Marketing"></div>
-    <div class="field"><label><input type="checkbox" id="a-isbank" style="width:auto; display:inline-block; margin-right:6px;"> This is a bank account</label></div>
-    <div class="field"><label><input type="checkbox" id="a-isfixed" style="width:auto; display:inline-block; margin-right:6px;"> This is a fixed-asset account (purchases prompt an asset-register entry)</label></div>
+    <div class="field"><label>Account name</label><input type="text" id="a-name" placeholder="e.g. Marketing" value="${a?escapeHtml(a.name||''):''}"></div>
+    <div class="field"><label><input type="checkbox" id="a-isbank" style="width:auto; display:inline-block; margin-right:6px;" ${a&&a.isBank?'checked':''} ${isSystem?'disabled':''}> This is a bank account</label></div>
+    <div class="field"><label><input type="checkbox" id="a-isfixed" style="width:auto; display:inline-block; margin-right:6px;" ${a&&a.isFixedAsset?'checked':''}> This is a fixed-asset account (purchases prompt an asset-register entry)</label></div>
+    ${isSystem? `<div class="hint" style="color:var(--gold);">This is a system account — only its name can be changed.</div>`:''}
+    ${(!isSystem && hasTxns)? `<div class="hint">This account has transactions. You can rename or recode it; changing its <strong>type</strong> will move its balance between the P&amp;L and the Balance Sheet, so only do that if it was set up under the wrong type.</div>`:''}
   `;
-  openModal('New account', body, [{label:'Create account', cls:'btn-primary', onclick:'submitAccountForm()'}]);
+  openModal(a?'Edit account':'New account', body, [
+    {label:'Cancel', cls:'btn-ghost', onclick:'closeModal()'},
+    {label:a?'Save changes':'Create account', cls:'btn-primary', onclick:'submitAccountForm()'}
+  ]);
   updateAccountRangeHint();
 }
 function updateAccountRangeHint(){
@@ -7171,28 +7236,42 @@ function updateAccountRangeHint(){
   if(codeEl && !codeEl.value){ codeEl.placeholder = 'e.g. '+(r.min+ (accountGroupOf(type)==='pl'?60:60)); }
 }
 function submitAccountForm(){
-  const code = document.getElementById('a-code').value.trim();
-  const type = document.getElementById('a-type').value;
+  const editing = ACCOUNT_EDIT_ID ? S.accounts.find(a=>a.id===ACCOUNT_EDIT_ID) : null;
+  const isSystem = !!(editing && editing.system);
   const name = document.getElementById('a-name').value.trim();
-  const isBank = document.getElementById('a-isbank').checked;
+  // system accounts: only the name is editable; keep everything else as-is
+  const code = isSystem ? editing.code : document.getElementById('a-code').value.trim();
+  const type = isSystem ? editing.type : document.getElementById('a-type').value;
+  const isBank = isSystem ? editing.isBank : document.getElementById('a-isbank').checked;
   const isFixedEl = document.getElementById('a-isfixed');
-  const isFixedAsset = isFixedEl ? isFixedEl.checked : false;
+  const isFixedAsset = isFixedEl ? isFixedEl.checked : (editing?editing.isFixedAsset:false);
   if(!code || !name){ showToast('Enter a code and name'); return; }
-  if(S.accounts.some(a=>a.code===code)){ showToast('That code is already used'); return; }
-  // enforce the number-range rule: P&L items 1000–4999, Balance Sheet items 5000–9999
-  if(!codeInRange(code, type)){
-    const r = accountRangeFor(type);
-    showToast(`${type} is a ${r.label} account — code must be ${r.min}–${r.max}`);
+  // duplicate code check (ignore the account being edited)
+  if(S.accounts.some(a=>a.code===code && a.id!==(editing?editing.id:null))){ showToast('That code is already used'); return; }
+  if(!isSystem){
+    // enforce the number-range rule: P&L items 1000–4999, Balance Sheet items 5000–9999
+    if(!codeInRange(code, type)){
+      const r = accountRangeFor(type);
+      showToast(`${type} is a ${r.label} account — code must be ${r.min}–${r.max}`);
+      return;
+    }
+    if(isBank && !isAssetType(type)){ showToast('A bank account must be an asset type (Current or Non-Current Assets)'); return; }
+    if(isFixedAsset && !isAssetType(type)){ showToast('Only asset accounts can be marked as fixed-asset accounts'); return; }
+  }
+  if(editing){
+    // warn if changing the type of an account that has transactions
+    if(!isSystem && type!==editing.type && S.journal.some(e=>e.lines.some(l=>l.accountId===editing.id))){
+      if(!confirm(`Change this account's type from “${editing.type}” to “${type}”?\n\nThis moves its balance between the P&L and the Balance Sheet. Only do this if the account was created under the wrong type.`)) return;
+    }
+    editing.name = name;
+    if(!isSystem){ editing.code = code; editing.type = type; editing.isBank = isBank; }
+    editing.isFixedAsset = isFixedAsset;
+    ACCOUNT_EDIT_ID = null;
+    closeModal(); showToast('Account updated'); saveState(true); navigate('accounts');
     return;
   }
-  // bank accounts must be a balance-sheet asset
-  if(isBank && !isAssetType(type)){
-    showToast('A bank account must be an asset type (Current or Non-Current Assets)');
-    return;
-  }
-  if(isFixedAsset && !isAssetType(type)){ showToast('Only asset accounts can be marked as fixed-asset accounts'); return; }
   S.accounts.push({id:uid('acc'), code, name, type, isBank, isFixedAsset});
-  closeModal(); showToast('Account created'); navigate('accounts');
+  closeModal(); showToast('Account created'); saveState(true); navigate('accounts');
 }
 function deleteAccount(id){
   const used = S.journal.some(e=>e.lines.some(l=>l.accountId===id));
