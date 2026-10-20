@@ -4556,7 +4556,7 @@ function obInitValues(){
   OB_VALUES = {};
   S.accounts.forEach(a=>{ const ex = obExistingOpeningFor(a.id); OB_VALUES[a.id] = { debit: ex.debit||0, credit: ex.credit||0 }; });
 }
-const OB_TYPE_ORDER = ['Non-Current Assets','Current Assets','Non-Current Liabilities','Current Liabilities','Equity','Income','Expense','Asset','Liability'];
+const OB_TYPE_ORDER = ['Income','Expense','Equity','Non-Current Assets','Current Assets','Non-Current Liabilities','Current Liabilities','Asset','Liability'];
 const OB_TYPE_LABEL = { 'Non-Current Assets':'Non-Current Assets','Current Assets':'Current Assets','Non-Current Liabilities':'Non-Current Liabilities','Current Liabilities':'Current Liabilities', Equity:'Equity', Income:'Income', Expense:'Expenses', Asset:'Assets (legacy)', Liability:'Liabilities (legacy)' };
 function renderOpeningBalances(){
   setTopbar('Opening Balances', 'Capture opening balances by account — debits and credits must balance', '');
@@ -4569,7 +4569,8 @@ function renderOpeningBalances(){
 
   const rowFor = a => {
     const v = OB_VALUES[a.id] || {debit:0, credit:0};
-    const locked = a.system && (a.id==='acc_equity' || a.id==='acc_ar' || a.id==='acc_ap' || a.id==='acc_vatr' || a.id==='acc_vatp' || a.id==='acc_sales' || a.id==='acc_share_capital');
+    // VAT Input/Output are unlocked so you can capture their opening balances on migration.
+    const locked = a.system && (a.id==='acc_equity' || a.id==='acc_ar' || a.id==='acc_ap' || a.id==='acc_sales' || a.id==='acc_share_capital');
     const sysNote = locked ? ` <span class="ob-sys">*System</span>` : '';
     const dis = locked ? 'disabled' : '';
     return `<tr>
@@ -4749,8 +4750,8 @@ function importOpeningBalancesFromRows(rows){
       }
       if(!acc){ if(codeKey||nameKey) unmatched.push(rawCode||rawName||''); continue; }
     }
-    // skip system/locked accounts
-    const locked = acc.system && ['acc_equity','acc_ar','acc_ap','acc_vatr','acc_vatp','acc_sales','acc_share_capital'].includes(acc.id);
+    // skip system/locked accounts (VAT Input/Output are allowed for opening balances)
+    const locked = acc.system && ['acc_equity','acc_ar','acc_ap','acc_sales','acc_share_capital'].includes(acc.id);
     if(locked) continue;
     // if we only had a signed Balance column, split it now using the account's type
     if(!haveDrCr && cBal>-1){
@@ -7986,7 +7987,7 @@ function renderTB(asOf){
   const grandC = round2(d.bsCredit + (netIsProfit?netAbs:0));
   const balanced = Math.abs(grandD-grandC)<0.01;
 
-  const acctRow = r => `<tr><td class="mono">${escapeHtml(r.a.code)}</td><td>${escapeHtml(r.a.name)}</td>
+  const acctRow = r => `<tr class="clickable" title="View general ledger entries for ${escapeHtml(r.a.code+' '+r.a.name)}" onclick="openGLForAccount('${r.a.id}')"><td class="mono">${escapeHtml(r.a.code)}</td><td>${escapeHtml(r.a.name)} <span style="color:var(--text-muted); font-size:11px;">→ GL</span></td>
     <td class="amt num">${r.debit?fmt(r.debit):''}</td><td class="amt num">${r.credit?fmt(r.credit):''}</td></tr>`;
 
   document.getElementById('report-body').innerHTML = `<div class="card">
@@ -8026,6 +8027,12 @@ function renderTB(asOf){
 /* ============================= GENERAL LEDGER ============================= */
 let GL_ACCOUNT = 'all';           // 'all' or an account id
 let GL_INCLUDE_OPENING = true;    // include opening-balance entries in the opening figure
+// Jump from the Trial Balance (or anywhere) straight into the General Ledger for one account.
+function openGLForAccount(accId){
+  GL_ACCOUNT = accId;
+  REPORT_TAB = 'gl';
+  navigate('rep-gl');
+}
 // Build ledger data for one account over [from,to]: opening balance + dated lines + running balance.
 function glAccountData(accId, from, to){
   const acct = S.accounts.find(a=>a.id===accId);
