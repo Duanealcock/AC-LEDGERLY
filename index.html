@@ -7221,6 +7221,7 @@ function openAccountForm(editId){
     <div class="field"><label>Account name</label><input type="text" id="a-name" placeholder="e.g. Marketing" value="${a?escapeHtml(a.name||''):''}"></div>
     <div class="field"><label><input type="checkbox" id="a-isbank" style="width:auto; display:inline-block; margin-right:6px;" ${a&&a.isBank?'checked':''} ${isSystem?'disabled':''}> This is a bank account</label></div>
     <div class="field"><label><input type="checkbox" id="a-isfixed" style="width:auto; display:inline-block; margin-right:6px;" ${a&&a.isFixedAsset?'checked':''}> This is a fixed-asset account (purchases prompt an asset-register entry)</label></div>
+    <div class="field" id="a-exclturnover-wrap" style="${(a&&a.type==='Income')||(!a)?'':'display:none;'}"><label><input type="checkbox" id="a-exclturnover" style="width:auto; display:inline-block; margin-right:6px;" ${a&&a.excludeFromTurnover?'checked':''}> Exclude from turnover (e.g. loan account, interest — won't count as sales in the VAT recon)</label></div>
     ${isSystem? `<div class="hint" style="color:var(--gold);">This is a system account — only its name can be changed.</div>`:''}
     ${(!isSystem && hasTxns)? `<div class="hint">This account has transactions. You can rename or recode it; changing its <strong>type</strong> will move its balance between the P&amp;L and the Balance Sheet, so only do that if it was set up under the wrong type.</div>`:''}
   `;
@@ -7235,6 +7236,9 @@ function updateAccountRangeHint(){
   const r = accountRangeFor(type);
   const hint = document.getElementById('a-range-hint');
   if(hint) hint.innerHTML = `<strong>${type}</strong> is a <strong>${r.label}</strong> account — its code must be between <strong>${r.min}</strong> and <strong>${r.max}</strong>.`;
+  // show the "exclude from turnover" option only for Income accounts
+  const exWrap = document.getElementById('a-exclturnover-wrap');
+  if(exWrap) exWrap.style.display = (type==='Income') ? '' : 'none';
   // suggest a code in-range if the field is empty
   const codeEl = document.getElementById('a-code');
   if(codeEl && !codeEl.value){ codeEl.placeholder = 'e.g. '+(r.min+ (accountGroupOf(type)==='pl'?60:60)); }
@@ -7249,6 +7253,9 @@ function submitAccountForm(){
   const isBank = isSystem ? editing.isBank : document.getElementById('a-isbank').checked;
   const isFixedEl = document.getElementById('a-isfixed');
   const isFixedAsset = isFixedEl ? isFixedEl.checked : (editing?editing.isFixedAsset:false);
+  const exclEl = document.getElementById('a-exclturnover');
+  // only meaningful for Income accounts
+  const excludeFromTurnover = (type==='Income') ? (exclEl ? exclEl.checked : (editing?!!editing.excludeFromTurnover:false)) : false;
   if(!code || !name){ showToast('Enter a code and name'); return; }
   // duplicate code check (ignore the account being edited)
   if(S.accounts.some(a=>a.code===code && a.id!==(editing?editing.id:null))){ showToast('That code is already used'); return; }
@@ -7270,11 +7277,12 @@ function submitAccountForm(){
     editing.name = name;
     if(!isSystem){ editing.code = code; editing.type = type; editing.isBank = isBank; }
     editing.isFixedAsset = isFixedAsset;
+    editing.excludeFromTurnover = excludeFromTurnover;
     ACCOUNT_EDIT_ID = null;
     closeModal(); showToast('Account updated'); saveState(true); navigate('accounts');
     return;
   }
-  S.accounts.push({id:uid('acc'), code, name, type, isBank, isFixedAsset});
+  S.accounts.push({id:uid('acc'), code, name, type, isBank, isFixedAsset, excludeFromTurnover});
   closeModal(); showToast('Account created'); saveState(true); navigate('accounts');
 }
 function deleteAccount(id){
@@ -7426,8 +7434,10 @@ function renderVatRecon(){
 
   // ---- Reconciliation block ----
   // Sales per Income Statement (all Income accounts) over the FY
-  const salesIS = round2(S.accounts.filter(a=>a.type==='Income')
-    .reduce((s,a)=>s+periodMovement(a.id, b.from, b.to), 0));
+  const turnoverIncome = S.accounts.filter(a=>a.type==='Income' && !a.excludeFromTurnover);
+  const excludedIncome = S.accounts.filter(a=>a.type==='Income' && a.excludeFromTurnover);
+  const salesIS = round2(turnoverIncome.reduce((s,a)=>s+periodMovement(a.id, b.from, b.to), 0));
+  const excludedTotal = round2(excludedIncome.reduce((s,a)=>s+periodMovement(a.id, b.from, b.to), 0));
   const salesExZero = round2(salesIS - tZero);
   // Reasonability: taxable turnover per VAT (tNett) should ≈ sales per IS less zero-rated
   const salesDiff = round2(tNett - salesExZero);
@@ -7520,7 +7530,8 @@ function renderVatRecon(){
 
       <div class="card-body" style="border-top:1px solid var(--border);">
         <div style="max-width:560px; margin-left:auto;">
-          <div class="report-row"><span>Sales as per Income Statement</span><span class="num">${fmt(salesIS)}</span></div>
+          <div class="report-row"><span>Sales as per Income Statement <span style="font-size:11px; color:var(--text-muted);">(turnover only)</span></span><span class="num">${fmt(salesIS)}</span></div>
+          ${excludedIncome.length? `<div class="report-row" style="font-size:12px; color:var(--text-muted);"><span>Excluded from turnover: ${excludedIncome.map(a=>escapeHtml(a.name)).join(', ')}</span><span class="num">${fmt(excludedTotal)}</span></div>`:''}
           <div class="report-row"><span>Less Zero Rated Sales</span><span class="num">${fmt(tZero)}</span></div>
           <div class="report-row total" style="border-top:1px solid var(--border);"><span>Taxable sales per IS</span><span class="num" style="color:var(--money-pos);">${fmt(salesExZero)}</span></div>
           <div class="report-row"><span>Taxable turnover per VAT recon</span><span class="num">${fmt(tNett)}</span></div>
@@ -7640,7 +7651,12 @@ function computeVatReconModel(fy){
   });
   tGross=round2(tGross); tOutVat=round2(tOutVat); tZero=round2(tZero); tNett=round2(tNett); tInVat=round2(tInVat);
   const tDiff = round2(tOutVat - tInVat);
-  const salesIS = round2(S.accounts.filter(a=>a.type==='Income').reduce((s,a)=>s+periodMovement(a.id,b.from,b.to),0));
+  // Sales per IS = Income accounts, EXCLUDING any flagged as not-turnover (e.g. a loan
+  // account's interest, capital contributions) so the reasonability check compares like with like.
+  const turnoverIncome = S.accounts.filter(a=>a.type==='Income' && !a.excludeFromTurnover);
+  const excludedIncome = S.accounts.filter(a=>a.type==='Income' && a.excludeFromTurnover);
+  const salesIS = round2(turnoverIncome.reduce((s,a)=>s+periodMovement(a.id,b.from,b.to),0));
+  const excludedTotal = round2(excludedIncome.reduce((s,a)=>s+periodMovement(a.id,b.from,b.to),0));
   const salesExZero = round2(salesIS - tZero);
   const salesDiff = round2(tNett - salesExZero);
   const vatp = periodMovement('acc_vatp','0000-01-01',b.to);
@@ -7650,7 +7666,7 @@ function computeVatReconModel(fy){
   const adjustments = vatReconAdjList(fy).slice();
   const residual = round2(controlDiff - vatReconAdjTotal(fy));
   const notes = vatReconNotesList(fy).slice();
-  return { fy, b, rows, tGross, tOutVat, tZero, tNett, tInVat, tDiff, salesIS, salesExZero, salesDiff, vatControlTB, controlDiff, adjustments, residual, notes };
+  return { fy, b, rows, tGross, tOutVat, tZero, tNett, tInVat, tDiff, salesIS, salesExZero, salesDiff, excludedTotal, excludedIncome, vatControlTB, controlDiff, adjustments, residual, notes };
 }
 // Full landscape, one-page VAT Reasonability printout with letterhead.
 function printVatRecon(){
