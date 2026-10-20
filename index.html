@@ -8356,14 +8356,25 @@ function renderVatReport(){
       </tr>
     </tbody></table>`;
   } else {
-    // opener form
+    // opener form — pick the SARS category and the dates auto-fill
+    const curCat = (S.settings && S.settings.vatCategory) || 'A';
     html += `<div class="card-body">
-      <p style="color:var(--text-muted); font-size:13px; margin:0 0 12px;">No VAT period is currently open. Choose the period dates and open one to start tracking this return.</p>
-      <div class="field-row" style="align-items:flex-end;">
-        <div class="field"><label>Period start</label><input type="date" id="vat-from" value="${sugFrom}"></div>
+      <p style="color:var(--text-muted); font-size:13px; margin:0 0 12px;">No VAT period is currently open. Choose your SARS VAT category and the start date — the period end fills in automatically. Open it to start tracking this return.</p>
+      <div class="field-row" style="align-items:flex-end; flex-wrap:wrap;">
+        <div class="field" style="min-width:300px;"><label>SARS VAT category</label>
+          <select id="vat-cat" onchange="vatCatChanged()">
+            <option value="A" ${curCat==='A'?'selected':''}>Category A — bi-monthly (ends Jan/Mar/May/Jul/Sep/Nov)</option>
+            <option value="B" ${curCat==='B'?'selected':''}>Category B — bi-monthly (ends Feb/Apr/Jun/Aug/Oct/Dec)</option>
+            <option value="C" ${curCat==='C'?'selected':''}>Category C — monthly</option>
+            <option value="D" ${curCat==='D'?'selected':''}>Category D — every 6 months (farming)</option>
+            <option value="E" ${curCat==='E'?'selected':''}>Category E — annually</option>
+          </select>
+        </div>
+        <div class="field"><label>Period start</label><input type="date" id="vat-from" value="${sugFrom}" onchange="vatCatChanged()"></div>
         <div class="field"><label>Period end</label><input type="date" id="vat-to" value="${sugTo}"></div>
         <div class="field" style="flex:0 0 auto;"><button class="btn btn-primary" onclick="openVatPeriod()">Open VAT Period</button></div>
       </div>
+      <div class="hint" id="vat-cat-hint" style="margin:6px 0 0;"></div>
     </div>`;
   }
   html += `</div>`;
@@ -8395,20 +8406,54 @@ function renderVatReport(){
   html += `</div>`;
 
   body.innerHTML = html;
+  // initialise the opener form's end date + hint for the current category
+  if(document.getElementById('vat-cat')){ try{ vatCatChanged(); }catch(e){} }
 }
 
+// Number of months in a SARS VAT category's period.
+function vatCatMonths(cat){ return cat==='C'?1 : cat==='D'?6 : cat==='E'?12 : 2; }
+const VAT_CAT_HINTS = {
+  A:'Bi-monthly return. Returns & payment are due by the 25th of the month after the period end.',
+  B:'Bi-monthly return. Returns & payment are due by the 25th of the month after the period end.',
+  C:'Monthly return (turnover over R30m, or by election). Due by the 25th of the following month.',
+  D:'Six-monthly return (farming / qualifying small-scale). Periods typically end Feb and Aug.',
+  E:'Annual return (e.g. letting/administration to connected persons). One 12-month period a year.',
+};
+// When the category or start date changes on the opener form, fill in the period end.
+function vatCatChanged(){
+  const catEl = document.getElementById('vat-cat');
+  const fromEl = document.getElementById('vat-from');
+  const toEl = document.getElementById('vat-to');
+  const hintEl = document.getElementById('vat-cat-hint');
+  if(!catEl || !fromEl || !toEl) return;
+  const cat = catEl.value;
+  const from = fromEl.value;
+  if(from){
+    const months = vatCatMonths(cat);
+    const d = new Date(from+'T00:00:00');
+    d.setMonth(d.getMonth()+months);  // first day of the month after the period
+    d.setDate(0);                     // -> last day of the period's final month
+    const pad = n=>String(n).padStart(2,'0');
+    toEl.value = `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())}`;
+  }
+  if(hintEl) hintEl.textContent = VAT_CAT_HINTS[cat] || '';
+}
 function openVatPeriod(){
   const from = document.getElementById('vat-from').value;
   const to = document.getElementById('vat-to').value;
+  const catEl = document.getElementById('vat-cat');
+  const cat = catEl ? catEl.value : ((S.settings&&S.settings.vatCategory)||'A');
   if(!from || !to){ showToast('Choose both period dates'); return; }
   if(from > to){ showToast('Start date must be before end date'); return; }
   if((S.vatPeriods||[]).some(p=>p.status==='open')){ showToast('Close the current open period first'); return; }
   // warn on overlap with an existing period
   const overlap = (S.vatPeriods||[]).some(p=> from <= p.to && to >= p.from);
   if(overlap && !confirm('This overlaps an existing VAT period. Open it anyway?')) return;
+  // remember the category as the company's default
+  S.settings = S.settings || {}; S.settings.vatCategory = cat;
   S.vatPeriods = S.vatPeriods || [];
-  S.vatPeriods.push({ id:uid('vat'), from, to, status:'open', openedAt:todayStr() });
-  showToast('VAT period opened');
+  S.vatPeriods.push({ id:uid('vat'), from, to, status:'open', category:cat, openedAt:todayStr() });
+  showToast('VAT period opened ('+cat+')');
   saveState(true);
   renderReports();
 }
