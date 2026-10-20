@@ -7218,32 +7218,94 @@ function vatReconFyLabel(){
   // use the active FY if set, else the FY containing today
   return (typeof ACTIVE_FY!=='undefined' && ACTIVE_FY!=null) ? ACTIVE_FY : currentFyLabel();
 }
-function vatReconMonths(fy){
-  // 12 month windows across the financial year
+// VAT registration category decides how months are grouped into return periods:
+//  A = bi-monthly ending in ODD months (Jan,Mar,May,Jul,Sep,Nov)
+//  B = bi-monthly ending in EVEN months (Feb,Apr,Jun,Aug,Oct,Dec)
+//  C = monthly
+function vatReconCategory(){
+  const c = (S.settings && S.settings.vatCategory) || 'A';
+  return ['A','B','C'].includes(c) ? c : 'A';
+}
+function setVatReconCategory(c){
+  S.settings = S.settings || {};
+  S.settings.vatCategory = ['A','B','C'].includes(c) ? c : 'A';
+  saveState(true);
+  renderVatRecon();
+}
+const VAT_CAT_LABEL = {
+  A: 'Category A — bi-monthly (ends Jan/Mar/May/Jul/Sep/Nov)',
+  B: 'Category B — bi-monthly (ends Feb/Apr/Jun/Aug/Oct/Dec)',
+  C: 'Category C — monthly',
+};
+// Build the return-period windows for the FY, grouped per the registration category.
+function vatReconPeriods(fy){
   const b = fyBounds(fy);
-  const out = [];
+  // first collect the 12 calendar months of the FY
+  const mlist = [];
   let d = new Date(b.from+'T00:00:00');
   for(let i=0;i<12;i++){
     const y=d.getFullYear(), m=d.getMonth();
+    mlist.push({ y, m });
+    d.setMonth(d.getMonth()+1);
+  }
+  const monthWin = (y,m)=>{
     const from = `${y}-${String(m+1).padStart(2,'0')}-01`;
     const lastDay = new Date(y, m+1, 0).getDate();
     const to = `${y}-${String(m+1).padStart(2,'0')}-${String(lastDay).padStart(2,'0')}`;
-    out.push({ from, to, label: d.toLocaleString('en-ZA',{month:'short'})+'-'+String(y).slice(2) });
-    d.setMonth(d.getMonth()+1);
+    const label = new Date(y,m,1).toLocaleString('en-ZA',{month:'short'})+'-'+String(y).slice(2);
+    return { from, to, label, y, m };
+  };
+  const cat = vatReconCategory();
+  if(cat==='C'){
+    return mlist.map(x=>monthWin(x.y,x.m));
   }
+  // bi-monthly: a period ENDS on an odd month (cat A) or even month (cat B).
+  // JS months are 0-based, so human month = m+1. Odd end = (m+1)%2===1.
+  const endsHere = (m)=> cat==='A' ? ((m+1)%2===1) : ((m+1)%2===0);
+  const out = [];
+  let pending = null; // the first month of a bi-monthly pair
+  mlist.forEach(x=>{
+    const w = monthWin(x.y, x.m);
+    if(endsHere(x.m)){
+      if(pending){
+        // close a 2-month period: pending -> this month
+        out.push({ from: pending.from, to: w.to, label: pending.label+' – '+w.label, y:w.y, m:w.m });
+        pending = null;
+      } else {
+        // a standalone ending month (period is just this one month — happens at FY edges)
+        out.push({ from: w.from, to: w.to, label: w.label, y:w.y, m:w.m });
+      }
+    } else {
+      // opening month of a pair
+      if(pending){
+        // two non-ending months in a row (edge case) — flush the first as its own
+        out.push({ from: pending.from, to: pending.to, label: pending.label, y:pending.y, m:pending.m });
+      }
+      pending = w;
+    }
+  });
+  if(pending){ out.push({ from: pending.from, to: pending.to, label: pending.label, y:pending.y, m:pending.m }); }
   return out;
+}
+// The SARS e-filing due date for a period: the 25th of the month FOLLOWING the period end.
+function vatReconDueDate(toIso){
+  const d = new Date(toIso+'T00:00:00');
+  // move to the 25th of the next month
+  const due = new Date(d.getFullYear(), d.getMonth()+1, 25);
+  return due.toLocaleDateString('en-ZA',{day:'2-digit', month:'short', year:'numeric'});
 }
 function renderVatRecon(){
   setTopbar('VAT Recon', 'VAT reasonability — monthly output/input vs the income statement & VAT control', '');
   const biz = S.settings||{};
   const fy = vatReconFyLabel();
   const b = fyBounds(fy);
-  const months = vatReconMonths(fy);
+  const cat = vatReconCategory();
+  const months = vatReconPeriods(fy);
 
   // Zero-rated output VAT type id(s)
   const isZero = tId => tId==='zero';
 
-  // Per-month figures from the VAT breakdown
+  // Per-period figures from the VAT breakdown
   let tGross=0, tOutVat=0, tZero=0, tNett=0, tInVat=0;
   const rows = months.map(mo=>{
     const bd = computeVatBreakdown(mo.from, mo.to);
@@ -7263,6 +7325,7 @@ function renderVatRecon(){
     tGross+=gross; tOutVat+=outVat; tZero+=zero; tNett+=nett; tInVat+=inVat;
     const dash = v => v===0 ? '<span style="color:var(--text-muted);">-</span>' : fmt(v);
     const diffCls = diff>0?'neg':(diff<0?'pos':'');
+    const hasActivity = (gross||outVat||zero||nett||inVat);
     return `<tr>
       <td>${mo.label}</td>
       <td class="amt num">${dash(gross)}</td>
@@ -7271,6 +7334,7 @@ function renderVatRecon(){
       <td class="amt num">${dash(nett)}</td>
       <td class="amt num">${dash(inVat)}</td>
       <td class="amt num ${diffCls}">${dash(round2(outVat-inVat))}</td>
+      <td style="font-size:12px; color:var(--text-muted); white-space:nowrap;">${hasActivity? vatReconDueDate(mo.to) : '<span style="color:var(--text-muted);">-</span>'}</td>
     </tr>`;
   }).join('');
   tGross=round2(tGross); tOutVat=round2(tOutVat); tZero=round2(tZero); tNett=round2(tNett); tInVat=round2(tInVat);
@@ -7312,24 +7376,35 @@ function renderVatRecon(){
     </div>`).join('');
 
   document.getElementById('content').innerHTML = `
-    <div class="card" style="margin-bottom:14px;"><div class="card-body" style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:10px;">
+    <div class="card" style="margin-bottom:14px;"><div class="card-body" style="display:flex; justify-content:space-between; align-items:flex-end; flex-wrap:wrap; gap:14px;">
       <div>
         <strong>VAT Reasonability — FY${fy}</strong>
         <div class="hint" style="margin:2px 0 0;">${fmtDateShort(b.from)} – ${fmtDateShort(b.to)} · auto-populated from invoices, bills, cashbook, the income statement and the VAT control account. Switch the year in the top bar.</div>
       </div>
-      <button class="btn btn-ghost btn-sm" onclick="printVatRecon()">⎙ Print</button>
+      <div style="display:flex; align-items:flex-end; gap:12px; flex-wrap:wrap;">
+        <div class="field" style="margin:0; min-width:260px;">
+          <label style="font-size:11px;">Registered VAT period</label>
+          <select onchange="setVatReconCategory(this.value)">
+            <option value="A" ${cat==='A'?'selected':''}>${VAT_CAT_LABEL.A}</option>
+            <option value="B" ${cat==='B'?'selected':''}>${VAT_CAT_LABEL.B}</option>
+            <option value="C" ${cat==='C'?'selected':''}>${VAT_CAT_LABEL.C}</option>
+          </select>
+        </div>
+        <button class="btn btn-ghost btn-sm" onclick="printVatRecon()">⎙ Print</button>
+      </div>
     </div></div>
 
     <div class="card">
       <div style="overflow-x:auto;"><table>
         <thead><tr>
-          <th>Month</th>
+          <th>${cat==='C'?'Month':'Period'}</th>
           <th class="amt">Gross Turnover</th>
           <th class="amt">Output VAT</th>
           <th class="amt">Zero Rated</th>
           <th class="amt">Nett Turnover</th>
           <th class="amt">Input VAT</th>
           <th class="amt">Difference</th>
+          <th>Return due</th>
         </tr></thead>
         <tbody>${rows}</tbody>
         <tfoot>
@@ -7341,9 +7416,13 @@ function renderVatRecon(){
             <td class="amt num"><strong>${fmt(tNett)}</strong></td>
             <td class="amt num"><strong>${fmt(tInVat)}</strong></td>
             <td class="amt num ${signCls(tDiff)}"><strong>${fmt(tDiff)}</strong></td>
+            <td></td>
           </tr>
         </tfoot>
       </table></div>
+      <div class="card-body" style="border-top:1px solid var(--border); padding-top:10px;">
+        <div class="hint" style="margin:0;">💡 <strong>Return due date:</strong> VAT201 returns and payment are due by the <strong>25th of the month following</strong> each period end (eFiling). The "Return due" column shows this per period.</div>
+      </div>
 
       <div class="card-body" style="border-top:1px solid var(--border);">
         <div style="max-width:560px; margin-left:auto;">
