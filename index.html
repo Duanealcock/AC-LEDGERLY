@@ -7248,12 +7248,13 @@ function vatReconPeriods(fy){
     mlist.push({ y, m });
     d.setMonth(d.getMonth()+1);
   }
+  // period label = the SARS tax-period code YYYYMM of the period's END month
+  const ymLabel = (y,m)=> `${y}${String(m+1).padStart(2,'0')}`;
   const monthWin = (y,m)=>{
     const from = `${y}-${String(m+1).padStart(2,'0')}-01`;
     const lastDay = new Date(y, m+1, 0).getDate();
     const to = `${y}-${String(m+1).padStart(2,'0')}-${String(lastDay).padStart(2,'0')}`;
-    const label = new Date(y,m,1).toLocaleString('en-ZA',{month:'short'})+'-'+String(y).slice(2);
-    return { from, to, label, y, m };
+    return { from, to, label: ymLabel(y,m), y, m };
   };
   const cat = vatReconCategory();
   if(cat==='C'){
@@ -7268,23 +7269,23 @@ function vatReconPeriods(fy){
     const w = monthWin(x.y, x.m);
     if(endsHere(x.m)){
       if(pending){
-        // close a 2-month period: pending -> this month
-        out.push({ from: pending.from, to: w.to, label: pending.label+' – '+w.label, y:w.y, m:w.m });
+        // close a 2-month period: label = END month code (SARS tax period)
+        out.push({ from: pending.from, to: w.to, label: ymLabel(w.y,w.m), y:w.y, m:w.m });
         pending = null;
       } else {
         // a standalone ending month (period is just this one month — happens at FY edges)
-        out.push({ from: w.from, to: w.to, label: w.label, y:w.y, m:w.m });
+        out.push({ from: w.from, to: w.to, label: ymLabel(w.y,w.m), y:w.y, m:w.m });
       }
     } else {
       // opening month of a pair
       if(pending){
         // two non-ending months in a row (edge case) — flush the first as its own
-        out.push({ from: pending.from, to: pending.to, label: pending.label, y:pending.y, m:pending.m });
+        out.push({ from: pending.from, to: pending.to, label: ymLabel(pending.y,pending.m), y:pending.y, m:pending.m });
       }
       pending = w;
     }
   });
-  if(pending){ out.push({ from: pending.from, to: pending.to, label: pending.label, y:pending.y, m:pending.m }); }
+  if(pending){ out.push({ from: pending.from, to: pending.to, label: ymLabel(pending.y,pending.m), y:pending.y, m:pending.m }); }
   return out;
 }
 // The SARS e-filing due date for a period: the 25th of the month FOLLOWING the period end.
@@ -7493,9 +7494,163 @@ function renderVatReconResidual(){
   el.className = 'num '+cls;
   el.innerHTML = fmt(residual)+(Math.abs(residual)<0.005?' <span style="color:var(--money-pos); font-weight:700;">✓</span>':'');
 }
+// Build the data model for the VAT recon (used by both screen and print).
+function computeVatReconModel(fy){
+  const b = fyBounds(fy);
+  const periods = vatReconPeriods(fy);
+  const isZero = tId => tId==='zero';
+  let tGross=0, tOutVat=0, tZero=0, tNett=0, tInVat=0;
+  const rows = periods.map(mo=>{
+    const bd = computeVatBreakdown(mo.from, mo.to);
+    let taxableNet=0, zeroNet=0, outVat=0;
+    Object.keys(bd.output).forEach(tId=>{ const e=bd.output[tId]; if(isZero(tId)) zeroNet+=e.net; else taxableNet+=e.net; outVat+=e.vat; });
+    const nett=round2(taxableNet), zero=round2(zeroNet), gross=round2(nett+outVat+zero), inVat=round2(bd.inputTotals.vat);
+    const diff=round2(outVat-inVat);
+    const hasActivity = !!(gross||outVat||zero||nett||inVat);
+    tGross+=gross; tOutVat+=outVat; tZero+=zero; tNett+=nett; tInVat+=inVat;
+    return { label:mo.label, from:mo.from, to:mo.to, gross, outVat:round2(outVat), zero, nett, inVat, diff, hasActivity, due: hasActivity? vatReconDueDate(mo.to):'' };
+  });
+  tGross=round2(tGross); tOutVat=round2(tOutVat); tZero=round2(tZero); tNett=round2(tNett); tInVat=round2(tInVat);
+  const tDiff = round2(tOutVat - tInVat);
+  const salesIS = round2(S.accounts.filter(a=>a.type==='Income').reduce((s,a)=>s+periodMovement(a.id,b.from,b.to),0));
+  const salesExZero = round2(salesIS - tZero);
+  const salesDiff = round2(tNett - salesExZero);
+  const vatp = periodMovement('acc_vatp','0000-01-01',b.to);
+  const vatr = periodMovement('acc_vatr','0000-01-01',b.to);
+  const vatControlTB = round2(vatp - vatr);
+  const controlDiff = round2(tDiff - vatControlTB);
+  const adjustments = vatReconAdjList(fy).slice();
+  const residual = round2(controlDiff - vatReconAdjTotal(fy));
+  return { fy, b, rows, tGross, tOutVat, tZero, tNett, tInVat, tDiff, salesIS, salesExZero, salesDiff, vatControlTB, controlDiff, adjustments, residual };
+}
+// Full landscape, one-page VAT Reasonability printout with letterhead.
 function printVatRecon(){
-  // simplest reliable print: print the current page section
-  window.print();
+  const s = S.settings||{};
+  const fy = vatReconFyLabel();
+  const m = computeVatReconModel(fy);
+  const money = n => fmt(n);
+  const dash = v => (v===0||v==null) ? '-' : fmt(v);
+  const logo = s.invoiceLogoDataUrl ? `<img src="${s.invoiceLogoDataUrl}" style="max-height:70px; max-width:240px; object-fit:contain;">` : '';
+  const headerLines = (s.reportHeader||'').split('\n').map(l=>escapeHtml(l.trim())).filter(Boolean);
+  const footer = escapeHtml(s.reportFooter||'');
+  const preparedBy = escapeHtml(s.reportPreparedBy||'');
+  const payableWord = m.tDiff>=0 ? 'Payable' : 'Refundable';
+  const catLabel = { A:'Category A — bi-monthly (odd)', B:'Category B — bi-monthly (even)', C:'Category C — monthly' }[vatReconCategory()];
+
+  const rowHtml = m.rows.map(r=>{
+    const diffCol = r.diff>0 ? '#c0392b' : (r.diff<0 ? '#1e8449' : '#111');
+    return `<tr>
+      <td class="lbl">${r.label}</td>
+      <td class="r">${dash(r.gross)}</td>
+      <td class="r">${dash(r.outVat)}</td>
+      <td class="r">${dash(r.zero)}</td>
+      <td class="r">${dash(r.nett)}</td>
+      <td class="r">${dash(r.inVat)}</td>
+      <td class="r" style="color:${diffCol};">${dash(r.diff)}</td>
+      <td class="r due">${r.hasActivity? r.due : '-'}</td>
+    </tr>`;
+  }).join('');
+
+  const adjHtml = m.adjustments.filter(a=>a.desc||a.amount).map(a=>`
+    <tr><td>${escapeHtml(a.desc||'(no description)')}</td><td class="r">${money(a.amount||0)}</td></tr>`).join('');
+
+  const salesDiffCol = Math.abs(m.salesDiff)<0.005 ? '#1e8449' : '#c0392b';
+  const residCol = Math.abs(m.residual)<0.005 ? '#1e8449' : '#c0392b';
+  const netCol = m.tDiff>=0 ? '#c0392b' : '#1e8449';
+
+  const win = window.open('', '_blank');
+  win.document.write(`<!DOCTYPE html><html><head><meta charset="utf-8"><title>VAT Reasonability — ${escapeHtml(s.businessName||'Company')} FY${fy}</title>
+  <style>
+    @page { size: A4 landscape; margin: 10mm; }
+    * { box-sizing:border-box; }
+    body { font-family: Arial, Helvetica, sans-serif; color:#111; font-size:10px; margin:0; -webkit-print-color-adjust:exact; print-color-adjust:exact; }
+    .sheet { width:277mm; }
+    .top { display:flex; justify-content:space-between; align-items:flex-start; border-bottom:2px solid #0B0F1D; padding-bottom:8px; margin-bottom:8px; }
+    .top .hdr { text-align:right; font-size:10px; line-height:1.4; }
+    .top .hdr .nm { font-size:13px; font-weight:800; letter-spacing:.5px; }
+    .meta { display:flex; gap:26px; font-size:10px; margin-bottom:8px; }
+    .meta div span { color:#666; display:inline-block; min-width:78px; }
+    .obj { background:#d4a53a; color:#1b1b1b; font-weight:700; padding:3px 8px; display:inline-block; font-size:10px; margin-bottom:4px; }
+    .objtext { font-size:10px; margin-bottom:10px; }
+    table { border-collapse:collapse; width:100%; }
+    th, td { padding:3px 7px; }
+    thead th { background:#c99a2e; color:#1b1b1b; font-size:9.5px; text-transform:uppercase; letter-spacing:.3px; text-align:right; border:1px solid #b5891f; }
+    thead th:first-child { text-align:left; }
+    tbody td { border-bottom:1px solid #e3e3e3; }
+    td.r { text-align:right; font-variant-numeric:tabular-nums; }
+    td.lbl { font-weight:600; }
+    td.due { color:#666; }
+    tfoot td { border-top:2px solid #0B0F1D; font-weight:800; text-align:right; }
+    tfoot td:first-child { text-align:left; }
+    .recon { display:flex; gap:30px; margin-top:12px; }
+    .recon table { width:auto; }
+    .recon td { border:none; padding:2px 6px; }
+    .recon .k { color:#333; } .recon .v { text-align:right; font-weight:600; min-width:120px; }
+    .recon .tot td { border-top:1px solid #111; font-weight:800; }
+    .foot { margin-top:14px; border-top:1px solid #bbb; padding-top:6px; color:#777; font-size:9px; display:flex; justify-content:space-between; }
+    .noprint { margin-top:12px; }
+    @media print { .noprint { display:none; } }
+  </style></head><body>
+  <div class="sheet">
+    <div class="top">
+      <div>${logo}</div>
+      <div class="hdr">
+        ${headerLines.length? `<div class="nm">${headerLines[0]}</div>${headerLines.slice(1).map(l=>`<div>${l}</div>`).join('')}`
+          : `<div class="nm">${escapeHtml(s.businessName||'Company')}</div>${s.businessVatNo?`<div>VAT No. ${escapeHtml(s.businessVatNo)}</div>`:''}`}
+      </div>
+    </div>
+
+    <div class="meta">
+      <div><span>Client</span><strong>${escapeHtml(s.businessName||'Company')}</strong></div>
+      <div><span>Year End</span><strong>${fmtDate(m.b.to)}</strong></div>
+      <div><span>Description</span><strong>VAT Reasonability</strong></div>
+      <div><span>Prepared By</span><strong>${preparedBy||'—'}</strong></div>
+      <div><span>Date</span><strong>${fmtDate(todayStr())}</strong></div>
+    </div>
+
+    <div class="obj">Objective</div>
+    <div class="objtext">To test the reasonability of VAT calculations. Registered period: ${catLabel}.</div>
+
+    <table>
+      <thead><tr>
+        <th>Period</th><th>Gross Turnover</th><th>Output VAT</th><th>Zero Rated</th>
+        <th>Nett Turnover</th><th>Input VAT</th><th>Difference</th><th>Return Due</th>
+      </tr></thead>
+      <tbody>${rowHtml}</tbody>
+      <tfoot><tr>
+        <td>Total</td>
+        <td>${money(m.tGross)}</td><td>${money(m.tOutVat)}</td><td>${money(m.tZero)}</td>
+        <td>${money(m.tNett)}</td><td>${money(m.tInVat)}</td>
+        <td style="color:${netCol};">${money(m.tDiff)}</td><td></td>
+      </tr></tfoot>
+    </table>
+
+    <div class="recon">
+      <table>
+        <tr><td class="k">Sales as per Income Statement</td><td class="v">${money(m.salesIS)}</td></tr>
+        <tr><td class="k">Less Zero Rated Sales</td><td class="v">${money(m.tZero)}</td></tr>
+        <tr class="tot"><td class="k">Taxable sales per IS</td><td class="v" style="color:#1e8449;">${money(m.salesExZero)}</td></tr>
+        <tr><td class="k">Taxable turnover per VAT recon</td><td class="v">${money(m.tNett)}</td></tr>
+        <tr class="tot"><td class="k">Difference</td><td class="v" style="color:${salesDiffCol};">${money(m.salesDiff)}</td></tr>
+      </table>
+      <table>
+        <tr><td class="k">Net VAT per recon (Output − Input)</td><td class="v" style="color:${netCol};">${money(m.tDiff)} ${payableWord}</td></tr>
+        <tr><td class="k">VAT Control account as per TB</td><td class="v">${money(m.vatControlTB)}</td></tr>
+        <tr><td class="k">Difference before adjustments</td><td class="v">${money(m.controlDiff)}</td></tr>
+        ${adjHtml}
+        <tr class="tot"><td class="k">Difference remaining</td><td class="v" style="color:${residCol};">${money(m.residual)}</td></tr>
+      </table>
+    </div>
+
+    <div class="foot">
+      <div>${footer || (escapeHtml(s.businessName||'Company')+' · Generated by RECONI')}</div>
+      <div>${fmtDate(todayStr())}</div>
+    </div>
+
+    <div class="noprint"><button onclick="window.print()" style="padding:8px 16px; font-size:13px; cursor:pointer;">Print / Save as PDF</button></div>
+  </div></body></html>`);
+  win.document.close();
+  setTimeout(()=>{ try{ win.focus(); win.print(); }catch(e){} }, 350);
 }
 let REPORT_TAB = 'pl';
 function renderReports(){
@@ -7537,15 +7692,17 @@ function plReportModel(){
   const from = window._rFrom, to = window._rTo;
   const income = S.accounts.filter(a=>a.type==='Income');
   const expense = S.accounts.filter(a=>a.type==='Expense');
-  const incTotal = income.reduce((s,a)=>s+periodMovement(a.id,from,to),0);
-  const expTotal = expense.reduce((s,a)=>s+periodMovement(a.id,from,to),0);
+  // Same balance source as the Trial Balance so the exported P&L ties to the TB.
+  const plVal = a => getAccountBalance(a.id, to);
+  const incTotal = income.reduce((s,a)=>s+plVal(a),0);
+  const expTotal = expense.reduce((s,a)=>s+plVal(a),0);
   const rows = [], rowClasses = [];
   const push = (label,val,cls)=>{ rows.push([label, val==null?'':val]); rowClasses.push(cls||''); };
   push('INCOME','','section');
-  income.forEach(a=> push(a.name, round2(periodMovement(a.id,from,to))));
+  income.forEach(a=> push(a.name, round2(plVal(a))));
   push('Total income', round2(incTotal), 'total');
   push('EXPENSES','','section');
-  expense.forEach(a=> push(a.name, round2(periodMovement(a.id,from,to))));
+  expense.forEach(a=> push(a.name, round2(plVal(a))));
   push('Total expenses', round2(expTotal), 'total');
   push('Net profit', round2(incTotal-expTotal), 'grand');
   return { title:'Profit & Loss', meta:[{label:'Period',value:fmtDateShort(from)+' to '+fmtDateShort(to)}], columns:['Account', S.settings.currency+' Amount'], rows, rowClasses };
@@ -7553,16 +7710,19 @@ function plReportModel(){
 function renderPL(from,to){
   const income = S.accounts.filter(a=>a.type==='Income');
   const expense = S.accounts.filter(a=>a.type==='Expense');
-  const incTotal = income.reduce((s,a)=>s+periodMovement(a.id,from,to),0);
-  const expTotal = expense.reduce((s,a)=>s+periodMovement(a.id,from,to),0);
+  // Use the same balance source as the Trial Balance (cumulative to period end,
+  // including opening balances) so the P&L net profit always agrees with the TB.
+  const plVal = a => getAccountBalance(a.id, to);
+  const incTotal = income.reduce((s,a)=>s+plVal(a),0);
+  const expTotal = expense.reduce((s,a)=>s+plVal(a),0);
   document.getElementById('report-body').innerHTML = `<div class="card">
     ${dateRangeControls(from,to,"renderReports()", reportExportButtons('plReportModel'))}
     <div class="card-body">
       <div class="section-title">Income</div>
-      ${income.map(a=>`<div class="report-row indent"><span>${a.name}</span><span class="num">${fmt(periodMovement(a.id,from,to))}</span></div>`).join('')}
+      ${income.map(a=>`<div class="report-row indent"><span>${a.name}</span><span class="num">${fmt(plVal(a))}</span></div>`).join('')}
       <div class="report-row total"><span>Total income</span><span class="num">${fmt(incTotal)}</span></div>
       <div class="section-title">Expenses</div>
-      ${expense.map(a=>`<div class="report-row indent"><span>${a.name}</span><span class="num">${fmt(periodMovement(a.id,from,to))}</span></div>`).join('')}
+      ${expense.map(a=>`<div class="report-row indent"><span>${a.name}</span><span class="num">${fmt(plVal(a))}</span></div>`).join('')}
       <div class="report-row total"><span>Total expenses</span><span class="num">${fmt(expTotal)}</span></div>
       <div class="report-row total" style="font-size:15px;"><span>Net profit</span><span class="num ${(incTotal-expTotal)>=0?'pos':'neg'}">${fmt(incTotal-expTotal)}</span></div>
     </div>
@@ -8359,8 +8519,9 @@ function printVatReport(periodId){
         <tr class="ttype netblock"><td colspan="8" style="padding-top:16px;">Summary</td></tr>
         <tr class="netblock"><td colspan="5">Output Tax</td><td class="r">${money(outNet)}</td><td class="r">${money(outIncl)}</td><td class="r">${money(outVat)}</td></tr>
         <tr class="netblock"><td colspan="5">Input Tax</td><td class="r">${money(inNet)}</td><td class="r">${money(inIncl)}</td><td class="r">${money(inVat)}</td></tr>
-        <tr class="grand"><td colspan="5">${netVat>=0? 'Net VAT Payable to SARS' : 'Net VAT Refundable'}</td>
-          <td class="r">${money(netNet)}</td><td class="r">${money(netIncl)}</td><td class="r">${money(netVat)}</td></tr>
+        ${(()=>{ const payable = netVat>=0; const col = payable ? '#c0392b' : '#1e8449';
+          return `<tr class="grand"><td colspan="5" style="color:${col}; -webkit-print-color-adjust:exact; print-color-adjust:exact;">${payable? 'Net VAT Payable to SARS' : 'Net VAT Refundable'}</td>
+          <td class="r" style="color:${col}; -webkit-print-color-adjust:exact; print-color-adjust:exact;">${money(netNet)}</td><td class="r" style="color:${col}; -webkit-print-color-adjust:exact; print-color-adjust:exact;">${money(netIncl)}</td><td class="r" style="color:${col}; -webkit-print-color-adjust:exact; print-color-adjust:exact;">${money(netVat)}</td></tr>`; })()}
       </tbody>
     </table>
     <div style="margin-top:18px; color:#888; font-size:9.5px;">${escapeHtml(s.businessName||'Company')} · Generated by RECONI · ${fmtDate(todayStr())}</div>
@@ -8596,6 +8757,22 @@ function renderSettings(){
           <div class="field"><label>Invoice footer note</label><textarea id="s-invnote" rows="2" placeholder="e.g. Thank you for your business. Payment due within 14 days.">${S.settings.invoiceFooterNote||''}</textarea></div>
           <button class="btn btn-primary" onclick="saveSettings()">Save settings</button>
         </div></div>
+
+        <div class="card" style="margin-bottom:14px;"><div class="card-head"><h3>Report letterhead &amp; footer</h3></div><div class="card-body">
+          <p style="font-size:12px; color:var(--text-muted); margin-top:0;">These appear on the <strong>VAT Recon</strong> and other report printouts for <strong>this company</strong>. The company logo above is reused as the letterhead image.</p>
+          <div class="field">
+            <label>Report header (letterhead)</label>
+            <textarea id="s-rephead" rows="3" placeholder="e.g.&#10;Alcock Consulting&#10;VALUE YOUR BUSINESS TODAY&#10;VAT No. 4123456789 · 1 Main Rd, Cape Town">${escapeHtml(S.settings.reportHeader||'')}</textarea>
+            <div class="hint">Shown top-right of the report, beside the logo. One line each.</div>
+          </div>
+          <div class="field">
+            <label>Report footer</label>
+            <textarea id="s-repfoot" rows="2" placeholder="e.g. Prepared by Alcock Consulting · Confidential">${escapeHtml(S.settings.reportFooter||'')}</textarea>
+            <div class="hint">Shown at the bottom of the printed report.</div>
+          </div>
+          <div class="field"><label>Prepared by (initials/name)</label><input type="text" id="s-repprep" value="${escapeHtml(S.settings.reportPreparedBy||'')}" placeholder="e.g. DA"></div>
+          <button class="btn btn-primary" onclick="saveSettings()">Save settings</button>
+        </div></div>
         <div class="card" style="margin-bottom:14px;"><div class="card-head"><h3>Auto-coding mappings</h3><button class="btn btn-ghost btn-sm" onclick="openMappingForm()">+ Add mapping</button></div><div class="card-body">
           <p style="font-size:12px; color:var(--text-muted); margin-top:0;">When a cashbook transaction's description contains a phrase below, it's automatically coded to that account. You can still change any row after it's applied.</p>
           ${(S.accountMappings||[]).length? `
@@ -8723,6 +8900,9 @@ function saveSettings(){
   S.settings.bankBranch = document.getElementById('s-bankbranch').value.trim();
   S.settings.bankAccountNumber = document.getElementById('s-bankacc').value.trim();
   S.settings.invoiceFooterNote = document.getElementById('s-invnote').value.trim();
+  const rh = document.getElementById('s-rephead'); if(rh) S.settings.reportHeader = rh.value.trim();
+  const rf = document.getElementById('s-repfoot'); if(rf) S.settings.reportFooter = rf.value.trim();
+  const rp = document.getElementById('s-repprep'); if(rp) S.settings.reportPreparedBy = rp.value.trim();
   showToast('Settings saved'); saveState(true); render();
 }
 function handleLogoUpload(event){
