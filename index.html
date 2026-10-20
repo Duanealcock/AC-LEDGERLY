@@ -1687,6 +1687,65 @@ function addAsset(a){
   return asset;
 }
 function deleteAsset(id){ S.assets = (S.assets||[]).filter(a=>a.id!==id); saveState(true); }
+// Find debits to fixed-asset accounts (incl. opening balances) that aren't yet on the register.
+function findUnregisteredAssets(){
+  const faIds = new Set(S.accounts.filter(a=>isFixedAssetAccount(a.id)).map(a=>a.id));
+  if(!faIds.size) return [];
+  const registered = new Set((S.assets||[]).map(a=>`${a.sourceRef}|${a.accountId}`));
+  const out = [];
+  (S.journal||[]).forEach(e=>{
+    const ref = e.ref || e.id;
+    e.lines.forEach(l=>{
+      if(!(l.debit>0)) return;
+      if(!faIds.has(l.accountId)) return;
+      if(registered.has(`${ref}|${l.accountId}`)) return;
+      const acct = S.accounts.find(x=>x.id===l.accountId);
+      out.push({ ref, accountId:l.accountId, acctLabel: acct? (acct.code+' '+acct.name):'', date:e.date,
+                 desc: e.description || (acct?acct.name:''), cost: round2(l.debit), isOpening: !!e.isOpeningBalance });
+    });
+  });
+  return out.sort((a,b)=>(a.date||'').localeCompare(b.date||''));
+}
+let UNREG_ASSET_LIST = [];
+function openUnregisteredAssetsModal(){
+  UNREG_ASSET_LIST = findUnregisteredAssets();
+  if(!UNREG_ASSET_LIST.length){ showToast('No unregistered fixed-asset purchases found'); return; }
+  const rows = UNREG_ASSET_LIST.map((u,i)=>`
+    <tr>
+      <td><input type="checkbox" class="unreg-pick" data-i="${i}" checked style="width:auto;"></td>
+      <td>${fmtDateShort(u.date)}${u.isOpening?' <span class="badge badge-draft">Opening</span>':''}</td>
+      <td><input type="text" class="unreg-name" data-i="${i}" value="${escapeHtml(u.desc)}" style="width:100%; padding:4px 6px; font-size:13px;"></td>
+      <td style="font-size:12px; color:var(--text-muted);">${escapeHtml(u.acctLabel)}</td>
+      <td class="amt num">${fmt(u.cost)}</td>
+    </tr>`).join('');
+  const body = `
+    <p style="margin-top:0;">These purchases were coded to a fixed-asset account but aren't on the register yet. Tick the ones to add — you can set depreciation on each afterwards.</p>
+    <div style="overflow-x:auto; max-height:340px; overflow-y:auto;"><table>
+      <thead><tr><th style="width:30px;"></th><th>Date</th><th>Name</th><th>Account</th><th class="amt">Cost</th></tr></thead>
+      <tbody>${rows}</tbody>
+    </table></div>
+    <div class="hint" style="margin-top:8px;">Default depreciation (straight-line, 5 years) is applied — edit each asset after adding to change the method, useful life, or residual.</div>`;
+  openModal('Add unregistered assets', body, [
+    {label:'Add selected', cls:'btn-primary', onclick:'addSelectedUnregisteredAssets()'}
+  ], true);
+}
+function addSelectedUnregisteredAssets(){
+  const picks = [...document.querySelectorAll('.unreg-pick:checked')].map(cb=>Number(cb.getAttribute('data-i')));
+  if(!picks.length){ showToast('Tick at least one to add'); return; }
+  let added = 0;
+  picks.forEach(i=>{
+    const u = UNREG_ASSET_LIST[i]; if(!u) return;
+    const nameEl = document.querySelector(`.unreg-name[data-i="${i}"]`);
+    const name = (nameEl && nameEl.value.trim()) || u.desc || u.acctLabel;
+    const acct = S.accounts.find(x=>x.id===u.accountId);
+    addAsset({ name, accountId:u.accountId, cost:u.cost, date:u.date, sourceRef:u.ref, category: acct? acct.name : '' });
+    added++;
+  });
+  closeModal();
+  showToast(`${added} asset${added===1?'':'s'} added to the register — set depreciation on each`);
+  saveState(true);
+  renderAssets();
+}
 // Auto-detect: after posting, if any line debits a fixed-asset account, offer to register it (once per source ref).
 function maybeOfferAssetFromEntry(entry){
   if(!entry || !entry.lines) return;
@@ -7134,7 +7193,10 @@ function toggleFixedAsset(id){
 let ASSET_EDIT_ID = null;
 let ASSET_AS_OF = '';
 function renderAssets(){
-  setTopbar('Asset Register', 'Fixed assets, depreciation, and book value', `<button class="btn btn-primary" onclick="openAssetForm()">+ Add asset</button>`);
+  const unreg = findUnregisteredAssets();
+  setTopbar('Asset Register', 'Fixed assets, depreciation, and book value',
+    `${unreg.length? `<button class="btn btn-ghost" onclick="openUnregisteredAssetsModal()">🔎 Scan for unregistered assets (${unreg.length})</button>`:''}
+     <button class="btn btn-primary" onclick="openAssetForm()">+ Add asset</button>`);
   const asOf = ASSET_AS_OF || todayStr();
   const assets = (S.assets||[]).slice().sort((a,b)=>(a.date||'').localeCompare(b.date||''));
   // group by category (account name) for the report
