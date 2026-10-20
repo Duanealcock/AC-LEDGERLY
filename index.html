@@ -7289,7 +7289,19 @@ function openAccountForm(editId){
     <div class="field"><label>Account name</label><input type="text" id="a-name" placeholder="e.g. Marketing" value="${a?escapeHtml(a.name||''):''}"></div>
     <div class="field"><label><input type="checkbox" id="a-isbank" style="width:auto; display:inline-block; margin-right:6px;" ${a&&a.isBank?'checked':''} ${isSystem?'disabled':''}> This is a bank account</label></div>
     <div class="field"><label><input type="checkbox" id="a-isfixed" style="width:auto; display:inline-block; margin-right:6px;" ${a&&a.isFixedAsset?'checked':''}> This is a fixed-asset account (purchases prompt an asset-register entry)</label></div>
-    <div class="field" id="a-exclturnover-wrap" style="${(a&&a.type==='Income')||(!a)?'':'display:none;'}"><label><input type="checkbox" id="a-exclturnover" style="width:auto; display:inline-block; margin-right:6px;" ${a&&a.excludeFromTurnover?'checked':''}> Exclude from turnover (e.g. loan account, interest — won't count as sales in the VAT recon)</label></div>
+    <div class="field" id="a-exclturnover-wrap" style="${(a&&a.type==='Income')||(!a)?'':'display:none;'}">
+      <label>Is this a turnover account?</label>
+      <div style="display:flex; flex-direction:column; gap:6px; margin-top:2px;">
+        <label style="display:flex; align-items:center; gap:8px; font-weight:400; text-transform:none; letter-spacing:normal; cursor:pointer;">
+          <input type="radio" name="a-turnover" value="turnover" style="width:auto;" ${(a&&a.excludeFromTurnover)?'':'checked'}>
+          <span><strong>Turnover</strong> — sales / trading income (counts as turnover in the VAT recon)</span>
+        </label>
+        <label style="display:flex; align-items:center; gap:8px; font-weight:400; text-transform:none; letter-spacing:normal; cursor:pointer;">
+          <input type="radio" name="a-turnover" value="exclude" style="width:auto;" ${(a&&a.excludeFromTurnover)?'checked':''}>
+          <span><strong>Not turnover</strong> — loan account, interest received, or other non-trading income (excluded from turnover)</span>
+        </label>
+      </div>
+    </div>
     ${isSystem? `<div class="hint" style="color:var(--gold);">This is a system account — only its name can be changed.</div>`:''}
     ${(!isSystem && hasTxns)? `<div class="hint">This account has transactions. You can rename or recode it; changing its <strong>type</strong> will move its balance between the P&amp;L and the Balance Sheet, so only do that if it was set up under the wrong type.</div>`:''}
   `;
@@ -7321,9 +7333,12 @@ function submitAccountForm(){
   const isBank = isSystem ? editing.isBank : document.getElementById('a-isbank').checked;
   const isFixedEl = document.getElementById('a-isfixed');
   const isFixedAsset = isFixedEl ? isFixedEl.checked : (editing?editing.isFixedAsset:false);
-  const exclEl = document.getElementById('a-exclturnover');
-  // only meaningful for Income accounts
-  const excludeFromTurnover = (type==='Income') ? (exclEl ? exclEl.checked : (editing?!!editing.excludeFromTurnover:false)) : false;
+  // Income accounts: turnover vs not-turnover (loan/interest) chosen by radio
+  let excludeFromTurnover = false;
+  if(type==='Income'){
+    const sel = document.querySelector('input[name="a-turnover"]:checked');
+    excludeFromTurnover = sel ? (sel.value==='exclude') : (editing?!!editing.excludeFromTurnover:false);
+  }
   if(!code || !name){ showToast('Enter a code and name'); return; }
   // duplicate code check (ignore the account being edited)
   if(S.accounts.some(a=>a.code===code && a.id!==(editing?editing.id:null))){ showToast('That code is already used'); return; }
