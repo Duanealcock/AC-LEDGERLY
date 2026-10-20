@@ -1820,6 +1820,8 @@ function issueBill(billId, dateOverride){
   const entry = postJournal('Bill '+bill.number+' received from '+contactName(bill.contactId), date, lines);
   entry.ref = 'bill-issue-'+bill.id;
   bill.status='open'; bill.issueRef=entry.ref; bill.date=date;
+  // if this bill bought a fixed asset (debit to a fixed-asset account), offer to register it
+  maybeOfferAssetFromEntry(entry);
 }
 function recordInvoicePayment(invId, amount, date, bankAccountId, refOverride){
   const inv = S.invoices.find(i=>i.id===invId);
