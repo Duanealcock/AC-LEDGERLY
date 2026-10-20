@@ -695,6 +695,7 @@ function migrateCompanyShape(co){
   co.contactJournals = co.contactJournals || [];
   co.recurringInvoices = co.recurringInvoices || [];
   co.vatReconAdjustments = co.vatReconAdjustments || {};
+  co.vatReconNotes = co.vatReconNotes || {};
   const s = co.settings || (co.settings={});
   if(s.nextQuoteNo==null) s.nextQuoteNo = 3001;
   if(s.nextSuppQuoteNo==null) s.nextSuppQuoteNo = 3501;
@@ -7458,6 +7459,16 @@ function renderVatRecon(){
       <button class="icon-btn" style="color:var(--red); flex:0 0 auto;" title="Remove line" onclick="vatReconRemoveAdjustment('${a.id}')">✕</button>
     </div>`).join('');
 
+  // ---- notes table (Note, Prepared by, Date, Amount) saved per FY ----
+  const notes = vatReconNotesList(fy);
+  const notesRowsHtml = notes.map(n=>`
+    <tr>
+      <td><input type="text" value="${escapeHtml(n.note||'')}" placeholder="Note" oninput="vatReconSetNote('${n.id}','note',this.value)" style="width:100%; padding:5px 8px; font-size:13px;"></td>
+      <td><input type="text" value="${escapeHtml(n.by||'')}" placeholder="Initials" oninput="vatReconSetNote('${n.id}','by',this.value)" style="width:100%; padding:5px 8px; font-size:13px;"></td>
+      <td><input type="date" value="${escapeHtml(n.date||'')}" oninput="vatReconSetNote('${n.id}','date',this.value)" style="width:100%; padding:5px 8px; font-size:13px;"></td>
+      <td style="white-space:nowrap;"><input type="number" step="0.01" value="${n.amount||''}" placeholder="0.00" oninput="vatReconSetNote('${n.id}','amount',this.value)" style="width:110px; text-align:right; padding:5px 8px; font-size:13px;"> <button class="icon-btn" style="color:var(--red);" title="Remove note" onclick="vatReconRemoveNote('${n.id}')">✕</button></td>
+    </tr>`).join('');
+
   document.getElementById('content').innerHTML = `
     <div class="card" style="margin-bottom:14px;"><div class="card-body" style="display:flex; justify-content:space-between; align-items:flex-end; flex-wrap:wrap; gap:14px;">
       <div>
@@ -7532,8 +7543,43 @@ function renderVatRecon(){
         </div>
         <div class="hint" style="margin-top:12px;">Add adjustment lines (e.g. <em>Prior period VAT</em>, <em>SARS reversal</em>, <em>Other immaterial</em>) to explain the difference between the net VAT per this recon and the VAT control account, until <strong>Difference remaining</strong> is 0.00. Lines are saved per financial year.</div>
       </div>
+    </div>
+
+    <div class="card" style="margin-top:14px;">
+      <div class="card-head"><h3>Notes</h3><button class="btn btn-ghost btn-sm" onclick="vatReconAddNote()">+ Add note</button></div>
+      <div style="overflow-x:auto;"><table>
+        <thead><tr><th>Note</th><th style="width:120px;">Prepared by</th><th style="width:150px;">Date</th><th class="amt" style="width:170px;">Amount</th></tr></thead>
+        <tbody>${notesRowsHtml || `<tr><td colspan="4" style="color:var(--text-muted);">No notes yet. Click <strong>+ Add note</strong> to record review notes for this recon.</td></tr>`}</tbody>
+      </table></div>
+      <div class="card-body" style="border-top:1px solid var(--border);"><div class="hint" style="margin:0;">Notes are saved per financial year and appear on the printed VAT Reasonability report.</div></div>
     </div>`;
   window._VAT_RECON_PRINT = { fy, b, months, rows:null }; // marker for print
+}
+// ---- VAT recon notes (Note, Prepared by, Date, Amount) saved per FY ----
+function vatReconNotesList(fy){
+  S.vatReconNotes = S.vatReconNotes || {};
+  if(!Array.isArray(S.vatReconNotes[fy])) S.vatReconNotes[fy] = [];
+  return S.vatReconNotes[fy];
+}
+function vatReconAddNote(){
+  const fy = vatReconFyLabel();
+  vatReconNotesList(fy).push({ id:uid('vnote'), note:'', by:(S.settings&&S.settings.reportPreparedBy)||'', date:todayStr(), amount:0 });
+  saveState(true);
+  renderVatRecon();
+}
+function vatReconRemoveNote(id){
+  const fy = vatReconFyLabel();
+  S.vatReconNotes[fy] = vatReconNotesList(fy).filter(n=>n.id!==id);
+  saveState(true);
+  renderVatRecon();
+}
+function vatReconSetNote(id, field, val){
+  const fy = vatReconFyLabel();
+  const n = vatReconNotesList(fy).find(x=>x.id===id);
+  if(!n) return;
+  if(field==='amount') n.amount = round2(Number(val)||0);
+  else n[field] = val;
+  saveState();
 }
 // ---- VAT recon manual adjustment lines (saved per FY on the company) ----
 function vatReconAdjList(fy){
@@ -7603,7 +7649,8 @@ function computeVatReconModel(fy){
   const controlDiff = round2(tDiff - vatControlTB);
   const adjustments = vatReconAdjList(fy).slice();
   const residual = round2(controlDiff - vatReconAdjTotal(fy));
-  return { fy, b, rows, tGross, tOutVat, tZero, tNett, tInVat, tDiff, salesIS, salesExZero, salesDiff, vatControlTB, controlDiff, adjustments, residual };
+  const notes = vatReconNotesList(fy).slice();
+  return { fy, b, rows, tGross, tOutVat, tZero, tNett, tInVat, tDiff, salesIS, salesExZero, salesDiff, vatControlTB, controlDiff, adjustments, residual, notes };
 }
 // Full landscape, one-page VAT Reasonability printout with letterhead.
 function printVatRecon(){
@@ -7723,6 +7770,20 @@ function printVatRecon(){
         <tr class="tot"><td class="k">Difference remaining</td><td class="v" style="color:${residCol};">${money(m.residual)}</td></tr>
       </table>
     </div>
+
+    ${(m.notes && m.notes.filter(n=>n.note||n.amount||n.by).length) ? `
+    <div style="margin-top:14px;">
+      <div class="obj" style="background:#d4a53a;">Notes</div>
+      <table style="margin-top:4px;">
+        <thead><tr><th style="text-align:left;">Note</th><th style="text-align:left; width:120px;">Prepared by</th><th style="text-align:left; width:110px;">Date</th><th class="r" style="width:120px;">Amount</th></tr></thead>
+        <tbody>${m.notes.filter(n=>n.note||n.amount||n.by).map(n=>`<tr>
+          <td>${escapeHtml(n.note||'')}</td>
+          <td>${escapeHtml(n.by||'')}</td>
+          <td>${n.date?fmtDate(n.date):''}</td>
+          <td class="r">${n.amount?money(n.amount):''}</td>
+        </tr>`).join('')}</tbody>
+      </table>
+    </div>` : ''}
 
     <div class="foot">
       <div>${footer || (escapeHtml(s.businessName||'Company')+' · Generated by RECONI')}</div>
