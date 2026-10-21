@@ -2327,8 +2327,8 @@ function statusBadge(s){
 /* ============================= SALES ============================= */
 let SALES_FILTER = 'all';
 let SALES_SEARCH = '';
-let SALES_SORT = 'issued';   // number | customer | issued | due | total | balance
-let SALES_SORT_DIR = -1;     // 1 = ascending, -1 = descending
+let SALES_SORT = 'number';   // number | customer | issued | due | total | balance — default: invoice number
+let SALES_SORT_DIR = -1;     // 1 = ascending, -1 = descending — default: highest number first
 function salesSetSort(col){
   if(SALES_SORT===col){ SALES_SORT_DIR = -SALES_SORT_DIR; }
   else { SALES_SORT = col; SALES_SORT_DIR = (col==='customer'||col==='number') ? 1 : -1; }
@@ -2639,7 +2639,9 @@ function openInvoiceForm(editId){
     <div class="field-row">
       <div class="field"><label>Customer</label>
         <div style="display:flex; gap:6px;">
-          <select id="f-contact" style="flex:1;">${customers.map(c=>`<option value="${c.id}" ${(editInv&&editInv.contactId===c.id)||(INVOICE_QUICK_SELECT&&INVOICE_QUICK_SELECT===c.id)?'selected':''}>${c.name}</option>`).join('')}</select>
+          <select id="f-contact" style="flex:1;">
+            <option value="" ${(!editInv && !INVOICE_QUICK_SELECT)?'selected':''}>Select customer…</option>
+            ${customers.map(c=>`<option value="${c.id}" ${(editInv&&editInv.contactId===c.id)||(INVOICE_QUICK_SELECT&&INVOICE_QUICK_SELECT===c.id)?'selected':''}>${escapeHtml(c.name)}</option>`).join('')}</select>
           <button type="button" class="btn btn-ghost btn-sm" style="flex:0 0 auto; white-space:nowrap;" onclick="quickAddCustomer()">+ New</button>
         </div>
       </div>
@@ -2709,6 +2711,7 @@ function submitInvoiceForm(issueNow){
   const date = document.getElementById('f-date').value;
   const due = document.getElementById('f-due').value;
   const vatType = selectedVatType();
+  if(!contactId){ showToast('Select a customer'); return; }
   const lines = collectLines('.li-desc','.li-qty','.li-price','.li-acct');
   if(lines.length===0){ showToast('Add at least one line item'); return; }
 
