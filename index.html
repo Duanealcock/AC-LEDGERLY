@@ -538,11 +538,13 @@ const NAV = [
   {sec:'Directory'},
   {group:'customers', label:'Customers', ic:'●', children:[
     {id:'cust-add', label:'Add a Customer'},
+    {id:'cust-detail', label:'Customer Detail'},
     {id:'cust-transactions', label:'Transactions'},
     {id:'cust-reports', label:'Reports'},
   ]},
   {group:'suppliers', label:'Suppliers', ic:'◐', children:[
     {id:'supp-add', label:'Add a Supplier'},
+    {id:'supp-detail', label:'Supplier Detail'},
     {id:'supp-transactions', label:'Transactions'},
     {id:'supp-reports', label:'Reports'},
   ]},
@@ -1691,7 +1693,12 @@ function deleteAsset(id){ S.assets = (S.assets||[]).filter(a=>a.id!==id); saveSt
 function findUnregisteredAssets(){
   const faIds = new Set(S.accounts.filter(a=>isFixedAssetAccount(a.id)).map(a=>a.id));
   if(!faIds.size) return [];
-  const registered = new Set((S.assets||[]).map(a=>`${a.sourceRef}|${a.accountId}`));
+  // an asset may link several source refs (consolidated deposit + final) — mark them all
+  const registered = new Set();
+  (S.assets||[]).forEach(a=>{
+    const refs = Array.isArray(a.sourceRefs) && a.sourceRefs.length ? a.sourceRefs : [a.sourceRef];
+    refs.forEach(r=> registered.add(`${r}|${a.accountId}`));
+  });
   const out = [];
   (S.journal||[]).forEach(e=>{
     const ref = e.ref || e.id;
@@ -1726,8 +1733,34 @@ function openUnregisteredAssetsModal(){
     </table></div>
     <div class="hint" style="margin-top:8px;">Default depreciation (straight-line, 5 years) is applied — edit each asset after adding to change the method, useful life, or residual.</div>`;
   openModal('Add unregistered assets', body, [
-    {label:'Add selected', cls:'btn-primary', onclick:'addSelectedUnregisteredAssets()'}
+    {label:'Consolidate selected into 1 asset', cls:'btn-ghost', onclick:'consolidateSelectedUnregisteredAssets()'},
+    {label:'Add selected (one each)', cls:'btn-primary', onclick:'addSelectedUnregisteredAssets()'}
   ], true);
+}
+// Combine several selected payments (e.g. 50% deposit + final) into ONE asset.
+function consolidateSelectedUnregisteredAssets(){
+  const picks = [...document.querySelectorAll('.unreg-pick:checked')].map(cb=>Number(cb.getAttribute('data-i')));
+  if(picks.length<2){ showToast('Tick at least two lines to consolidate into one asset'); return; }
+  const items = picks.map(i=>UNREG_ASSET_LIST[i]).filter(Boolean);
+  // all must be the same fixed-asset account
+  const accIds = new Set(items.map(x=>x.accountId));
+  if(accIds.size>1){ showToast('Consolidate only works on lines coded to the SAME asset account'); return; }
+  const accountId = items[0].accountId;
+  const acct = S.accounts.find(x=>x.id===accountId);
+  // earliest date (deposit), total cost, keep all source refs so none re-appear in a later scan
+  items.sort((a,b)=>(a.date||'').localeCompare(b.date||''));
+  const date = items[0].date;
+  const totalCost = round2(items.reduce((s,x)=>s+(Number(x.cost)||0),0));
+  // use the first line's edited name if given
+  const firstNameEl = document.querySelector(`.unreg-name[data-i="${picks[0]}"]`);
+  const name = (firstNameEl && firstNameEl.value.trim()) || items[0].desc || (acct?acct.name:'Asset');
+  const sourceRefs = items.map(x=>x.ref);
+  const asset = addAsset({ name, accountId, cost:totalCost, date, sourceRef:sourceRefs[0], sourceRefs, category: acct? acct.name : '' });
+  // mark the other refs as registered too, so the scan won't list them again
+  closeModal();
+  showToast(`Consolidated ${items.length} payments into 1 asset (${fmt(totalCost)}) — set its depreciation`);
+  saveState(true);
+  VIEW='assets'; ASSET_EDIT_ID=asset.id; render();
 }
 function addSelectedUnregisteredAssets(){
   const picks = [...document.querySelectorAll('.unreg-pick:checked')].map(cb=>Number(cb.getAttribute('data-i')));
@@ -2142,9 +2175,11 @@ function render(){
     'reconcile': renderReconcilePage,
     'feed-review': renderFeedReviewPage,
     'cust-add': ()=>renderContactDirectory('customer','add'),
+    'cust-detail': ()=>renderContactDirectory('customer','detail'),
     'cust-transactions': ()=>renderContactDirectory('customer','transactions'),
     'cust-reports': ()=>renderContactDirectory('customer','reports'),
     'supp-add': ()=>renderContactDirectory('supplier','add'),
+    'supp-detail': ()=>renderContactDirectory('supplier','detail'),
     'supp-transactions': ()=>renderContactDirectory('supplier','transactions'),
     'supp-reports': ()=>renderContactDirectory('supplier','reports'),
     'quotes': ()=>renderQuotes('customer'),
@@ -6269,6 +6304,14 @@ function buildStatement(contact, kind, fromDate, toDate){
   return {rows, openingBalance, closingBalance:running};
 }
 
+let CONTACT_DETAIL_SEARCH = '';
+function contactDetailApplySearch(kind){
+  const input = document.getElementById('contact-detail-search');
+  const caret = input ? input.selectionStart : null;
+  renderContactDirectory(kind, 'detail');
+  const again = document.getElementById('contact-detail-search');
+  if(again){ again.focus(); try{ if(caret!=null) again.setSelectionRange(caret, caret); }catch(e){} }
+}
 function renderContactDirectory(kind, tab){
   const isCust = kind==='customer';
   const label = isCust ? 'Customers' : 'Suppliers';
@@ -6280,6 +6323,7 @@ function renderContactDirectory(kind, tab){
   // sub-tab bar shared across the three views
   const tabDefs = [
     {id:'add', label:'Add a '+singular, view: isCust?'cust-add':'supp-add'},
+    {id:'detail', label:singular+' Detail', view: isCust?'cust-detail':'supp-detail'},
     {id:'transactions', label:'Transactions', view: isCust?'cust-transactions':'supp-transactions'},
     {id:'reports', label:'Reports', view: isCust?'cust-reports':'supp-reports'},
   ];
@@ -6304,6 +6348,48 @@ function renderContactDirectory(kind, tab){
             <td style="text-align:right;"><button class="icon-btn" onclick="openContactForm(null,'${c.id}')">Edit</button></td>
           </tr>`).join('')}
         </tbody></table>` : emptyState(`No ${label.toLowerCase()} yet`, `Add your first ${singular.toLowerCase()} to get started.`, `openContactForm('${kind}')`, `+ Add a ${singular}`)}
+      </div>`;
+  }
+
+  else if(tab==='detail'){
+    // searchable, full-detail list — open any contact to edit address & contact details
+    const q = (CONTACT_DETAIL_SEARCH||'').trim().toLowerCase();
+    let dlist = list;
+    if(q){
+      dlist = list.filter(c=> (c.name||'').toLowerCase().includes(q)
+        || (c.email||'').toLowerCase().includes(q) || (c.phone||'').toLowerCase().includes(q)
+        || (c.vatNo||'').toLowerCase().includes(q) || (c.contactName||'').toLowerCase().includes(q));
+    }
+    bodyHtml = `
+      <div class="toolbar" style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:10px;">
+        <div><strong>${label} (${dlist.length}${q?` of ${list.length}`:''})</strong></div>
+        <div style="position:relative;">
+          <input type="text" id="contact-detail-search" placeholder="Search name, email, phone, VAT…" value="${escapeHtml(CONTACT_DETAIL_SEARCH)}"
+            oninput="CONTACT_DETAIL_SEARCH=this.value; contactDetailApplySearch('${kind}');" autocomplete="off"
+            style="width:300px; max-width:60vw; padding:7px 30px 7px 12px;">
+          ${CONTACT_DETAIL_SEARCH?`<span onclick="CONTACT_DETAIL_SEARCH=''; renderContactDirectory('${kind}','detail');" title="Clear" style="position:absolute; right:10px; top:50%; transform:translateY(-50%); cursor:pointer; color:var(--text-muted);">✕</span>`:''}
+        </div>
+      </div>
+      <div class="card">
+        ${dlist.length? `<div style="overflow-x:auto;"><table>
+          <thead><tr><th>Name</th><th>Contact person</th><th>Email</th><th>Phone</th><th>VAT No.</th><th>Address</th><th></th></tr></thead>
+          <tbody>
+          ${dlist.map(c=>{
+            const addr = (c.address||c.postalAddress||c.physicalAddress||'').split('\n').filter(Boolean).join(', ');
+            return `<tr class="clickable" onclick="openContactForm(null,'${c.id}')">
+              <td><strong>${escapeHtml(c.name)}</strong></td>
+              <td>${escapeHtml(c.contactName||'—')}</td>
+              <td>${escapeHtml(c.email||'—')}</td>
+              <td>${escapeHtml(c.phone||'—')}</td>
+              <td class="mono">${escapeHtml(c.vatNo||'—')}</td>
+              <td style="font-size:12px; color:var(--text-muted); max-width:240px;">${escapeHtml(addr||'—')}</td>
+              <td style="text-align:right; white-space:nowrap;"><button class="icon-btn" onclick="event.stopPropagation(); openContactForm(null,'${c.id}')">Open / Edit</button></td>
+            </tr>`;
+          }).join('')}
+          </tbody></table></div>
+          <div class="hint" style="padding:8px 14px; margin:0; border-top:1px solid var(--border);">Click any ${singular.toLowerCase()} to open and edit their address, contact person, email, phone and VAT number.</div>`
+          : (q? `<div class="card-body"><div class="hint" style="margin:0;">No ${label.toLowerCase()} match “${escapeHtml(CONTACT_DETAIL_SEARCH)}”. <a href="#" onclick="event.preventDefault(); CONTACT_DETAIL_SEARCH=''; renderContactDirectory('${kind}','detail');">Clear search</a></div></div>`
+             : emptyState(`No ${label.toLowerCase()} yet`, `Add your first ${singular.toLowerCase()} to get started.`, `openContactForm('${kind}')`, `+ Add a ${singular}`))}
       </div>`;
   }
 
@@ -7117,6 +7203,7 @@ function openContactForm(presetType, editId){
       <option value="customer" ${((editing&&editing.type==='customer')||presetType==='customer')?'selected':''}>Customer</option>
       <option value="supplier" ${((editing&&editing.type==='supplier')||presetType==='supplier')?'selected':''}>Supplier</option>
     </select></div>
+    <div class="field"><label>Contact person</label><input type="text" id="c-contact" value="${editing?escapeHtml(editing.contactName||''):''}" placeholder="Optional — e.g. Jane Doe"></div>
     <div class="field-row">
       <div class="field"><label>Email</label><input type="email" id="c-email" value="${editing?editing.email||'':''}"></div>
       <div class="field"><label>Phone</label><input type="text" id="c-phone" value="${editing?editing.phone||'':''}"></div>
@@ -7138,18 +7225,20 @@ function submitContactForm(editId){
   const phone = document.getElementById('c-phone').value.trim();
   const vatNo = document.getElementById('c-vat').value.trim();
   const address = document.getElementById('c-address').value.trim();
+  const contactEl = document.getElementById('c-contact');
+  const contactName = contactEl ? contactEl.value.trim() : '';
   if(!name){ showToast('Enter a name'); return; }
   if(editId){
     const c = S.contacts.find(x=>x.id===editId);
-    Object.assign(c, {name,type,email,phone,vatNo,address});
+    Object.assign(c, {name,type,email,phone,vatNo,address,contactName});
   }else{
-    S.contacts.push({id:uid('ct'), name, type, email, phone, vatNo, address});
+    S.contacts.push({id:uid('ct'), name, type, email, phone, vatNo, address, contactName});
   }
   closeModal(); showToast('Contact saved'); navigate(contactReturnView(type));
 }
 function contactReturnView(type){
   // if we're already on a directory page, stay in its section; otherwise go to all-contacts
-  const dirViews = ['cust-add','cust-transactions','cust-reports','supp-add','supp-transactions','supp-reports'];
+  const dirViews = ['cust-add','cust-detail','cust-transactions','cust-reports','supp-add','supp-detail','supp-transactions','supp-reports'];
   if(dirViews.includes(VIEW)) return VIEW;
   if(type==='customer') return 'cust-add';
   if(type==='supplier') return 'supp-add';
@@ -8102,7 +8191,22 @@ function tbGroupedData(){
   const bySortCode = (x,y)=> (x.a.code||'').localeCompare(y.a.code||'');
   const isPL = a => a.type==='Income' || a.type==='Expense';
   const plRows = S.accounts.filter(isPL).map(rowFor).filter(nonZero).sort(bySortCode);
-  const bsRows = S.accounts.filter(a=>!isPL(a)).map(rowFor).filter(nonZero).sort(bySortCode);
+  // Balance sheet: combine the two VAT control accounts (9500 Input + 9600 Output)
+  // into a single netted "VAT Control" line on the Trial Balance. The accounts stay
+  // separate in the ledger (the VAT201/reports still need Output vs Input split).
+  const vatInput = getAccountBalance('acc_vatr', asOf, !includeOpening);   // asset/debit-normal
+  const vatOutput = getAccountBalance('acc_vatp', asOf, !includeOpening);  // liability/credit-normal
+  const vatNet = round2(vatOutput - vatInput); // +ve = net payable (credit); -ve = net receivable (debit)
+  const vatRow = {
+    a: { code:'9500', name:'VAT Control (net)', type:'Current Liabilities', system:true, _vatMerged:true },
+    debit:  vatNet<0 ? Math.abs(vatNet) : 0,
+    credit: vatNet>0 ? vatNet : 0,
+  };
+  const bsRows = S.accounts
+    .filter(a=>!isPL(a) && a.id!=='acc_vatr' && a.id!=='acc_vatp')  // exclude the two VAT accounts…
+    .map(rowFor).filter(nonZero)
+    .concat(nonZero(vatRow) ? [vatRow] : [])                        // …add the single merged VAT line
+    .sort(bySortCode);
   const plDebit = round2(plRows.reduce((s,r)=>s+r.debit,0));
   const plCredit = round2(plRows.reduce((s,r)=>s+r.credit,0));
   // Net profit = credit (income) minus debit (expenses). Positive => profit.
