@@ -5624,12 +5624,22 @@ function postCashbookRow(row){
       return {ok:true};
     }
     if(!allocs.length) return {ok:false, msg:`Allocate this payment to at least one ${isCust?'invoice':'bill'}`};
+    let allocatedTotal = 0;
     allocs.forEach(a=>{
       if(isCust) recordInvoicePayment(a.docId, round2(a.amount), row.date, row.accountId, cashbookRef);
       else recordBillPayment(a.docId, round2(a.amount), row.date, row.accountId, cashbookRef);
+      allocatedTotal = round2(allocatedTotal + round2(a.amount));
     });
+    // Customer receipt bigger than the invoice(s) it was allocated to: the surplus is a
+    // deposit/retainer — put it on account (never silently discard the overpayment) and
+    // auto-apply it to the oldest open invoices.
+    const surplus = round2(gross - allocatedTotal);
+    if(isCust && surplus > 0.005){
+      recordUnallocatedReceipt(row.contactSelection, surplus, row.date, row.accountId, cashbookRef+'-oa', desc);
+      autoApplyCustomerCredit(row.contactSelection, row.date);
+    }
     // tag the payment's journal entry(ies) so they show under Reviewed
-    S.journal.filter(e=>e.ref===cashbookRef).forEach(e=>{ e.cashbookMeta = meta; });
+    S.journal.filter(e=>e.ref===cashbookRef || e.ref===cashbookRef+'-oa').forEach(e=>{ e.cashbookMeta = meta; });
     S.cashbookReviewed = S.cashbookReviewed || [];
     S.cashbookReviewed.push(meta);
     return {ok:true};
