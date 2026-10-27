@@ -5864,12 +5864,14 @@ function renderInvoiceAllocator(){
       <div>Remaining: <strong style="color:${Math.abs(remaining)<0.005?'var(--money-pos)':(remaining<0?'var(--red)':'var(--text)')};">${fmt(remaining)}</strong></div>
     </div>
     <div style="max-height:320px; overflow-y:auto;">${docRows || `<div class="hint">Pick a ${isIn?'customer':'supplier'} to see open documents.</div>`}</div>
-    <div class="hint" style="margin-top:8px;">Tick documents and enter how much of the payment goes to each, until the remaining reaches zero. Ticking a document fills in its full amount due by default.</div>
+    <div class="hint" style="margin-top:8px;">Tick documents and enter how much of the payment goes to each, until the remaining reaches zero. Ticking a document fills in its full amount due by default.${isIn?' <strong>Or</strong> leave nothing ticked and click <strong>Leave on account</strong> to record a retainer/deposit — it credits the customer and auto-applies to the oldest invoices.':''}</div>
   `;
-  openModal(`Allocate payment to ${isIn?'invoices':'bills'}`, body, [
+  const actions = [
     {label:'Auto-fill oldest first', cls:'btn-ghost', onclick:'autoFillAllocations()'},
     {label:'Apply allocation', cls:'btn-primary', onclick:'applyInvoiceAllocation()'},
-  ]);
+  ];
+  if(isIn) actions.unshift({label:'Leave on account (retainer)', cls:'btn-ghost', onclick:'leaveReceiptOnAccount()'});
+  openModal(`Allocate payment to ${isIn?'invoices':'bills'}`, body, actions);
 }
 function toggleAllocDoc(docId, checked, due){
   if(checked){
@@ -5904,12 +5906,37 @@ function autoFillAllocations(){
   }
   renderInvoiceAllocator();
 }
+// Record a customer receipt as credit on account (retainer) without allocating to any invoice.
+function leaveReceiptOnAccount(){
+  const r = (S.cashbookDrafts||[]).find(x=>x.id===ALLOC.rowId);
+  if(!r){ closeModal(); return; }
+  if(!ALLOC.contactId){ showToast('Select a customer first'); return; }
+  if(!cbIsContactType(r.type) || r.type==='contact') r.type = 'customer';
+  r.contactSelection = ALLOC.contactId;
+  r.allocations = null; r.matchDocId = null;
+  ALLOC = null; closeModal();
+  showToast('Left on account — credits the customer and auto-applies to the oldest invoices');
+  renderCashbook();
+}
 function applyInvoiceAllocation(){
   const r = (S.cashbookDrafts||[]).find(x=>x.id===ALLOC.rowId);
   if(!r) { closeModal(); return; }
   const picks = Object.entries(ALLOC.picks).filter(([,v])=>Number(v)>0);
   if(!ALLOC.contactId){ showToast('Select a customer or supplier'); return; }
-  if(!picks.length){ showToast('Tick at least one document to allocate'); return; }
+  // For a CUSTOMER receipt, allocating to no invoice is allowed — it stays as credit on
+  // account (retainer/deposit) and auto-applies to the oldest invoices later.
+  if(!picks.length){
+    if(allocIsIncoming()){
+      if(!cbIsContactType(r.type) || r.type==='contact') r.type = 'customer';
+      r.contactSelection = ALLOC.contactId;
+      r.allocations = null; r.matchDocId = null;   // nothing allocated → on account
+      ALLOC = null; closeModal();
+      showToast('Left on account — will credit the customer and auto-apply to invoices');
+      renderCashbook();
+      return;
+    }
+    showToast('Tick at least one bill to allocate'); return;
+  }
   const payment = allocPaymentAmount();
   const allocated = picks.reduce((s,[,v])=>s+Number(v),0);
   if(allocated - payment > 0.005){ showToast('Allocated more than the payment amount'); return; }
