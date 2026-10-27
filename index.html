@@ -698,6 +698,7 @@ function migrateCompanyShape(co){
   co.recurringInvoices = co.recurringInvoices || [];
   co.vatReconAdjustments = co.vatReconAdjustments || {};
   co.vatReconNotes = co.vatReconNotes || {};
+  co.unallocatedReceipts = co.unallocatedReceipts || [];
   const s = co.settings || (co.settings={});
   if(s.nextQuoteNo==null) s.nextQuoteNo = 3001;
   if(s.nextSuppQuoteNo==null) s.nextSuppQuoteNo = 3501;
@@ -1899,6 +1900,10 @@ function issueInvoice(invId, dateOverride){
   const entry = postJournal('Invoice '+inv.number+' issued to '+contactName(inv.contactId), date, lines);
   entry.ref = 'inv-issue-'+inv.id;
   inv.status='open'; inv.issueRef=entry.ref; inv.date=date;
+  // if the customer holds an unallocated credit (retainer), draw it down against this invoice
+  if(typeof autoApplyCustomerCredit==='function' && customerCreditBalance(inv.contactId)>0.005){
+    autoApplyCustomerCredit(inv.contactId, date);
+  }
 }
 function issueBill(billId, dateOverride){
   const bill = S.bills.find(b=>b.id===billId);
@@ -1926,6 +1931,53 @@ function recordInvoicePayment(invId, amount, date, bankAccountId, refOverride){
   ]);
   entry.ref = refOverride || ('inv-pay-'+uid('p'));
   inv.payments.push({id:uid('pay'), date, amount, bankAccountId, journalRef:entry.ref});
+}
+// ---- Unallocated customer receipts (retainers / deposits) ----
+// Records money received from a customer that isn't tied to a specific invoice yet.
+// Books it: bank Dr, Accounts Receivable Cr (so the customer goes into credit).
+function recordUnallocatedReceipt(contactId, amount, date, bankAccountId, refOverride, desc){
+  amount = round2(amount);
+  if(!contactId || amount<=0) return null;
+  const entry = postJournal((desc||'Customer receipt')+' (on account)', date, [
+    {accountId:bankAccountId, debit:amount, credit:0},
+    {accountId:'acc_ar', debit:0, credit:amount},
+  ]);
+  entry.ref = refOverride || ('cust-receipt-'+uid('p'));
+  S.unallocatedReceipts = S.unallocatedReceipts || [];
+  const rec = { id:uid('urc'), contactId, date, amount, remaining:amount, bankAccountId,
+                journalRef:entry.ref, desc:desc||'', allocations:[] };
+  S.unallocatedReceipts.push(rec);
+  return rec;
+}
+// Total unapplied credit a customer currently holds (sum of remaining on their receipts).
+function customerCreditBalance(contactId){
+  return round2((S.unallocatedReceipts||[])
+    .filter(r=>r.contactId===contactId)
+    .reduce((s,r)=>s+(Number(r.remaining)||0),0));
+}
+// Apply a customer's available credit to their open invoices, oldest first.
+function autoApplyCustomerCredit(contactId, date){
+  if(customerCreditBalance(contactId)<=0.005) return;
+  const openInvs = S.invoices
+    .filter(i=>i.contactId===contactId && docStatus(i)!=='void' && i.status!=='draft' && docBalanceDue(i)>0.005)
+    .sort((a,b)=> (a.date||'').localeCompare(b.date||'') || (a.number||'').localeCompare(b.number||'', undefined, {numeric:true}));
+  const receipts = (S.unallocatedReceipts||[]).filter(r=>r.contactId===contactId && (Number(r.remaining)||0)>0.005)
+    .sort((a,b)=> (a.date||'').localeCompare(b.date||''));
+  // Applying a retainer to an invoice is a pure ALLOCATION — the cash (bank Dr) and the
+  // AR credit already happened when the receipt was recorded. So we only mark the invoice
+  // as paid (allocation-only, no second ledger entry). AR nets correctly overall.
+  for(const inv of openInvs){
+    let due = docBalanceDue(inv);
+    for(const rec of receipts){
+      if(due<=0.005) break;
+      if((rec.remaining||0)<=0.005) continue;
+      const apply = round2(Math.min(due, rec.remaining));
+      inv.payments.push({id:uid('pay'), date:date||rec.date, amount:apply, bankAccountId:rec.bankAccountId, journalRef:null, fromReceiptId:rec.id, memo:'Retainer applied'});
+      rec.remaining = round2((rec.remaining||0) - apply);
+      rec.allocations.push({ invId:inv.id, amount:apply, date:date||rec.date });
+      due = round2(due - apply);
+    }
+  }
 }
 function recordBillPayment(billId, amount, date, bankAccountId, refOverride){
   const bill = S.bills.find(b=>b.id===billId);
@@ -3090,7 +3142,7 @@ function downloadInvoicePdf(id, mode){
     doc.text(noteLines, M, PH-30);
   }
 
-  const fname = `${(cust.name||'invoice').replace(/[^a-z0-9]+/gi,'-')}-${inv.number}.pdf`;
+  const fname = `${(inv.number||'invoice').replace(/[^A-Za-z0-9-]+/g,'')}.pdf`;
   if(mode==='open'){ doc.output('dataurlnewwindow'); }
   else { doc.save(fname); showToast('Invoice PDF downloaded'); }
 }
@@ -5560,6 +5612,17 @@ function postCashbookRow(row){
       ? row.allocations.filter(a=>a.docId && Number(a.amount)>0)
       : (row.matchDocId ? [{docId:row.matchDocId, amount:gross}] : []);
     if(!row.contactSelection) return {ok:false, msg:`Select a ${isCust?'customer':'supplier'}`};
+    // CUSTOMER receipt with NO invoice allocation → record as an unallocated receipt
+    // (retainer / deposit). It still posts to the books (bank Dr, AR Cr) and shows on
+    // the customer's statement as a credit; it auto-applies to the oldest open invoices.
+    if(isCust && !allocs.length){
+      recordUnallocatedReceipt(row.contactSelection, round2(gross), row.date, row.accountId, cashbookRef, desc);
+      autoApplyCustomerCredit(row.contactSelection, row.date);
+      S.journal.filter(e=>e.ref===cashbookRef).forEach(e=>{ e.cashbookMeta = meta; });
+      S.cashbookReviewed = S.cashbookReviewed || [];
+      S.cashbookReviewed.push(meta);
+      return {ok:true};
+    }
     if(!allocs.length) return {ok:false, msg:`Allocate this payment to at least one ${isCust?'invoice':'bill'}`};
     allocs.forEach(a=>{
       if(isCust) recordInvoicePayment(a.docId, round2(a.amount), row.date, row.accountId, cashbookRef);
@@ -5668,6 +5731,7 @@ function cashbookSelectionCell(r){
       </select>
       ${contactPicked
         ? `<button class="btn btn-ghost btn-sm" style="width:100%;" onclick="openInvoiceAllocator('${r.id}')">⑂ ${allocLabel? 'Allocated: '+allocLabel : 'Allocate '+(isCust?'invoices':'bills')+'…'}</button>`
+          + ((isCust && !allocCount)? `<div class="hint" style="margin:2px 0 0; font-size:11px; color:var(--money-pos);">No invoice? It's kept as credit on account (auto-applies to oldest invoices).</div>` : '')
         : (contacts.length===0 ? `<div class="hint" style="margin:0;">No ${isCust?'customers':'suppliers'} yet</div>` : '')}
     `;
   }
@@ -6281,10 +6345,20 @@ function buildStatement(contact, kind, fromDate, toDate){
   docs.forEach(d=>{
     events.push({date:d.date, ref:d.number, type:isCust?'Invoice':'Bill', charge:totalOf(d), credit:0, sort:d.date+'-1'});
     (d.payments||[]).forEach(p=>{
+      // A payment funded by an unallocated receipt (retainer) is a pure allocation — the
+      // cash credit is shown on the receipt line itself, so don't credit it again here.
+      if(p.fromReceiptId) return;
       const isCreditAlloc = !!p.creditNoteId;
       events.push({date:p.date, ref:p.memo|| (isCust?'Receipt':'Payment'), type:isCreditAlloc?'Credit applied':(isCust?'Payment received':'Payment made'), charge:0, credit:p.amount, sort:p.date+'-2'});
     });
   });
+  // Unallocated customer receipts (retainers / deposits) — the FULL receipt is a credit
+  // (cash in reduces the customer's balance); later allocations are shown against invoices.
+  if(isCust){
+    (S.unallocatedReceipts||[]).filter(r=>r.contactId===contact.id).forEach(r=>{
+      events.push({date:r.date, ref:(r.desc||'Receipt (on account)'), type:'Receipt (on account)', charge:0, credit:round2(r.amount), sort:r.date+'-2'});
+    });
+  }
   cns.forEach(c=>{
     // standalone credit notes (not allocated) show as a credit line
     if(!c.appliesToId){
@@ -6375,16 +6449,18 @@ function renderContactDirectory(kind, tab){
       </div>
       <div class="card">
         ${dlist.length? `<div style="overflow-x:auto;"><table>
-          <thead><tr><th>Name</th><th>Contact person</th><th>Email</th><th>Phone</th><th>VAT No.</th><th>Address</th><th></th></tr></thead>
+          <thead><tr><th>Name</th><th>Contact person</th><th>Email</th><th>Phone</th><th>VAT No.</th>${isCust?'<th class="amt">Credit on account</th>':''}<th>Address</th><th></th></tr></thead>
           <tbody>
           ${dlist.map(c=>{
             const addr = (c.address||c.postalAddress||c.physicalAddress||'').split('\n').filter(Boolean).join(', ');
+            const credit = isCust ? customerCreditBalance(c.id) : 0;
             return `<tr class="clickable" onclick="openContactForm(null,'${c.id}')">
               <td><strong>${escapeHtml(c.name)}</strong></td>
               <td>${escapeHtml(c.contactName||'—')}</td>
               <td>${escapeHtml(c.email||'—')}</td>
               <td>${escapeHtml(c.phone||'—')}</td>
               <td class="mono">${escapeHtml(c.vatNo||'—')}</td>
+              ${isCust?`<td class="amt num" style="${credit>0?'color:var(--money-pos); font-weight:600;':'color:var(--text-muted);'}">${credit>0?fmt(credit):'—'}</td>`:''}
               <td style="font-size:12px; color:var(--text-muted); max-width:240px;">${escapeHtml(addr||'—')}</td>
               <td style="text-align:right; white-space:nowrap;"><button class="icon-btn" onclick="event.stopPropagation(); openContactForm(null,'${c.id}')">Open / Edit</button></td>
             </tr>`;
