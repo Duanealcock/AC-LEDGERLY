@@ -6312,16 +6312,31 @@ function undoReviewedCashbook(cashbookRef, silent){
   if(!meta) return;
   if(isDateInClosedVatPeriod(meta.date)){ if(!silent) showToast('That transaction is in a closed VAT period — reopen the period to move it'); return; }
   if(!silent && !confirm('Undo this reviewed transaction? It will be reversed out of the books and returned to New Transactions.')) return;
-  // If it was a contact allocation, remove the payment record from the target doc
-  if(meta.type==='contact' && meta.matchDocId){
-    const isIn = meta.received>0;
-    const doc = (isIn?S.invoices:S.bills).find(d=>d.id===meta.matchDocId);
-    if(doc && doc.payments){
-      doc.payments = doc.payments.filter(p=>p.journalRef!==cashbookRef);
+  // If it was a contact allocation, remove the payment record(s) from the target doc(s).
+  // Covers single matchDocId, multi-invoice allocations, and the on-account surplus ref.
+  if(cbIsContactType(meta.type) || meta.type==='contact'){
+    const isIn = (meta.received||0)>0;
+    (isIn?S.invoices:S.bills).forEach(doc=>{
+      if(doc.payments && doc.payments.length){
+        doc.payments = doc.payments.filter(p=> p.journalRef!==cashbookRef && p.journalRef!==cashbookRef+'-oa');
+      }
+    });
+    // Reverse any unallocated receipt (retainer/deposit) this transaction created, and
+    // unwind every invoice allocation it auto-applied, so nothing is left double-counted.
+    if(isIn && Array.isArray(S.unallocatedReceipts) && S.unallocatedReceipts.length){
+      const killRefs = new Set([cashbookRef, cashbookRef+'-oa']);
+      const removed = S.unallocatedReceipts.filter(r=>killRefs.has(r.journalRef));
+      removed.forEach(rec=>{
+        (rec.allocations||[]).forEach(al=>{
+          const inv = S.invoices.find(i=>i.id===al.invId);
+          if(inv && inv.payments) inv.payments = inv.payments.filter(p=> p.fromReceiptId!==rec.id);
+        });
+      });
+      S.unallocatedReceipts = S.unallocatedReceipts.filter(r=>!killRefs.has(r.journalRef));
     }
   }
-  // remove the journal entry/entries tagged with this ref (this cleanly backs the posting out of all balances)
-  S.journal = S.journal.filter(e=> e.ref!==cashbookRef);
+  // remove the journal entry/entries tagged with this ref (and its on-account surplus leg)
+  S.journal = S.journal.filter(e=> e.ref!==cashbookRef && e.ref!==cashbookRef+'-oa');
   // restore as a draft row for re-allocation
   S.cashbookDrafts = S.cashbookDrafts || [];
   S.cashbookDrafts.push({
