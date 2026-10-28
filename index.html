@@ -2873,11 +2873,18 @@ function openInvoiceDetail(id){
     actions.push({label:'Void', cls:'btn-danger', onclick:`voidInvoiceAction('${inv.id}')`});
     actions.push({label:'Record payment', cls:'btn-primary', onclick:`openInvoicePaymentForm('${inv.id}')`});
   } else if(status==='partial'){
-    // has payments → not directly editable
+    // Editable only if the applied amount is purely retainer credit (no real cash).
+    if(invoiceOnlyHasRetainerCredit(inv)){
+      actions.push({label:'Edit', cls:'btn-ghost', onclick:`closeModal(); openInvoiceForm('${inv.id}')`});
+    }
     actions.push({label:'Make recurring', cls:'btn-ghost', onclick:`makeInvoiceRecurring('${inv.id}')`});
     actions.push({label:'Void', cls:'btn-danger', onclick:`voidInvoiceAction('${inv.id}')`});
     actions.push({label:'Record payment', cls:'btn-primary', onclick:`openInvoicePaymentForm('${inv.id}')`});
   } else if(status==='paid'){
+    // Editable only if fully covered by retainer credit (no real cash payment).
+    if(invoiceOnlyHasRetainerCredit(inv)){
+      actions.push({label:'Edit', cls:'btn-ghost', onclick:`closeModal(); openInvoiceForm('${inv.id}')`});
+    }
     actions.push({label:'Make recurring', cls:'btn-ghost', onclick:`makeInvoiceRecurring('${inv.id}')`});
     actions.push({label:'Void', cls:'btn-danger', onclick:`voidInvoiceAction('${inv.id}')`});
   }
