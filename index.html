@@ -2002,6 +2002,32 @@ function detachRetainerCredit(inv){
   });
   inv.payments = keep;
 }
+// Detach genuine CASH payments (not retainer allocations) from an invoice so it can be
+// edited. Reverses each payment's ledger entry and returns the payment details so they
+// can be re-recorded against the edited invoice. Retainer allocations are left for
+// detachRetainerCredit to handle separately.
+function detachCashPayments(inv){
+  const cash = (inv.payments||[]).filter(p=>!p.fromReceiptId);
+  cash.forEach(p=>{
+    if(p.journalRef) S.journal = S.journal.filter(e=>e.ref!==p.journalRef);
+  });
+  inv.payments = (inv.payments||[]).filter(p=>!!p.fromReceiptId);
+  return cash.map(p=>({amount:round2(p.amount), date:p.date, bankAccountId:p.bankAccountId}));
+}
+// Re-record remembered cash payments against the (edited) invoice. Anything that no
+// longer fits the invoice total is put on account as customer credit — never discarded.
+function reattachCashPayments(inv, cashPays){
+  (cashPays||[]).forEach(p=>{
+    const due = docBalanceDue(inv);
+    const applied = round2(Math.min(p.amount, Math.max(0,due)));
+    if(applied>0.005) recordInvoicePayment(inv.id, applied, p.date, p.bankAccountId);
+    const surplus = round2(p.amount - applied);
+    if(surplus>0.005){
+      recordUnallocatedReceipt(inv.contactId, surplus, p.date, p.bankAccountId, 'inv-edit-oa-'+uid('p'), 'Payment surplus');
+    }
+  });
+  if(typeof autoApplyCustomerCredit==='function') autoApplyCustomerCredit(inv.contactId, inv.date);
+}
 function recordBillPayment(billId, amount, date, bankAccountId, refOverride){
   const bill = S.bills.find(b=>b.id===billId);
   if(!bill) return;
@@ -2688,15 +2714,12 @@ function openInvoiceForm(editId){
   }
   const editInv = editId ? S.invoices.find(i=>i.id===editId) : null;
   INVOICE_EDIT_ID = editInv ? editId : null;
-  // Guard: can't edit a paid/partially-paid invoice (real cash already moved).
-  // Exception: if the only thing applied is auto-applied retainer credit, editing IS
-  // allowed — we detach the credit, re-post, and re-apply it to the new total.
+  // Any non-void invoice can be edited. Payments (retainer credit and real cash) are
+  // detached on save, the invoice is re-posted, then payments are re-applied to the new
+  // total — any overpayment goes on account rather than being lost.
   if(editInv){
     const st = docStatus(editInv);
-    if(st==='void'){ showToast('Voided invoices can\'t be edited'); return; }
-    if((st==='paid' || st==='partial') && !invoiceOnlyHasRetainerCredit(editInv)){
-      showToast('Paid invoices can\'t be edited — void it or issue a credit note'); return;
-    }
+    if(st==='void'){ showToast('Voided invoices can\'t be edited — they\'re already reversed'); return; }
   }
   const customers = S.contacts.filter(c=>c.type==='customer');
   const incomeAccounts = S.accounts.filter(a=>a.type==='Income');
@@ -2800,12 +2823,12 @@ function submitInvoiceForm(issueNow){
     if(!inv){ INVOICE_EDIT_ID=null; showToast('Invoice not found'); return; }
     const wasStatus = docStatus(inv);
     if(wasStatus==='void'){ showToast('This invoice can no longer be edited'); return; }
-    // Retainer-only invoices are editable: detach the credit first, re-apply after.
-    const hadRetainerCredit = invoiceOnlyHasRetainerCredit(inv);
-    if((wasStatus==='paid' || wasStatus==='partial') && !hadRetainerCredit){
-      showToast('This invoice can no longer be edited'); return;
-    }
-    if(hadRetainerCredit) detachRetainerCredit(inv);   // give the deposit back to the receipt
+    // Detach everything applied to the invoice so it can be re-posted cleanly:
+    //  • retainer credit goes back to the customer's on-account receipts
+    //  • real cash payments are remembered, their ledger entries reversed, then
+    //    re-recorded against the new total after the edit (surplus goes on account).
+    detachRetainerCredit(inv);                    // give any deposit back to the receipt
+    const detachedCash = detachCashPayments(inv); // remember + reverse real cash payments
     const wasIssued = (wasStatus!=='draft');
     // If it was issued, reverse its old ledger entry first.
     if(wasIssued && inv.issueRef){ reverseJournalByRef(inv.issueRef); inv.issueRef=null; }
@@ -2820,8 +2843,15 @@ function submitInvoiceForm(issueNow){
     if(shouldIssue){
       inv.status = 'draft';           // reset so issueInvoice re-posts cleanly
       issueInvoice(inv.id, (issueNow==='keep' ? (inv.date||date) : date));
+      // Re-attach the real cash payments we reversed, now against the edited total.
+      // (issueInvoice already re-applied any retainer credit.)
+      reattachCashPayments(inv, detachedCash);
     } else {
       inv.status = 'draft';
+      // Kept as a draft: real cash can't sit on a draft, so park it on account.
+      (detachedCash||[]).forEach(p=>{
+        recordUnallocatedReceipt(inv.contactId, p.amount, p.date, p.bankAccountId, 'inv-edit-oa-'+uid('p'), 'Payment held (invoice reverted to draft)');
+      });
     }
     INVOICE_EDIT_ID = null;
     saveState(true);
@@ -2873,18 +2903,14 @@ function openInvoiceDetail(id){
     actions.push({label:'Void', cls:'btn-danger', onclick:`voidInvoiceAction('${inv.id}')`});
     actions.push({label:'Record payment', cls:'btn-primary', onclick:`openInvoicePaymentForm('${inv.id}')`});
   } else if(status==='partial'){
-    // Editable only if the applied amount is purely retainer credit (no real cash).
-    if(invoiceOnlyHasRetainerCredit(inv)){
-      actions.push({label:'Edit', cls:'btn-ghost', onclick:`closeModal(); openInvoiceForm('${inv.id}')`});
-    }
+    // Editable — on save, payments are detached, the invoice re-posted, then re-applied.
+    actions.push({label:'Edit', cls:'btn-ghost', onclick:`closeModal(); openInvoiceForm('${inv.id}')`});
     actions.push({label:'Make recurring', cls:'btn-ghost', onclick:`makeInvoiceRecurring('${inv.id}')`});
     actions.push({label:'Void', cls:'btn-danger', onclick:`voidInvoiceAction('${inv.id}')`});
     actions.push({label:'Record payment', cls:'btn-primary', onclick:`openInvoicePaymentForm('${inv.id}')`});
   } else if(status==='paid'){
-    // Editable only if fully covered by retainer credit (no real cash payment).
-    if(invoiceOnlyHasRetainerCredit(inv)){
-      actions.push({label:'Edit', cls:'btn-ghost', onclick:`closeModal(); openInvoiceForm('${inv.id}')`});
-    }
+    // Editable — payments are re-linked to the new total (surplus goes on account).
+    actions.push({label:'Edit', cls:'btn-ghost', onclick:`closeModal(); openInvoiceForm('${inv.id}')`});
     actions.push({label:'Make recurring', cls:'btn-ghost', onclick:`makeInvoiceRecurring('${inv.id}')`});
     actions.push({label:'Void', cls:'btn-danger', onclick:`voidInvoiceAction('${inv.id}')`});
   }
