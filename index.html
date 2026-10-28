@@ -1979,6 +1979,29 @@ function autoApplyCustomerCredit(contactId, date){
     }
   }
 }
+// True if everything applied to this invoice is auto-applied retainer credit
+// (fromReceiptId set) rather than a genuine direct cash payment. Such an invoice is
+// safe to edit — we just detach the credit, re-post, and re-apply it.
+function invoiceOnlyHasRetainerCredit(inv){
+  const pays = inv.payments||[];
+  if(!pays.length) return false;
+  return pays.every(p=>!!p.fromReceiptId);
+}
+// Detach every retainer allocation from this invoice and give the credit back to the
+// receipts it came from, so the invoice can be edited without losing the deposit.
+function detachRetainerCredit(inv){
+  const pays = inv.payments||[];
+  const keep = [];
+  pays.forEach(p=>{
+    if(!p.fromReceiptId){ keep.push(p); return; }
+    const rec = (S.unallocatedReceipts||[]).find(r=>r.id===p.fromReceiptId);
+    if(rec){
+      rec.remaining = round2((Number(rec.remaining)||0) + (Number(p.amount)||0));
+      rec.allocations = (rec.allocations||[]).filter(a=>a.invId!==inv.id);
+    }
+  });
+  inv.payments = keep;
+}
 function recordBillPayment(billId, amount, date, bankAccountId, refOverride){
   const bill = S.bills.find(b=>b.id===billId);
   if(!bill) return;
@@ -2665,11 +2688,15 @@ function openInvoiceForm(editId){
   }
   const editInv = editId ? S.invoices.find(i=>i.id===editId) : null;
   INVOICE_EDIT_ID = editInv ? editId : null;
-  // Guard: can't edit a paid/partially-paid invoice (money already moved).
+  // Guard: can't edit a paid/partially-paid invoice (real cash already moved).
+  // Exception: if the only thing applied is auto-applied retainer credit, editing IS
+  // allowed — we detach the credit, re-post, and re-apply it to the new total.
   if(editInv){
     const st = docStatus(editInv);
-    if(st==='paid' || st==='partial'){ showToast('Paid invoices can\'t be edited — void it or issue a credit note'); return; }
     if(st==='void'){ showToast('Voided invoices can\'t be edited'); return; }
+    if((st==='paid' || st==='partial') && !invoiceOnlyHasRetainerCredit(editInv)){
+      showToast('Paid invoices can\'t be edited — void it or issue a credit note'); return;
+    }
   }
   const customers = S.contacts.filter(c=>c.type==='customer');
   const incomeAccounts = S.accounts.filter(a=>a.type==='Income');
@@ -2772,7 +2799,13 @@ function submitInvoiceForm(issueNow){
     const inv = S.invoices.find(i=>i.id===INVOICE_EDIT_ID);
     if(!inv){ INVOICE_EDIT_ID=null; showToast('Invoice not found'); return; }
     const wasStatus = docStatus(inv);
-    if(wasStatus==='paid' || wasStatus==='partial' || wasStatus==='void'){ showToast('This invoice can no longer be edited'); return; }
+    if(wasStatus==='void'){ showToast('This invoice can no longer be edited'); return; }
+    // Retainer-only invoices are editable: detach the credit first, re-apply after.
+    const hadRetainerCredit = invoiceOnlyHasRetainerCredit(inv);
+    if((wasStatus==='paid' || wasStatus==='partial') && !hadRetainerCredit){
+      showToast('This invoice can no longer be edited'); return;
+    }
+    if(hadRetainerCredit) detachRetainerCredit(inv);   // give the deposit back to the receipt
     const wasIssued = (wasStatus!=='draft');
     // If it was issued, reverse its old ledger entry first.
     if(wasIssued && inv.issueRef){ reverseJournalByRef(inv.issueRef); inv.issueRef=null; }
