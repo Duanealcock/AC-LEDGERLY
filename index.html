@@ -28,6 +28,8 @@
     --text-inverse:#EEF0F5;
     --radius:8px;
     --shadow:0 1px 2px rgba(11,15,29,.06), 0 4px 14px rgba(11,15,29,.05);
+    --zebra:#F7F8FB;        /* subtle alternate-row tint */
+    --row-hover:#EEF1F7;    /* clearer hover than the zebra tint */
   }
   *{box-sizing:border-box;}
   html,body{margin:0;padding:0;height:100%;}
@@ -141,10 +143,12 @@
     text-align:left; font-size:10.5px; text-transform:uppercase; letter-spacing:.8px; color:var(--text-muted);
     padding:9px 10px; border-bottom:1px solid var(--border); font-weight:600; white-space:nowrap;
   }
-  tbody td{padding:11px 10px; border-bottom:1px solid var(--border); font-size:13.5px; vertical-align:middle;}
+  tbody td{padding:11px 10px; border-bottom:1px solid var(--border); font-size:13.5px; font-weight:500; vertical-align:middle;}
+  /* Alternating row shading so each transaction line is easy to tell apart. */
+  tbody tr:nth-child(even){background:var(--zebra);}
   tbody tr:last-child td{border-bottom:none;}
   tbody tr.clickable{cursor:pointer;}
-  tbody tr.clickable:hover{background:var(--surface-2);}
+  tbody tr.clickable:hover{background:var(--row-hover);}
   .amt-right{text-align:right;}
   .pos{color:var(--money-pos);}
   .neg{color:var(--red);}
@@ -264,7 +268,9 @@
   /* Cashbook grid */
   .cashbook-table{ width:100%; border-collapse:collapse; min-width:1080px; table-layout:fixed; }
   .cashbook-table thead th{ text-align:left; font-size:10px; text-transform:uppercase; letter-spacing:.6px; color:var(--text-muted); padding:8px 6px; border-bottom:1px solid var(--border); font-weight:700; background:var(--surface-2); white-space:nowrap; }
-  .cashbook-table tbody td{ padding:5px 6px; border-bottom:1px solid var(--border); vertical-align:top; }
+  .cashbook-table tbody td{ padding:5px 6px; border-bottom:1px solid var(--border); vertical-align:top; font-weight:500; }
+  .cashbook-table tbody tr:nth-child(even){ background:var(--zebra); }
+  .cashbook-table tbody tr:hover{ background:var(--row-hover); }
   .cashbook-table input, .cashbook-table select{ font-size:12.5px; padding:6px 7px; width:100%; }
   .cashbook-table input[type=number]{ text-align:right; }
   .cashbook-table select{ color:var(--text); }
@@ -305,6 +311,8 @@
   .acct-pick-input:focus{ outline:none; border-color:var(--accent); box-shadow:0 0 0 3px rgba(201,162,39,.15); }
   .acct-pick-input::placeholder{ color:var(--gold); font-weight:600; opacity:.9; }
   .acct-pick-list{ position:absolute; z-index:50; top:calc(100% + 2px); left:0; min-width:280px; max-width:360px; max-height:260px; overflow-y:auto; background:var(--surface); border:1px solid var(--border-strong); border-radius:8px; box-shadow:0 10px 30px rgba(0,0,0,.18); }
+  /* When there isn't room below (near the bottom of a page/table), open upward instead. */
+  .acct-pick-list.drop-up{ top:auto; bottom:calc(100% + 2px); box-shadow:0 -10px 30px rgba(0,0,0,.18); }
   .acct-pick-item{ padding:7px 10px; font-size:12.5px; cursor:pointer; display:flex; align-items:center; gap:6px; border-bottom:1px solid var(--border); }
   .acct-pick-item:last-child{ border-bottom:none; }
   .acct-pick-item.active, .acct-pick-item:hover{ background:var(--surface-2); }
@@ -318,7 +326,9 @@
   .ob-table th{ font-size:11px; text-transform:uppercase; letter-spacing:.5px; color:var(--text-muted); padding:10px 14px; border-bottom:1.5px solid var(--border-strong); }
   .ob-table th.ob-th-acct{ text-align:left; }
   .ob-table th.ob-th-amt{ text-align:right; }
-  .ob-table td{ padding:5px 14px; border-bottom:1px solid var(--border); font-size:13px; vertical-align:middle; }
+  .ob-table td{ padding:5px 14px; border-bottom:1px solid var(--border); font-size:13px; font-weight:500; vertical-align:middle; }
+  .ob-table tbody tr:nth-child(even) td{ background:var(--zebra); }
+  .ob-table tbody tr.ob-group-row td, .ob-table tbody tr.ob-total-row td, .ob-table tbody tr.ob-diff-row td{ background:var(--surface-2); }
   .ob-acct{ white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
   .ob-sys{ font-size:10px; text-transform:uppercase; letter-spacing:.5px; color:var(--text-muted); margin-left:6px; }
   .ob-cell{ text-align:right; }
@@ -2875,7 +2885,7 @@ function openInvoiceDetail(id){
   if(!inv) return;
   const status = docStatus(inv);
   const rows = inv.lines.map(l=>`<tr><td>${l.desc}</td><td class="amt num">${l.qty}</td><td class="amt num">${fmt(l.price)}</td><td class="amt num">${fmt(lineSubtotal(l))}</td></tr>`).join('');
-  const paymentsRows = (inv.payments||[]).map(p=>`<tr><td>${fmtDate(p.date)}</td><td>${S.accounts.find(a=>a.id===p.bankAccountId)?.name||''}</td><td class="amt num">${fmt(p.amount)}</td></tr>`).join('');
+  const paymentsRows = (inv.payments||[]).map(p=>`<tr><td>${fmtDate(p.date)}</td><td>${p.fromReceiptId?'<span style="color:var(--text-muted);">Retainer applied</span>':(S.accounts.find(a=>a.id===p.bankAccountId)?.name||'')}</td><td class="amt num">${fmt(p.amount)}</td><td style="width:34px; text-align:right;"><button class="icon-btn" title="Remove this payment" onclick="removeInvoicePayment('${inv.id}','${p.id}')">✕</button></td></tr>`).join('');
   const body = `
     <div style="display:flex; justify-content:space-between; margin-bottom:16px;">
       <div><div style="font-size:12px; color:var(--text-muted);">Customer</div><strong>${contactName(inv.contactId)}</strong></div>
@@ -2919,6 +2929,36 @@ function openInvoiceDetail(id){
 function issueInvoiceAction(id){ issueInvoice(id); closeModal(); showToast('Invoice issued'); openInvoicePrintView(id); }
 function voidInvoiceAction(id){ if(confirm('Void this invoice? This reverses its ledger entries.')){ voidInvoice(id); closeModal(); showToast('Invoice voided'); navigate('sales'); } }
 function deleteInvoice(id){ if(confirm('Delete this draft invoice?')){ S.invoices = S.invoices.filter(i=>i.id!==id); closeModal(); showToast('Draft deleted'); navigate('sales'); } }
+// Remove a single payment from an invoice. A real cash payment is reversed out of the
+// ledger; a retainer allocation is handed back to the customer's on-account credit.
+function removeInvoicePayment(invId, payId){
+  const inv = S.invoices.find(i=>i.id===invId);
+  if(!inv) return;
+  const p = (inv.payments||[]).find(x=>x.id===payId);
+  if(!p) return;
+  if(!confirm('Remove this payment from the invoice? '+(p.fromReceiptId?'The amount goes back to the customer\'s credit on account.':'Its ledger entry will be reversed.'))) return;
+  if(p.fromReceiptId){
+    // retainer allocation → give the credit back to the receipt
+    const rec = (S.unallocatedReceipts||[]).find(r=>r.id===p.fromReceiptId);
+    if(rec){
+      rec.remaining = round2((Number(rec.remaining)||0) + (Number(p.amount)||0));
+      rec.allocations = (rec.allocations||[]).filter(a=>a.invId!==inv.id);
+    }
+  } else {
+    // real cash → reverse the bank/AR journal entry
+    if(p.journalRef) S.journal = S.journal.filter(e=>e.ref!==p.journalRef);
+  }
+  inv.payments = inv.payments.filter(x=>x.id!==payId);
+  // Removing a cash payment may re-open the invoice — let any available retainer credit
+  // flow onto it so the customer's deposit draws down correctly.
+  if(typeof autoApplyCustomerCredit==='function' && customerCreditBalance(inv.contactId)>0.005){
+    autoApplyCustomerCredit(inv.contactId, inv.date);
+  }
+  saveState(true);
+  closeModal();
+  showToast('Payment removed');
+  openInvoiceDetail(invId);
+}
 function openInvoicePaymentForm(id){
   const inv = S.invoices.find(i=>i.id===id);
   const bankAccounts = S.accounts.filter(a=>a.isBank);
@@ -4748,18 +4788,32 @@ function acctPickRender(listEl, filter, rowId, activeIdx){
     <span class="acct-pick-code">${escapeHtml(a.code||'')}</span> ${escapeHtml(a.name||'')}
     <span class="acct-pick-type">${escapeHtml(a.type||'')}</span></div>`).join('');
 }
+// Decide whether the dropdown should open downward or flip upward, based on how much
+// room is left below the input in the viewport. Keeps the options from spilling off the
+// bottom edge / being clipped by a card or scroll container near the end of a page.
+function acctPickPlace(input, list){
+  try{
+    const r = input.getBoundingClientRect();
+    const spaceBelow = window.innerHeight - r.bottom;
+    const needed = Math.min(260, list.scrollHeight || 260) + 12;
+    if(spaceBelow < needed && r.top > spaceBelow) list.classList.add('drop-up');
+    else list.classList.remove('drop-up');
+  }catch(e){ list.classList.remove('drop-up'); }
+}
 function acctPickOpen(input){
   const wrap = input.closest('.acct-pick'); const list = wrap.querySelector('.acct-pick-list');
   const rowId = wrap.getAttribute('data-row');
   input.select();
   acctPickRender(list, '', rowId);
   list.style.display = 'block';
+  acctPickPlace(input, list);
 }
 function acctPickFilter(input){
   const wrap = input.closest('.acct-pick'); const list = wrap.querySelector('.acct-pick-list');
   const rowId = wrap.getAttribute('data-row');
   acctPickRender(list, input.value, rowId);
   list.style.display = 'block';
+  acctPickPlace(input, list);
 }
 function acctPickKey(e, input){
   const wrap = input.closest('.acct-pick'); const list = wrap.querySelector('.acct-pick-list');
