@@ -7207,57 +7207,72 @@ function renderStatementPrintPage(){
   document.getElementById('content').innerHTML = pages;
 }
 
-// The printable statement document markup for one contact (shared by screen + export).
+// The printable statement document markup for one contact — mirrors the invoice layout
+// (.invoice-doc) so a printed statement matches a printed invoice exactly.
 function statementDocHtml(contact, kind, fromDate, toDate){
   const isCust = kind==='customer';
   const biz = S.settings;
   const st = buildStatement(contact, kind, fromDate||null, toDate||null);
   const openDocs = (isCust?S.invoices:S.bills).filter(d=>d.contactId===contact.id && d.status!=='draft' && docStatus(d)!=='void' && docBalanceDue(d)>0);
   const aging = agingForDocs(openDocs, toDate||todayStr());
-  const bizAddr = (biz.businessAddress||'').split('\n').map(l=>l.trim()).filter(Boolean);
-  const custAddr = (contact.address||'').split('\n').map(l=>l.trim()).filter(Boolean);
-  const periodNote = (fromDate||toDate)? `<div style="font-size:11.5px; color:#555; margin-top:2px;">Period: ${fromDate?fmtDate(fromDate):'start'} – ${toDate?fmtDate(toDate):fmtDate(todayStr())}</div>`:'';
-  return `<div class="statement-doc">
+  // Same address fields the invoice uses (postal / physical), with sensible fallbacks.
+  const bizPostal = addrLines(biz.businessPostalAddress || biz.businessAddress);
+  const bizPhysical = addrLines(biz.businessPhysicalAddress || biz.businessAddress);
+  const custPostal = addrLines(contact.postalAddress || contact.address);
+  const custPhysical = addrLines(contact.physicalAddress || contact.address);
+  const addrBlock = (postal, physical)=>`<div class="addr-cols">
+      <div><div class="doc-label">Postal Address</div>${postal.length? postal.map(l=>`<div>${escapeHtml(l)}</div>`).join('') : '<div style="color:#bbb;">—</div>'}</div>
+      <div><div class="doc-label">Physical Address</div>${physical.length? physical.map(l=>`<div>${escapeHtml(l)}</div>`).join('') : '<div style="color:#bbb;">—</div>'}</div>
+    </div>`;
+  const periodText = (fromDate||toDate) ? `${fromDate?fmtDate(fromDate):'start'} – ${toDate?fmtDate(toDate):fmtDate(todayStr())}` : 'All transactions';
+  return `<div class="invoice-doc">
       <div style="display:flex; justify-content:space-between; align-items:flex-start;">
         <div>
-          ${biz.invoiceLogoDataUrl? `<img class="doc-logo" src="${biz.invoiceLogoDataUrl}" alt="Logo">`:''}
+          ${biz.invoiceLogoDataUrl? `<img class="doc-logo" src="${biz.invoiceLogoDataUrl}" alt="Company logo">` : ''}
           <div style="font-weight:700; font-size:15px;">${escapeHtml(biz.businessName||'')}</div>
-          ${bizAddr.map(l=>`<div style="font-size:11px; color:#444;">${escapeHtml(l)}</div>`).join('')}
-          ${biz.businessVatNo?`<div style="font-size:11px; color:#444;">VAT: ${escapeHtml(biz.businessVatNo)}</div>`:''}
         </div>
-        <div style="text-align:right;">
+        <div>
           <div class="doc-title">STATEMENT</div>
-          <div style="font-size:11.5px; color:#555; margin-top:6px;">Date: <strong>${fmtDate(toDate||todayStr())}</strong></div>
-          ${periodNote}
+          <div class="doc-meta"><table>
+            <tr><td>DATE:</td><td>${fmtDate(toDate||todayStr())}</td></tr>
+            <tr><td>PERIOD:</td><td>${periodText}</td></tr>
+            <tr><td>ACCOUNT:</td><td>${escapeHtml(contact.name||'')}</td></tr>
+          </table></div>
         </div>
       </div>
-      <div style="margin:22px 0 16px; padding-top:14px; border-top:1px solid #ddd;">
-        <div class="doc-label">To</div>
-        <div style="font-weight:700; font-size:14px; margin-top:3px;">${escapeHtml(contact.name)}</div>
-        ${custAddr.map(l=>`<div style="font-size:11px; color:#444;">${escapeHtml(l)}</div>`).join('')}
-        ${contact.vatNo?`<div style="font-size:11px; color:#444;">VAT: ${escapeHtml(contact.vatNo)}</div>`:''}
+      <div class="doc-parties">
+        <div>
+          <div class="doc-label">From</div>
+          <div class="party-name">${escapeHtml(biz.businessName||'')}</div>
+          ${biz.businessVatNo? `<div style="font-size:11px;"><strong>VAT NO:</strong> ${escapeHtml(biz.businessVatNo)}</div>`:''}
+          ${addrBlock(bizPostal, bizPhysical)}
+        </div>
+        <div>
+          <div class="doc-label">To</div>
+          <div class="party-name">${escapeHtml(contact.name||'')}</div>
+          ${contact.vatNo? `<div style="font-size:11px;"><strong>${isCust?'CUSTOMER':'SUPPLIER'} VAT NO:</strong> ${escapeHtml(contact.vatNo)}</div>`:''}
+          ${addrBlock(custPostal, custPhysical)}
+        </div>
       </div>
-      <table class="doc-items"><thead><tr><th>Date</th><th>Type</th><th>Reference</th><th class="r">Charge</th><th class="r">Credit</th><th class="r">Balance</th></tr></thead>
-        <tbody>${fromDate? `<tr><td>${fmtDateShort(fromDate)}</td><td colspan="4" style="color:#666;">Opening balance</td><td class="r">${fmt(st.openingBalance)}</td></tr>`:''}${st.rows.map(e=>`<tr><td>${fmtDateShort(e.date)}</td><td>${e.type}</td><td>${escapeHtml(e.ref)}</td>
+      <table class="doc-items">
+        <thead><tr><th>Date</th><th>Type</th><th>Reference</th><th class="r">Charge</th><th class="r">Credit</th><th class="r">Balance</th></tr></thead>
+        <tbody>${fromDate? `<tr><td>${fmtDateShort(fromDate)}</td><td colspan="4" style="color:#666;">Opening balance</td><td class="r">${fmt(st.openingBalance)}</td></tr>`:''}${st.rows.map(e=>`<tr><td>${fmtDateShort(e.date)}</td><td>${escapeHtml(e.type)}</td><td>${escapeHtml(e.ref)}</td>
           <td class="r">${e.charge?fmt(e.charge):''}</td><td class="r">${e.credit?fmt(e.credit):''}</td><td class="r">${fmt(e.balance)}</td></tr>`).join('')}</tbody>
       </table>
-      <div style="display:flex; justify-content:space-between; margin-top:22px; align-items:flex-start; gap:20px;">
-        <div style="font-size:11px; color:#555;">
-          <div style="font-weight:700; margin-bottom:5px; text-transform:uppercase; letter-spacing:.5px; font-size:9.5px; color:#999;">Ageing</div>
-          <table style="border-collapse:collapse; font-size:11px;">
-            <tr><td style="padding:2px 14px 2px 0; color:#666;">Current</td><td class="r num">${fmt(aging.current)}</td></tr>
-            <tr><td style="padding:2px 14px 2px 0; color:#666;">1–30 days</td><td class="r num">${fmt(aging.d30)}</td></tr>
-            <tr><td style="padding:2px 14px 2px 0; color:#666;">31–60 days</td><td class="r num">${fmt(aging.d60)}</td></tr>
-            <tr><td style="padding:2px 14px 2px 0; color:#666;">61–90+ days</td><td class="r num">${fmt(aging.d90)}</td></tr>
-          </table>
+      <div class="doc-footer">
+        <div class="doc-bank">
+          <div class="doc-label" style="margin-bottom:5px;">Ageing</div>
+          Current: ${fmt(aging.current)}<br>
+          1–30 days: ${fmt(aging.d30)}<br>
+          31–60 days: ${fmt(aging.d60)}<br>
+          61–90+ days: ${fmt(aging.d90)}
+          ${biz.bankName? `<div style="margin-top:12px;"><div class="doc-label" style="margin-bottom:5px;">Payment to</div>Bank: ${escapeHtml(biz.bankName)}<br>${biz.bankBranch? 'Branch Code: '+escapeHtml(biz.bankBranch)+'<br>':''}${biz.bankAccountNumber? 'Account Number: '+escapeHtml(biz.bankAccountNumber):''}</div>`:''}
         </div>
-        <div style="width:240px;">
+        <div class="doc-totals">
           <div class="doc-balance"><div class="lbl">Balance ${isCust?'Due':'Owed'}</div><div class="amt num">${fmt(st.closingBalance)}</div></div>
         </div>
       </div>
-      ${biz.bankName? `<div style="margin-top:22px; font-size:11px; color:#444; border-top:1px solid #eee; padding-top:10px;">
-        Please make payment to: ${escapeHtml(biz.bankName)}${biz.bankBranch? ' · Branch '+escapeHtml(biz.bankBranch):''}${biz.bankAccountNumber? ' · Acc '+escapeHtml(biz.bankAccountNumber):''}</div>`:''}
-      ${biz.invoiceFooterNote? `<div style="margin-top:12px; font-size:11px; color:#555; white-space:pre-line;">${escapeHtml(biz.invoiceFooterNote)}</div>`:''}
+      ${biz.invoiceFooterNote? `<div style="margin-top:26px; padding-top:14px; border-top:1px solid #eee; font-size:11px; color:#555; white-space:pre-line;">${escapeHtml(biz.invoiceFooterNote)}</div>`:''}
     </div>`;
 }
 
@@ -7320,17 +7335,28 @@ function statementStandaloneHtml(contact, kind){
   return `<!DOCTYPE html><html><head><meta charset="UTF-8"><title>Statement — ${escapeHtml(contact.name)}</title>
 <style>
   body{ font-family: Arial, Helvetica, sans-serif; color:#181818; margin:0; padding:24px; background:#fff; }
-  .statement-doc{ max-width:760px; margin:0 auto; }
-  .doc-title{ font-size:19px; font-weight:700; letter-spacing:1px; }
-  .doc-label{ font-size:9.5px; color:#999; text-transform:uppercase; letter-spacing:1px; font-weight:700; }
-  .doc-logo{ max-width:200px; max-height:70px; object-fit:contain; margin-bottom:8px; display:block; }
-  table.doc-items{ width:100%; border-collapse:collapse; margin-top:8px; }
-  table.doc-items th{ text-align:left; font-size:10px; text-transform:uppercase; color:#888; border-bottom:1px solid #ccc; padding:7px 5px; }
-  table.doc-items td{ padding:8px 5px; font-size:12.5px; border-bottom:1px solid #eee; }
-  table.doc-items .r{ text-align:right; }
+  .invoice-doc{ max-width:780px; margin:0 auto; color:#181818; }
+  .invoice-doc .doc-logo{ max-width:220px; max-height:80px; object-fit:contain; margin-bottom:8px; display:block; }
+  .invoice-doc .doc-title{ text-align:right; font-size:19px; letter-spacing:1.2px; margin:0 0 8px; font-weight:700; }
+  .invoice-doc .doc-meta table{ margin-left:auto; border-collapse:collapse; }
+  .invoice-doc .doc-meta td{ padding:2px 0; font-size:11.5px; }
+  .invoice-doc .doc-meta td:first-child{ color:#777; padding-right:16px; text-align:left; }
+  .invoice-doc .doc-meta td:last-child{ font-weight:600; text-align:right; }
+  .invoice-doc .doc-parties{ display:grid; grid-template-columns:1fr 1fr; gap:24px; margin:32px 0 22px; padding-top:18px; border-top:1px solid #ddd; }
+  .invoice-doc .doc-label{ font-size:9.5px; color:#999; text-transform:uppercase; letter-spacing:1px; font-weight:700; }
+  .invoice-doc .party-name{ font-size:14.5px; font-weight:700; margin:3px 0 6px; }
+  .invoice-doc .addr-cols{ display:grid; grid-template-columns:1fr 1fr; gap:10px; font-size:11px; color:#333; margin-top:8px; line-height:1.6; }
+  .invoice-doc table.doc-items{ width:100%; border-collapse:collapse; margin-top:8px; }
+  .invoice-doc table.doc-items th{ text-align:left; font-size:10px; text-transform:uppercase; color:#888; border-bottom:1px solid #ccc; padding:7px 5px; font-weight:600; }
+  .invoice-doc table.doc-items td{ padding:9px 5px; font-size:12.5px; border-bottom:1px solid #eee; }
+  .invoice-doc table.doc-items .r{ text-align:right; }
+  .invoice-doc .doc-footer{ display:flex; justify-content:space-between; margin-top:34px; align-items:flex-start; gap:20px; }
+  .invoice-doc .doc-bank{ font-size:11.5px; color:#333; line-height:1.8; }
+  .invoice-doc .doc-totals{ width:260px; }
+  .invoice-doc .doc-balance{ margin-top:4px; text-align:right; }
+  .invoice-doc .doc-balance .lbl{ font-size:9.5px; color:#999; text-transform:uppercase; letter-spacing:1px; font-weight:700; }
+  .invoice-doc .doc-balance .amt{ font-size:24px; font-weight:700; }
   .num{ font-variant-numeric: tabular-nums; }
-  .doc-balance .lbl{ font-size:9.5px; color:#999; text-transform:uppercase; letter-spacing:1px; font-weight:700; }
-  .doc-balance .amt{ font-size:22px; font-weight:700; text-align:right; }
 </style></head><body>${inner}</body></html>`;
 }
 function downloadStatementHtml(contactId, kind){
