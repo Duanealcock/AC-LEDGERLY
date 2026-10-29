@@ -229,6 +229,32 @@
     .statement-doc{ border:none; box-shadow:none; max-width:100%; padding:0; margin:0; }
   }
 
+  /* ---- Sage-style bank reconciliation ---- */
+  .rec-controls{ display:grid; grid-template-columns:1fr 1fr; gap:12px 44px; max-width:1000px; margin-bottom:16px; }
+  .rec-ctl{ display:flex; align-items:center; gap:12px; }
+  .rec-ctl > label{ flex:0 0 140px; text-align:right; font-size:13px; color:var(--text-muted); font-weight:600; }
+  .rec-ctl input, .rec-ctl select, .rec-ctl .rec-ro{ flex:1; height:34px; border:1px solid var(--border-strong); border-radius:6px; padding:0 10px; font-family:inherit; font-size:13.5px; background:#fff; }
+  .rec-ctl .rec-ro{ background:var(--surface-2); display:flex; align-items:center; justify-content:flex-end; font-family:'IBM Plex Mono',monospace; font-weight:600; }
+  .rec-ctl input[type=number]{ text-align:right; font-family:'IBM Plex Mono',monospace; }
+  .rec-ctl.rec-check{ gap:8px; }
+  .rec-ctl.rec-check > label{ flex:0 0 auto; text-align:left; order:2; }
+  .rec-ctl.rec-check input{ flex:0 0 auto; width:16px; height:16px; order:1; }
+  .rec-grid-wrap{ border:1px solid var(--border-strong); border-radius:6px; overflow:hidden; background:#fff; margin-bottom:14px; }
+  .rec-grid{ width:100%; border-collapse:collapse; table-layout:fixed; }
+  .rec-grid thead th{ background:var(--head, #4A4F5C); color:#fff; text-align:left; font-size:12px; font-weight:600; padding:9px 12px; white-space:nowrap; }
+  .rec-grid thead th.amt{ text-align:right; }
+  .rec-grid-scroll{ max-height:380px; overflow-y:auto; }
+  .rec-grid tbody td{ padding:7px 12px; border-bottom:1px solid var(--border); font-size:13px; font-weight:500; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .rec-grid tbody tr:nth-child(even){ background:var(--zebra); }
+  .rec-grid tbody tr:hover{ background:var(--row-hover); }
+  .rec-foot{ display:flex; justify-content:space-between; align-items:flex-start; gap:30px; flex-wrap:wrap; }
+  .rec-summary{ display:grid; grid-template-columns:auto 160px; gap:9px 12px; align-items:center; }
+  .rec-summary .lbl{ text-align:right; font-size:13px; color:var(--text-muted); font-weight:600; }
+  .rec-summary .box{ height:32px; border:1px solid var(--border-strong); border-radius:6px; background:var(--surface-2); display:flex; align-items:center; justify-content:flex-end; padding:0 12px; font-family:'IBM Plex Mono',monospace; font-weight:600; }
+  .rec-summary .box.diff-ok{ background:#E1F1E8; color:var(--money-pos); border-color:#B8DCC8; }
+  .rec-summary .box.diff-off{ background:#F7E6E3; color:var(--red); border-color:#E6C4BE; }
+  .rec-actions{ display:flex; justify-content:center; gap:10px; margin-top:22px; }
+  :root{ --head:#4A4F5C; }
   .balance-check{display:flex; align-items:center; gap:8px; font-size:12.5px; padding:8px 12px; border-radius:6px; background:var(--surface-2); border:1px solid var(--border); width:fit-content;}
   .balance-check .dot{width:8px; height:8px; border-radius:50%; background:var(--accent);}
 
@@ -3776,13 +3802,51 @@ function voidCreditNoteAction(id, kind){
 }
 
 /* ============================= BANKING ============================= */
+// Work out a human "document type" for a bank line from its journal entry / cashbook meta.
+function bankLineDocType(e, l){
+  const m = e.cashbookMeta;
+  if(m){
+    if(m.type==='customer') return (m.received>0)?'Receipt':'Refund';
+    if(m.type==='supplier') return (m.spent>0)?'Payment':'Refund';
+    if(m.type==='transfer') return 'Transfer';
+    if(m.type==='account'){
+      const acc = S.accounts.find(a=>a.id===m.accountSelection);
+      if(acc && /bank charge|fee/i.test(acc.name||'')) return 'Bank charge';
+      return (m.received>0)?'Receipt':'Payment';
+    }
+  }
+  const d = (e.description||'').toLowerCase();
+  if(/opening balance/.test(d)) return 'Opening balance';
+  if(/invoice .* issued/.test(d)) return 'Invoice';
+  if(/payment received/.test(d)) return 'Receipt';
+  if(/payment (made|for)/.test(d)) return 'Payment';
+  if(/transfer/.test(d)) return 'Transfer';
+  if(/bank charge|fee/.test(d)) return 'Bank charge';
+  return (l.debit>0) ? 'Receipt' : 'Payment';
+}
+// Customer/supplier reference for a bank line, where one exists.
+function bankLineContactRef(e){
+  const m = e.cashbookMeta;
+  if(m){
+    if(m.reference) return m.reference;
+    if(m.contactSelection){ const c=S.contacts.find(x=>x.id===m.contactSelection); if(c) return c.name; }
+    if(m.payee) return m.payee;
+  }
+  return '';
+}
 function getBankLinesForAccount(accountId){
   const out = [];
   S.journal.forEach(e=>{
     e.lines.forEach(l=>{
       if(l.accountId===accountId){
         if(!l.id) l.id = uid('jl'); // lazy-migrate older entries that predate line ids
-        out.push({entryId:e.id, lineId:l.id, date:e.date, desc:cleanDesc(e.description), debit:l.debit||0, credit:l.credit||0, reconciled: !!l.reconciled});
+        out.push({
+          entryId:e.id, lineId:l.id, date:e.date, desc:cleanDesc(e.description),
+          debit:l.debit||0, credit:l.credit||0, reconciled: !!l.reconciled,
+          reference: (e.cashbookMeta && e.cashbookMeta.reference) || e.ref || '',
+          docType: bankLineDocType(e, l),
+          contactRef: bankLineContactRef(e),
+        });
       }
     });
   });
@@ -3921,80 +3985,93 @@ function reconTotals(){
   const diff = round2(calcClosing - RECON.closing);
   return {inTotal, outTotal, calcClosing, diff};
 }
+// Sage-style summary: Reconciled Previously (net of already-cleared lines),
+// Reconciled Now (net of lines ticked this session), Total, and the Difference
+// against the entered Statement Balance.
+function reconSageTotals(){
+  const all = getBankLinesForAccount(RECON.accountId);
+  let prev = 0;
+  all.forEach(l=>{ if(l.reconciled) prev += (l.debit - l.credit); });
+  const unc = reconUnclearedLines();
+  let now = 0;
+  unc.forEach(l=>{ if(RECON.ticks[l.lineId]) now += (l.debit - l.credit); });
+  prev = round2(prev); now = round2(now);
+  const total = round2(prev + now);
+  const diff = round2((RECON.closing||0) - total);
+  return {prev, now, total, diff};
+}
 function renderReconcilePage(){
   const acc = S.accounts.find(a=>a.id===(RECON&&RECON.accountId));
   if(!acc){ navigate('banking'); return; }
-  setTopbar('Reconcile — '+acc.name, 'Tick off every transaction that appears on your bank statement',
-    `<label style="display:inline-flex; align-items:center; gap:6px; font-size:12.5px; margin-right:6px; cursor:pointer;"><input type="checkbox" id="rc-print-tx" checked style="width:auto;"> Include transactions</label>
-     <button class="btn btn-ghost" onclick="printReconciliation(document.getElementById('rc-print-tx').checked)">⎙ Print</button>
-     <button class="btn btn-ghost" onclick="RECON=null; navigate('banking');">← Back to banking</button>`);
-  const lines = reconUnclearedLines();
+  setTopbar('Reconcile Banks and Credit Cards', 'Tick off every transaction that appears on your bank statement',
+    `<button class="btn btn-ghost" onclick="RECON=null; navigate('banking');">← Back to banking</button>`);
+  const showRec = !!RECON.showReconciled;
+  const uncleared = reconUnclearedLines();
+  const clearedInRange = showRec ? reconClearedLines() : [];
+  // Combined grid: uncleared (tickable) + optionally already-reconciled (shown ✓).
+  const gridLines = showRec
+    ? [...uncleared.map(l=>({...l, _done:false})), ...clearedInRange.map(l=>({...l, _done:true}))]
+        .sort((a,b)=> (a.date||'').localeCompare(b.date||'') || (a.lineId||'').localeCompare(b.lineId||''))
+    : uncleared.map(l=>({...l, _done:false}));
+  const bankOptions = S.accounts.filter(a=>a.isBank)
+    .map(a=>`<option value="${a.id}" ${a.id===RECON.accountId?'selected':''}>${escapeHtml(a.name)}</option>`).join('');
+  const rowHtml = l => `<tr>
+      <td class="num" title="${escapeHtml(l.reference||'')}">${escapeHtml(l.reference||'')}</td>
+      <td class="num">${fmtDateShort(l.date)}</td>
+      <td style="text-align:center;">${l._done ? '<span style="color:var(--text-muted);">✓</span>' : `<input type="checkbox" ${RECON.ticks[l.lineId]?'checked':''} onchange="toggleReconLine('${l.lineId}', this.checked)">`}</td>
+      <td title="${escapeHtml(l.docType||'')}">${escapeHtml(l.docType||'')}</td>
+      <td style="text-align:center; color:${l._done?'var(--money-pos)':'var(--border-strong)'};">${l._done?'✓':'—'}</td>
+      <td class="amt num ${l.debit?'pos':'neg'}">${l.debit? fmt(l.debit) : (l.credit? '-'+fmt(l.credit):'')}</td>
+      <td title="${escapeHtml(l.desc||'')}">${escapeHtml(l.desc||'')}</td>
+      <td title="${escapeHtml(l.contactRef||'')}">${escapeHtml(l.contactRef||'')}</td>
+    </tr>`;
   document.getElementById('content').innerHTML = `
-    <div class="card" style="margin-bottom:16px;">
-      <div class="card-body">
-        <div class="field-row3">
-          <div class="field"><label>Statement date</label><input type="date" id="rc-date" value="${RECON.statementDate}" onchange="RECON.statementDate=this.value"></div>
-          <div class="field"><label>Statement opening balance</label><input type="number" id="rc-open" value="${RECON.opening}" step="0.01" onchange="RECON.opening=Number(this.value)||0; recalcRecon();"></div>
-          <div class="field"><label>Statement closing balance</label><input type="number" id="rc-close" value="${RECON.closing}" step="0.01" onchange="RECON.closing=Number(this.value)||0; recalcRecon();"></div>
-        </div>
-        <div class="field-row3" style="margin-top:4px;">
-          <div class="field"><label>Show transactions from</label><input type="date" id="rc-from" value="${RECON.from||''}" oninput="RECON.from=this.value;" onblur="renderReconcilePage();"></div>
-          <div class="field"><label>to</label><input type="date" id="rc-to" value="${RECON.to||''}" oninput="RECON.to=this.value;" onblur="renderReconcilePage();"></div>
-          <div class="field" style="display:flex; align-items:flex-end;">${(RECON.from||RECON.to)? `<button class="btn btn-ghost btn-sm" onclick="RECON.from=''; RECON.to=''; renderReconcilePage();">Clear date range</button>`:''}</div>
-        </div>
-        <div class="hint">Book balance right now: <strong class="num">${fmt(getAccountBalance(acc.id))}</strong>${(RECON.from||RECON.to)? ` · showing ${lines.length} uncleared transaction${lines.length===1?'':'s'} in range` : ''}</div>
+    <div class="rec-controls">
+      <div class="rec-ctl"><label>Bank Account</label><select onchange="switchReconAccount(this.value)">${bankOptions}</select></div>
+      <div class="rec-ctl"><label>From Date</label><input type="date" value="${RECON.from||''}" oninput="RECON.from=this.value;" onblur="renderReconcilePage();"></div>
+
+      <div class="rec-ctl"><label>Balance</label><div class="rec-ro">${fmt(getAccountBalance(acc.id))}</div></div>
+      <div class="rec-ctl"><label>To Date</label><input type="date" value="${RECON.to||''}" oninput="RECON.to=this.value;" onblur="renderReconcilePage();"></div>
+
+      <div class="rec-ctl"><label>Statement Balance</label><input type="number" step="0.01" value="${RECON.closing}" onchange="RECON.closing=Number(this.value)||0; recalcRecon();"></div>
+      <div class="rec-ctl rec-check"><input type="checkbox" id="rc-showrec" ${showRec?'checked':''} onchange="RECON.showReconciled=this.checked; renderReconcilePage();"><label for="rc-showrec">Display Reconciled Transactions</label></div>
+    </div>
+
+    <div class="rec-grid-wrap">
+      <table class="rec-grid">
+        <colgroup><col style="width:120px"><col style="width:96px"><col style="width:74px"><col style="width:120px"><col style="width:92px"><col style="width:120px"><col><col style="width:150px"></colgroup>
+        <thead><tr>
+          <th>Reference</th><th>Date ▾</th><th style="text-align:center;">Selection</th><th>Document Type</th>
+          <th style="text-align:center;">Reconciled</th><th class="amt">Total</th><th>Description</th><th>Cust/Supp Ref.</th>
+        </tr></thead>
+      </table>
+      <div class="rec-grid-scroll">
+        <table class="rec-grid">
+          <colgroup><col style="width:120px"><col style="width:96px"><col style="width:74px"><col style="width:120px"><col style="width:92px"><col style="width:120px"><col><col style="width:150px"></colgroup>
+          <tbody id="rc-rows">
+            ${gridLines.length ? gridLines.map(rowHtml).join('') : `<tr><td colspan="8" style="text-align:center; color:var(--text-muted); padding:40px 0;">No transactions in this date range.</td></tr>`}
+          </tbody>
+        </table>
       </div>
     </div>
-    <div class="card" style="margin-bottom:16px;">
-      <div class="card-head"><h3>Uncleared transactions</h3>
-        <div style="display:flex; gap:8px;">
-          <button class="btn btn-sm" style="background:var(--money-pos); color:#fff; font-weight:600;" onclick="setAllReconTicks(true)">✓ Tick all</button>
-          <button class="btn btn-ghost btn-sm" onclick="setAllReconTicks(false)">✕ Clear all</button>
-        </div>
+
+    <div class="rec-foot">
+      <div style="display:flex; gap:10px;">
+        <button class="btn btn-ghost" onclick="setAllReconTicks(true)">Select All</button>
+        <button class="btn btn-ghost" onclick="setAllReconTicks(false)">Deselect All</button>
       </div>
-      ${lines.length? `<table><thead><tr><th style="width:34px;"></th><th>Date</th><th>Description</th><th class="amt">Money in</th><th class="amt">Money out</th></tr></thead><tbody id="rc-rows">
-        ${lines.map(l=>`<tr>
-          <td><input type="checkbox" onchange="toggleReconLine('${l.lineId}', this.checked)"></td>
-          <td>${fmtDateShort(l.date)}</td><td>${escapeHtml(l.desc)}</td>
-          <td class="amt num pos">${l.debit? fmt(l.debit):''}</td>
-          <td class="amt num neg">${l.credit? fmt(l.credit):''}</td>
-        </tr>`).join('')}
-      </tbody></table>` : emptyState('Nothing to reconcile', 'Every transaction in this account is already cleared.', null)}
+      <div class="rec-summary">
+        <div class="lbl">Reconciled Previously</div><div class="box" id="rc-prev">${fmt(0)}</div>
+        <div class="lbl">Reconciled Now</div><div class="box" id="rc-now">${fmt(0)}</div>
+        <div class="lbl">Reconciled Total</div><div class="box" id="rc-total">${fmt(0)}</div>
+        <div class="lbl">Difference</div><div class="box diff-off" id="rc-diff">${fmt(0)}</div>
+      </div>
     </div>
-    ${(function(){
-      const cleared = reconClearedLines();
-      if(!cleared.length) return '';
-      const inT = cleared.reduce((s,l)=>s+(l.debit||0),0), outT = cleared.reduce((s,l)=>s+(l.credit||0),0);
-      return `<div class="card" style="margin-bottom:16px;">
-        <div class="card-head"><h3>Reconciled transactions <span style="font-size:12px; color:var(--text-muted); font-weight:400;">(${cleared.length})</span></h3>
-          <span style="font-size:12px; color:var(--money-pos); font-weight:600;">✓ Cleared${(RECON.from||RECON.to)?' in range':''}</span>
-        </div>
-        <table><thead><tr><th style="width:34px;"></th><th>Date</th><th>Description</th><th class="amt">Money in</th><th class="amt">Money out</th></tr></thead><tbody>
-          ${cleared.map(l=>`<tr style="opacity:.78;">
-            <td style="text-align:center; color:var(--money-pos);" title="Reconciled">✓</td>
-            <td>${fmtDateShort(l.date)}</td><td>${escapeHtml(l.desc)}</td>
-            <td class="amt num pos">${l.debit? fmt(l.debit):''}</td>
-            <td class="amt num neg">${l.credit? fmt(l.credit):''}</td>
-          </tr>`).join('')}
-          <tr class="li-total-row"><td></td><td colspan="2" style="text-align:right; font-weight:700;">Reconciled total</td>
-            <td class="amt num pos">${fmt(inT)}</td><td class="amt num neg">${fmt(outT)}</td></tr>
-        </tbody></table>
-        <div class="card-body" style="border-top:1px solid var(--border);"><div class="hint" style="margin:0;">These transactions were already reconciled. They stay listed here so you can see the full picture of the period, but they don't need re-ticking.</div></div>
-      </div>`;
-    })()}
-    <div class="card">
-      <div class="card-body">
-        <div class="report-row"><span>Statement opening balance</span><span class="num" id="rc-sum-open">${fmt(RECON.opening)}</span></div>
-        <div class="report-row"><span>+ Money in ticked</span><span class="num pos" id="rc-sum-in">${fmt(0)}</span></div>
-        <div class="report-row"><span>− Money out ticked</span><span class="num neg" id="rc-sum-out">${fmt(0)}</span></div>
-        <div class="report-row total"><span>Calculated closing balance</span><span class="num" id="rc-sum-calc">${fmt(RECON.opening)}</span></div>
-        <div class="report-row"><span>Statement closing balance (entered)</span><span class="num" id="rc-sum-target">${fmt(RECON.closing)}</span></div>
-        <div class="balance-check" id="rc-balance-check" style="margin-top:12px;"><span class="dot" style="background:var(--red);"></span>
-          <span id="rc-diff-label">Difference: ${fmt(0)}</span></div>
-        <div style="margin-top:16px;">
-          <button class="btn btn-primary" id="rc-finish-btn" onclick="finishReconciliation()">Finish reconciliation</button>
-        </div>
-      </div>
+
+    <div class="rec-actions">
+      <button class="btn btn-primary" id="rc-finish-btn" onclick="finishReconciliation()">Save</button>
+      <button class="btn btn-ghost" onclick="finishReconciliation(true)">Save and New</button>
+      <button class="btn btn-ghost" onclick="printReconciliation(true)">Print</button>
     </div>
   `;
   recalcRecon();
@@ -4009,42 +4086,53 @@ function setAllReconTicks(value){
   recalcRecon();
 }
 function recalcRecon(){
-  const t = reconTotals();
+  const s = reconSageTotals();
   const set = (id, val)=>{ const el=document.getElementById(id); if(el) el.textContent = val; };
-  set('rc-sum-open', fmt(RECON.opening));
-  set('rc-sum-in', fmt(t.inTotal));
-  set('rc-sum-out', fmt(t.outTotal));
-  set('rc-sum-calc', fmt(t.calcClosing));
-  set('rc-sum-target', fmt(RECON.closing));
-  const balanced = Math.abs(t.diff) < 0.005;
-  const dot = document.querySelector('#rc-balance-check .dot');
-  const label = document.getElementById('rc-diff-label');
-  if(dot) dot.style.background = balanced ? 'var(--money-pos)' : 'var(--red)';
-  if(label) label.textContent = balanced ? 'Balanced ✓' : `Difference: ${fmt(Math.abs(t.diff))}`;
+  set('rc-prev', fmt(s.prev));
+  set('rc-now', fmt(s.now));
+  set('rc-total', fmt(s.total));
+  const diffBox = document.getElementById('rc-diff');
+  if(diffBox){
+    diffBox.textContent = fmt(s.diff);
+    const balanced = Math.abs(s.diff) < 0.005;
+    diffBox.classList.toggle('diff-ok', balanced);
+    diffBox.classList.toggle('diff-off', !balanced);
+  }
 }
-function finishReconciliation(){
+function switchReconAccount(accountId){
+  if(!accountId || accountId===RECON.accountId) return;
+  openReconcile(accountId);
+}
+function finishReconciliation(saveAndNew){
   const lines = reconUnclearedLines();
   const tickedIds = lines.filter(l=>RECON.ticks[l.lineId]).map(l=>l.lineId);
   if(tickedIds.length===0){ showToast('Tick at least one transaction'); return; }
-  const t = reconTotals();
-  if(Math.abs(t.diff) >= 0.005){
-    if(!confirm(`This reconciliation is out of balance by ${fmt(Math.abs(t.diff))}. Finish anyway?`)) return;
+  const s = reconSageTotals();
+  if(Math.abs(s.diff) >= 0.005){
+    if(!confirm(`This reconciliation is out of balance by ${fmt(Math.abs(s.diff))}. Save anyway?`)) return;
   }
   const reconId = uid('rc');
+  const accountId = RECON.accountId;
   S.journal.forEach(e=>{
     e.lines.forEach(l=>{
-      if(l.accountId===RECON.accountId && tickedIds.includes(l.id)){ l.reconciled = true; l.reconciledId = reconId; }
+      if(l.accountId===accountId && tickedIds.includes(l.id)){ l.reconciled = true; l.reconciledId = reconId; }
     });
   });
   S.reconciliations.push({
-    id: reconId, accountId: RECON.accountId, date: RECON.statementDate,
+    id: reconId, accountId, date: RECON.statementDate||todayStr(),
     fromDate: RECON.from||'', toDate: RECON.to||'',
     openingBalance: RECON.opening, closingBalance: RECON.closing, clearedCount: tickedIds.length,
   });
   const cleared = tickedIds.length;
-  RECON = null;
-  showToast(`Reconciliation complete — ${cleared} transaction${cleared===1?'':'s'} cleared`);
-  navigate('banking');
+  saveState(true);
+  showToast(`Reconciliation saved — ${cleared} transaction${cleared===1?'':'s'} cleared`);
+  if(saveAndNew){
+    // Re-open a fresh reconciliation on the same account, carrying the closing forward.
+    openReconcile(accountId);
+  } else {
+    RECON = null;
+    navigate('banking');
+  }
 }
 // Print a reconciliation statement (works mid-reconcile: cleared = ticked, outstanding = unticked).
 function printReconciliation(includeTx){
@@ -5558,6 +5646,21 @@ function addAccountMapping(phrase, accountId, vatType){
 function deleteAccountMapping(id){
   S.accountMappings = (S.accountMappings||[]).filter(m=>m.id!==id);
   saveState(true);
+}
+// Live-filter the Settings mappings table by phrase, account code/name or VAT type.
+function filterMappings(q){
+  const table = document.getElementById('mapping-table'); if(!table) return;
+  const term = (q||'').trim().toLowerCase();
+  const rows = table.querySelectorAll('tbody:first-of-type tr');
+  let shown = 0;
+  rows.forEach(tr=>{
+    const hay = tr.getAttribute('data-search')||'';
+    const match = !term || hay.includes(term);
+    tr.style.display = match ? '' : 'none';
+    if(match) shown++;
+  });
+  const none = document.getElementById('mapping-noresult');
+  if(none) none.style.display = shown ? 'none' : '';
 }
 // Settings UI: add/edit a mapping via modal.
 function openMappingForm(id, seed){
@@ -9492,8 +9595,12 @@ function renderSettings(){
         <div class="card" style="margin-bottom:14px;"><div class="card-head"><h3>Auto-coding mappings</h3><button class="btn btn-ghost btn-sm" onclick="openMappingForm()">+ Add mapping</button></div><div class="card-body">
           <p style="font-size:12px; color:var(--text-muted); margin-top:0;">When a cashbook transaction's description contains a phrase below, it's automatically coded to that account. You can still change any row after it's applied.</p>
           ${(S.accountMappings||[]).length? `
-            <table><thead><tr><th>If description contains…</th><th>Code to account</th><th>VAT</th><th></th></tr></thead><tbody>
-              ${S.accountMappings.map(m=>{ const a=S.accounts.find(x=>x.id===m.accountId); return `<tr>
+            <div style="margin-bottom:10px; max-width:340px;">
+              <input type="text" id="mapping-search" placeholder="🔍 Search phrase or account…" oninput="filterMappings(this.value)"
+                style="width:100%; height:34px; padding:0 10px; border:1px solid var(--border-strong); border-radius:7px; font-family:inherit; font-size:13px;">
+            </div>
+            <table id="mapping-table"><thead><tr><th>If description contains…</th><th>Code to account</th><th>VAT</th><th></th></tr></thead><tbody>
+              ${S.accountMappings.map(m=>{ const a=S.accounts.find(x=>x.id===m.accountId); const acctText=a?(a.code+' '+a.name):'(account removed)'; return `<tr data-search="${escapeHtml(((m.phrase||'')+' '+acctText+' '+(m.vatType?vatTypeLabel(m.vatType):'')).toLowerCase())}">
                 <td><strong>${escapeHtml(m.phrase)}</strong></td>
                 <td>${a? escapeHtml(a.code+' '+a.name) : '<span class="neg">(account removed)</span>'}</td>
                 <td>${m.vatType? escapeHtml(vatTypeLabel(m.vatType)) : '—'}</td>
@@ -9502,7 +9609,7 @@ function renderSettings(){
                   <button class="btn btn-ghost btn-sm" onclick="removeMapping('${m.id}')">Delete</button>
                 </td>
               </tr>`; }).join('')}
-            </tbody></table>
+            </tbody><tbody id="mapping-noresult" style="display:none;"><tr><td colspan="4" style="color:var(--text-muted); font-size:13px;">No mappings match your search.</td></tr></tbody></table>
           ` : `<p style="font-size:13px; color:var(--text-muted);">No mappings yet. They're created when you allocate a description to an account in the Cashbook (it'll ask), or add one here.</p>`}
         </div></div>
         <div class="card" style="margin-bottom:14px;"><div class="card-head"><h3>Banking details</h3></div><div class="card-body">
