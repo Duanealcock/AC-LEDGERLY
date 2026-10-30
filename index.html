@@ -4009,10 +4009,11 @@ function renderReconcilePage(){
   const uncleared = reconUnclearedLines();
   const clearedInRange = showRec ? reconClearedLines() : [];
   // Combined grid: uncleared (tickable) + optionally already-reconciled (shown ✓).
-  const gridLines = showRec
+  let gridLines = showRec
     ? [...uncleared.map(l=>({...l, _done:false})), ...clearedInRange.map(l=>({...l, _done:true}))]
-        .sort((a,b)=> (a.date||'').localeCompare(b.date||'') || (a.lineId||'').localeCompare(b.lineId||''))
     : uncleared.map(l=>({...l, _done:false}));
+  // Apply the active column sort (default: date ascending).
+  gridLines = sortReconLines(gridLines);
   const bankOptions = S.accounts.filter(a=>a.isBank)
     .map(a=>`<option value="${a.id}" ${a.id===RECON.accountId?'selected':''}>${escapeHtml(a.name)}</option>`).join('');
   const rowHtml = l => `<tr>
@@ -4041,8 +4042,14 @@ function renderReconcilePage(){
       <table class="rec-grid">
         <colgroup><col style="width:120px"><col style="width:96px"><col style="width:74px"><col style="width:120px"><col style="width:92px"><col style="width:120px"><col><col style="width:150px"></colgroup>
         <thead><tr>
-          <th>Reference</th><th>Date ▾</th><th style="text-align:center;">Selection</th><th>Document Type</th>
-          <th style="text-align:center;">Reconciled</th><th class="amt">Total</th><th>Description</th><th>Cust/Supp Ref.</th>
+          ${reconSortTh('reference','Reference')}
+          ${reconSortTh('date','Date')}
+          ${reconSortTh('selection','Selection','center')}
+          ${reconSortTh('docType','Document Type')}
+          ${reconSortTh('reconciled','Reconciled','center')}
+          ${reconSortTh('total','Total','amt')}
+          ${reconSortTh('desc','Description')}
+          ${reconSortTh('contactRef','Cust/Supp Ref.')}
         </tr></thead>
       </table>
       <div class="rec-grid-scroll">
@@ -4102,6 +4109,45 @@ function recalcRecon(){
 function switchReconAccount(accountId){
   if(!accountId || accountId===RECON.accountId) return;
   openReconcile(accountId);
+}
+// ---- Reconciliation grid sorting ----
+// A clickable column header for the recon grid. Shows an arrow on the active sort column.
+function reconSortTh(key, label, align){
+  const active = (RECON.sortKey||'date')===key;
+  const arrow = active ? ((RECON.sortDir==='desc')?' ▾':' ▴') : '';
+  const alignStyle = align==='center' ? 'text-align:center;' : (align==='amt' ? '' : '');
+  const cls = align==='amt' ? ' class="amt"' : '';
+  return `<th${cls} style="cursor:pointer; user-select:none; ${alignStyle}" onclick="sortRecon('${key}')" title="Sort by ${escapeHtml(label)}">${escapeHtml(label)}${arrow}</th>`;
+}
+function sortRecon(key){
+  if((RECON.sortKey||'date')===key){ RECON.sortDir = (RECON.sortDir==='asc')?'desc':'asc'; }
+  else { RECON.sortKey = key; RECON.sortDir = 'asc'; }
+  renderReconcilePage();
+}
+function sortReconLines(lines){
+  const key = RECON.sortKey || 'date';
+  const dir = (RECON.sortDir==='desc') ? -1 : 1;
+  const val = l => {
+    switch(key){
+      case 'reference': return (l.reference||'').toLowerCase();
+      case 'date': return (l.date||'');
+      case 'selection': return RECON.ticks[l.lineId] ? 1 : 0;       // ticked first/last
+      case 'docType': return (l.docType||'').toLowerCase();
+      case 'reconciled': return l._done ? 1 : 0;
+      case 'total': return (l.debit||0) - (l.credit||0);           // signed amount
+      case 'desc': return (l.desc||'').toLowerCase();
+      case 'contactRef': return (l.contactRef||'').toLowerCase();
+      default: return (l.date||'');
+    }
+  };
+  return lines.slice().sort((a,b)=>{
+    const va=val(a), vb=val(b);
+    let c;
+    if(typeof va==='number' && typeof vb==='number') c = va-vb;
+    else c = String(va).localeCompare(String(vb));
+    if(c===0) c = (a.date||'').localeCompare(b.date||'') || (a.lineId||'').localeCompare(b.lineId||'');
+    return c*dir;
+  });
 }
 function finishReconciliation(saveAndNew){
   const lines = reconUnclearedLines();
@@ -10202,6 +10248,7 @@ async function loadWorkspaceFromServer(){
   companies.forEach(row=>{
     const co = (row.data && Object.keys(row.data).length) ? row.data : newCompanyRecord(row.name||'Company');
     co.serverId = row.id;                 // remember the server UUID
+    co._loadedAt = row.updated_at || null; // version marker for optimistic-lock saves
     migrateCompanyShape(co);
     companiesMap[row.id] = co;
     order.push(row.id);
@@ -10228,10 +10275,11 @@ async function createStarterCompanyOnServer(){
   const uid_ = userRes && userRes.user ? userRes.user.id : null;
   const { data:inserted, error } = await SB.from('companies')
     .insert({ name:'My Business', data:co, created_by:uid_ })
-    .select('id').limit(1);
+    .select('id, updated_at').limit(1);
   if(error){ console.error('starter company insert failed', error); throw error; }
   const serverId = inserted[0].id;
   co.serverId = serverId;
+  co._loadedAt = inserted[0].updated_at || null;
   WORKSPACE = { companies:{ [serverId]:co }, order:[serverId], activeId:serverId, users:[], authEnabled:false, timeLog:{entries:[]}, uiPrefs:{} };
   S = co;
   LAST_SAVED_AT = new Date();
@@ -10243,13 +10291,54 @@ async function saveCompanyToServer(companyId){
   const co = WORKSPACE.companies[companyId];
   if(!co) return false;
   const serverId = co.serverId || companyId;
+  const nowIso = new Date().toISOString();
+  // Don't persist our own bookkeeping fields inside the JSON blob.
+  const loadedAt = co._loadedAt;
+  const payload = {...co};
+  delete payload._loadedAt;
   try{
-    const { error } = await SB.from('companies')
-      .update({ name: (co.settings && co.settings.businessName) || 'Company', data: co })
+    // Optimistic-lock: only overwrite if the row hasn't changed since we loaded it.
+    // The extra .eq('updated_at', loadedAt) means a save by someone else (which bumped
+    // updated_at) makes this update match zero rows — so we never clobber their work.
+    let q = SB.from('companies')
+      .update({ name:(co.settings && co.settings.businessName)||'Company', data:payload, updated_at:nowIso })
       .eq('id', serverId);
+    if(loadedAt) q = q.eq('updated_at', loadedAt);
+    const { data:updated, error } = await q.select('id, updated_at');
     if(error){ console.error('save company failed', error); return false; }
+    if(!updated || updated.length===0){
+      // Nothing updated → someone else saved since we loaded. Don't overwrite them.
+      await handleSaveConflict(companyId, serverId);
+      return false;
+    }
+    co._loadedAt = updated[0].updated_at || nowIso;   // advance our version marker
     return true;
   }catch(e){ console.error(e); return false; }
+}
+// Called when a save was blocked because another user changed the company first.
+// We reload the server copy so the user is working from the latest data, and warn them.
+let CONFLICT_PROMPT_OPEN = false;
+async function handleSaveConflict(companyId, serverId){
+  if(CONFLICT_PROMPT_OPEN) return;
+  CONFLICT_PROMPT_OPEN = true;
+  try{
+    const { data:rows } = await SB.from('companies').select('id, name, data, updated_at').eq('id', serverId).limit(1);
+    const fresh = rows && rows[0];
+    const active = (WORKSPACE.activeId===companyId);
+    if(fresh && fresh.data){
+      const co = (fresh.data && Object.keys(fresh.data).length) ? fresh.data : newCompanyRecord(fresh.name||'Company');
+      co.serverId = fresh.id;
+      co._loadedAt = fresh.updated_at || null;
+      migrateCompanyShape(co);
+      WORKSPACE.companies[companyId] = co;
+      if(active) S = WORKSPACE.companies[companyId];
+      showToast('Someone else updated this company — reloaded the latest version. Please re-enter your last change.');
+      if(active && typeof render==='function') render();
+    } else {
+      showToast('Could not save — this company changed on the server. Please refresh.');
+    }
+  }catch(e){ console.error('conflict reload failed', e); }
+  finally{ CONFLICT_PROMPT_OPEN = false; }
 }
 
 // Create a brand-new company on the server (used by the "add company" flow when online).
@@ -10257,10 +10346,12 @@ async function createCompanyOnServer(co){
   if(!SB || !SERVER_MODE) return null;
   const { data:userRes } = await SB.auth.getUser();
   const uid_ = userRes && userRes.user ? userRes.user.id : null;
+  const payload = {...co}; delete payload._loadedAt;
   const { data:inserted, error } = await SB.from('companies')
-    .insert({ name:(co.settings&&co.settings.businessName)||'Company', data:co, created_by:uid_ })
-    .select('id').limit(1);
+    .insert({ name:(co.settings&&co.settings.businessName)||'Company', data:payload, created_by:uid_ })
+    .select('id, updated_at').limit(1);
   if(error){ console.error('create company failed', error); return null; }
+  co._loadedAt = inserted[0].updated_at || null;   // seed the version marker
   return inserted[0].id;
 }
 
