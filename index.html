@@ -928,16 +928,34 @@ function unlinkSaveFile(){
   if(VIEW==='settings') renderSettings();
   updateSaveIndicator();
 }
+// Cheap signature of a value — used to skip server writes when nothing actually changed.
+// (Length + a rolling hash of the JSON; collisions are astronomically unlikely for our use.)
+function cheapSignature(str){
+  let h = 5381;
+  for(let i=0;i<str.length;i++){ h = ((h<<5)+h + str.charCodeAt(i)) | 0; }
+  return str.length + ':' + (h>>>0).toString(36);
+}
+let LAST_SERVER_SIG = {};   // per-company signature of the last payload pushed to the server
 async function saveState(immediate){
   clearTimeout(SAVE_TIMER);
   const doSave = async ()=>{
     try{
-      // Always keep a local cache (offline fallback + non-authed use).
+      // Always keep a local cache (offline fallback + non-authed use) — this is cheap.
       const result = await storageSet(STORAGE_KEY, JSON.stringify(WORKSPACE));
-      // In server mode, also push the active company's payload to Supabase.
+      // In server mode, push to Supabase ONLY when the active company actually changed.
+      // This avoids a disk write on every re-render / navigation (which burned Disk IO).
       let serverOk = true;
       if(SERVER_MODE && WORKSPACE && WORKSPACE.activeId){
-        serverOk = await saveCompanyToServer(WORKSPACE.activeId);
+        const co = WORKSPACE.companies[WORKSPACE.activeId];
+        if(co){
+          const payload = {...co}; delete payload._loadedAt;
+          const sig = cheapSignature(JSON.stringify(payload));
+          if(LAST_SERVER_SIG[WORKSPACE.activeId] !== sig){
+            serverOk = await saveCompanyToServer(WORKSPACE.activeId);
+            if(serverOk) LAST_SERVER_SIG[WORKSPACE.activeId] = sig;
+          }
+          // else: unchanged since last push → skip the server write entirely.
+        }
       }
       // also mirror to the linked disk file, if any
       if(FILE_HANDLE) await writeWorkspaceToHandle();
@@ -946,7 +964,7 @@ async function saveState(immediate){
     }catch(e){ console.error('save failed', e); showToast('Could not save — changes may not persist'); }
   };
   if(immediate) return doSave();
-  SAVE_TIMER = setTimeout(doSave, 250);
+  SAVE_TIMER = setTimeout(doSave, 1500);   // batch rapid edits into one server write
 }
 function updateSaveIndicator(){
   const el = document.getElementById('save-status');
@@ -4031,10 +4049,17 @@ function renderReconcilePage(){
       <div class="rec-ctl"><label>Bank Account</label><select onchange="switchReconAccount(this.value)">${bankOptions}</select></div>
       <div class="rec-ctl"><label>From Date</label><input type="date" value="${RECON.from||''}" oninput="RECON.from=this.value;" onblur="renderReconcilePage();"></div>
 
-      <div class="rec-ctl"><label>Balance</label><div class="rec-ro">${fmt(getAccountBalance(acc.id))}</div></div>
+      <div class="rec-ctl"><label>Balance</label>
+        ${RECON.overrideBalance
+          ? `<input type="number" step="0.01" value="${(RECON.balanceValue!=null?RECON.balanceValue:getAccountBalance(acc.id, RECON.to||undefined))}" onchange="RECON.balanceValue=Number(this.value)||0;" title="Manually entered book balance for this recon point">`
+          : `<div class="rec-ro">${fmt(getAccountBalance(acc.id, RECON.to||undefined))}</div>`}
+      </div>
       <div class="rec-ctl"><label>To Date</label><input type="date" value="${RECON.to||''}" oninput="RECON.to=this.value;" onblur="renderReconcilePage();"></div>
 
       <div class="rec-ctl"><label>Statement Balance</label><input type="number" step="0.01" value="${RECON.closing}" onchange="RECON.closing=Number(this.value)||0; recalcRecon();"></div>
+      <div class="rec-ctl rec-check"><input type="checkbox" id="rc-override" ${RECON.overrideBalance?'checked':''} onchange="toggleBalanceOverride(this.checked)"><label for="rc-override">Override balance (reconcile to a point in time)</label></div>
+
+      <div class="rec-ctl"></div>
       <div class="rec-ctl rec-check"><input type="checkbox" id="rc-showrec" ${showRec?'checked':''} onchange="RECON.showReconciled=this.checked; renderReconcilePage();"><label for="rc-showrec">Display Reconciled Transactions</label></div>
     </div>
 
@@ -4109,6 +4134,16 @@ function recalcRecon(){
 function switchReconAccount(accountId){
   if(!accountId || accountId===RECON.accountId) return;
   openReconcile(accountId);
+}
+// Toggle the manual Balance override. When turned on, seed the field from the current
+// book balance as at the To Date so you can adjust it for a point-in-time reconciliation.
+function toggleBalanceOverride(on){
+  RECON.overrideBalance = !!on;
+  if(on && RECON.balanceValue==null){
+    const acc = S.accounts.find(a=>a.id===RECON.accountId);
+    RECON.balanceValue = acc ? getAccountBalance(acc.id, RECON.to||undefined) : 0;
+  }
+  renderReconcilePage();
 }
 // ---- Reconciliation grid sorting ----
 // A clickable column header for the recon grid. Shows an arrow on the active sort column.
@@ -10332,6 +10367,8 @@ async function handleSaveConflict(companyId, serverId){
       migrateCompanyShape(co);
       WORKSPACE.companies[companyId] = co;
       if(active) S = WORKSPACE.companies[companyId];
+      // Refresh the change-signature so the reloaded data isn't wrongly skipped next save.
+      try{ const p={...co}; delete p._loadedAt; LAST_SERVER_SIG[companyId] = cheapSignature(JSON.stringify(p)); }catch(e){}
       showToast('Someone else updated this company — reloaded the latest version. Please re-enter your last change.');
       if(active && typeof render==='function') render();
     } else {
