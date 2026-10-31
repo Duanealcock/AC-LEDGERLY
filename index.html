@@ -3972,8 +3972,26 @@ function openReconcile(accountId){
     to: '',
     ticks: {},
   };
+  seedReconTicks();
   VIEW = 'reconcile';
   render();
+}
+// Pre-tick every line that is already reconciled, so a weekly recon starts from the
+// current cleared state and you only toggle what changed.
+function seedReconTicks(){
+  getBankLinesForAccount(RECON.accountId).forEach(l=>{
+    if(l.reconciled && RECON.ticks[l.lineId]===undefined) RECON.ticks[l.lineId] = true;
+  });
+}
+// All bank lines within the current date range (cleared AND uncleared). This is the
+// grid the user ticks against — reconciled rows arrive pre-ticked and can be un-ticked.
+function reconLinesInRange(){
+  const df = RECON.from||'', dt = RECON.to||'';
+  return getBankLinesForAccount(RECON.accountId).filter(l=>{
+    if(df && (l.date||'') < df) return false;
+    if(dt && (l.date||'') > dt) return false;
+    return true;
+  });
 }
 function reconUnclearedLines(){
   const df = RECON.from||'', dt = RECON.to||'';
@@ -4008,13 +4026,17 @@ function reconTotals(){
 // against the entered Statement Balance.
 function reconSageTotals(){
   const all = getBankLinesForAccount(RECON.accountId);
-  let prev = 0;
-  all.forEach(l=>{ if(l.reconciled) prev += (l.debit - l.credit); });
-  const unc = reconUnclearedLines();
-  let now = 0;
-  unc.forEach(l=>{ if(RECON.ticks[l.lineId]) now += (l.debit - l.credit); });
-  prev = round2(prev); now = round2(now);
-  const total = round2(prev + now);
+  // Previously = net of lines reconciled before this session (their original state).
+  // Total      = net of everything currently TICKED (cleared + newly ticked).
+  // Now        = Total − Previously (the net effect of this session's ticking).
+  let prev = 0, total = 0;
+  all.forEach(l=>{
+    const amt = (l.debit||0) - (l.credit||0);
+    if(l.reconciled) prev += amt;
+    if(RECON.ticks[l.lineId]) total += amt;
+  });
+  prev = round2(prev); total = round2(total);
+  const now = round2(total - prev);
   const diff = round2((RECON.closing||0) - total);
   return {prev, now, total, diff};
 }
@@ -4024,12 +4046,12 @@ function renderReconcilePage(){
   setTopbar('Reconcile Banks and Credit Cards', 'Tick off every transaction that appears on your bank statement',
     `<button class="btn btn-ghost" onclick="RECON=null; navigate('banking');">← Back to banking</button>`);
   const showRec = !!RECON.showReconciled;
-  const uncleared = reconUnclearedLines();
-  const clearedInRange = showRec ? reconClearedLines() : [];
-  // Combined grid: uncleared (tickable) + optionally already-reconciled (shown ✓).
-  let gridLines = showRec
-    ? [...uncleared.map(l=>({...l, _done:false})), ...clearedInRange.map(l=>({...l, _done:true}))]
-    : uncleared.map(l=>({...l, _done:false}));
+  // Show ALL lines in the date range. Reconciled rows arrive pre-ticked; you can un-tick
+  // any of them. The "Display Reconciled" toggle hides the already-cleared ones when you
+  // only want to see what's new in the period.
+  seedReconTicks();
+  let gridLines = reconLinesInRange().map(l=>({...l, _done:!!l.reconciled}));
+  if(!showRec) gridLines = gridLines.filter(l=>!l.reconciled);
   // Apply the active column sort (default: date ascending).
   gridLines = sortReconLines(gridLines);
   const bankOptions = S.accounts.filter(a=>a.isBank)
@@ -4037,9 +4059,9 @@ function renderReconcilePage(){
   const rowHtml = l => `<tr>
       <td class="num" title="${escapeHtml(l.reference||'')}">${escapeHtml(l.reference||'')}</td>
       <td class="num">${fmtDateShort(l.date)}</td>
-      <td style="text-align:center;">${l._done ? '<span style="color:var(--text-muted);">✓</span>' : `<input type="checkbox" ${RECON.ticks[l.lineId]?'checked':''} onchange="toggleReconLine('${l.lineId}', this.checked)">`}</td>
+      <td style="text-align:center;"><input type="checkbox" ${RECON.ticks[l.lineId]?'checked':''} onchange="toggleReconLine('${l.lineId}', this.checked)"></td>
       <td title="${escapeHtml(l.docType||'')}">${escapeHtml(l.docType||'')}</td>
-      <td style="text-align:center; color:${l._done?'var(--money-pos)':'var(--border-strong)'};">${l._done?'✓':'—'}</td>
+      <td style="text-align:center; color:${l._done?'var(--money-pos)':'var(--border-strong)'};" title="${l._done?'Already reconciled':'Not yet reconciled'}">${l._done?'✓':'—'}</td>
       <td class="amt num ${l.debit?'pos':'neg'}">${l.debit? fmt(l.debit) : (l.credit? '-'+fmt(l.credit):'')}</td>
       <td title="${escapeHtml(l.desc||'')}">${escapeHtml(l.desc||'')}</td>
       <td title="${escapeHtml(l.contactRef||'')}">${escapeHtml(l.contactRef||'')}</td>
@@ -4088,9 +4110,10 @@ function renderReconcilePage(){
     </div>
 
     <div class="rec-foot">
-      <div style="display:flex; gap:10px;">
+      <div style="display:flex; gap:10px; flex-wrap:wrap;">
         <button class="btn btn-ghost" onclick="setAllReconTicks(true)">Select All</button>
         <button class="btn btn-ghost" onclick="setAllReconTicks(false)">Deselect All</button>
+        <button class="btn btn-ghost" style="color:var(--red); border-color:var(--red);" onclick="unreconcileAllForAccount()" title="Clear the reconciled flag on every transaction for this account so you can start fresh">↺ Unreconcile all</button>
       </div>
       <div class="rec-summary">
         <div class="lbl">Reconciled Previously</div><div class="box" id="rc-prev">${fmt(0)}</div>
@@ -4112,8 +4135,30 @@ function toggleReconLine(lineId, checked){
   RECON.ticks[lineId] = checked;
   recalcRecon();
 }
+// Clear the reconciled flag on every transaction for this account, and reset the ticks,
+// so you can reconcile period-by-period from a clean slate.
+function unreconcileAllForAccount(){
+  const acc = S.accounts.find(a=>a.id===RECON.accountId);
+  if(!acc) return;
+  if(!confirm(`Unreconcile ALL transactions for "${acc.name}"?\n\nThis clears every reconciled ✓ on this account so you can start reconciling fresh. Your transactions and balances are not changed — only the reconciled markers are reset.`)) return;
+  let n = 0;
+  S.journal.forEach(e=>{
+    e.lines.forEach(l=>{
+      if(l.accountId===RECON.accountId && l.reconciled){ l.reconciled = false; delete l.reconciledId; n++; }
+    });
+  });
+  // Also drop saved reconciliation records for this account so "Previously" resets.
+  S.reconciliations = (S.reconciliations||[]).filter(r=>r.accountId!==RECON.accountId);
+  RECON.ticks = {};
+  saveState(true);
+  showToast(`${n} transaction${n===1?'':'s'} unreconciled — you can now start fresh`);
+  renderReconcilePage();
+}
 function setAllReconTicks(value){
-  reconUnclearedLines().forEach(l=>{ RECON.ticks[l.lineId] = value; });
+  // Act on every line currently shown in the range grid.
+  let lines = reconLinesInRange();
+  if(!RECON.showReconciled) lines = lines.filter(l=>!l.reconciled);
+  lines.forEach(l=>{ RECON.ticks[l.lineId] = value; });
   document.querySelectorAll('#rc-rows input[type=checkbox]').forEach(cb=>cb.checked=value);
   recalcRecon();
 }
@@ -4185,28 +4230,32 @@ function sortReconLines(lines){
   });
 }
 function finishReconciliation(saveAndNew){
-  const lines = reconUnclearedLines();
-  const tickedIds = lines.filter(l=>RECON.ticks[l.lineId]).map(l=>l.lineId);
-  if(tickedIds.length===0){ showToast('Tick at least one transaction'); return; }
+  const accountId = RECON.accountId;
+  // Final state = whatever is ticked now. Apply it to every line of this account:
+  // ticked → reconciled, un-ticked → un-reconciled. This lets a weekly recon both clear
+  // new items and un-clear ones that were wrongly reconciled before.
   const s = reconSageTotals();
   if(Math.abs(s.diff) >= 0.005){
     if(!confirm(`This reconciliation is out of balance by ${fmt(Math.abs(s.diff))}. Save anyway?`)) return;
   }
   const reconId = uid('rc');
-  const accountId = RECON.accountId;
+  let clearedCount = 0;
   S.journal.forEach(e=>{
     e.lines.forEach(l=>{
-      if(l.accountId===accountId && tickedIds.includes(l.id)){ l.reconciled = true; l.reconciledId = reconId; }
+      if(l.accountId!==accountId) return;
+      if(l.id===undefined) return;
+      const wantTicked = !!RECON.ticks[l.id];
+      if(wantTicked){ l.reconciled = true; if(!l.reconciledId) l.reconciledId = reconId; clearedCount++; }
+      else { l.reconciled = false; delete l.reconciledId; }
     });
   });
   S.reconciliations.push({
     id: reconId, accountId, date: RECON.statementDate||todayStr(),
     fromDate: RECON.from||'', toDate: RECON.to||'',
-    openingBalance: RECON.opening, closingBalance: RECON.closing, clearedCount: tickedIds.length,
+    openingBalance: RECON.opening, closingBalance: RECON.closing, clearedCount,
   });
-  const cleared = tickedIds.length;
   saveState(true);
-  showToast(`Reconciliation saved — ${cleared} transaction${cleared===1?'':'s'} cleared`);
+  showToast(`Reconciliation saved — ${clearedCount} transaction${clearedCount===1?'':'s'} cleared`);
   if(saveAndNew){
     // Re-open a fresh reconciliation on the same account, carrying the closing forward.
     openReconcile(accountId);
@@ -8637,12 +8686,29 @@ function renderBS(asOf){
     </div>
   </div>`;
 }
+// Trial-balance balance for one account, respecting the From/To window.
+//  • No From date  → cumulative balance as at To (the standard TB).
+//  • With a From date → the net MOVEMENT within From..To, plus (when "Include opening
+//    balances" is ticked) the brought-forward balance as at the day before From.
+function tbAccountBalance(accountId, from, to, includeOpening){
+  if(!from){
+    // standard "as at" TB; includeOpening here means include opening-balance journals
+    return getAccountBalance(accountId, to, !includeOpening);
+  }
+  const movement = periodMovement(accountId, from, to);
+  if(!includeOpening) return movement;
+  // add brought-forward balance up to the day before the window starts
+  const dayBefore = isoAddDays(from, -1);
+  const broughtFwd = getAccountBalance(accountId, dayBefore, false);
+  return round2(broughtFwd + movement);
+}
 // Shared computation for the Trial Balance's grouped layout (income statement + balance sheet).
 function tbGroupedData(){
+  const from = window._tbFrom || '';   // TB has its OWN From date (independent of the P&L)
   const asOf = window._rTo;
   const includeOpening = window._rIncludeOpening !== false;
   const rowFor = a => {
-    const bal = getAccountBalance(a.id, asOf, !includeOpening);
+    const bal = tbAccountBalance(a.id, from, asOf, includeOpening);
     const isDebitNormal = accountNormalIsDebit(a.type);
     const debit = (isDebitNormal && bal>=0) || (!isDebitNormal && bal<0) ? Math.abs(bal) : 0;
     const credit = (!isDebitNormal && bal>=0) || (isDebitNormal && bal<0) ? Math.abs(bal) : 0;
@@ -8655,8 +8721,8 @@ function tbGroupedData(){
   // Balance sheet: combine the two VAT control accounts (9500 Input + 9600 Output)
   // into a single netted "VAT Control" line on the Trial Balance. The accounts stay
   // separate in the ledger (the VAT201/reports still need Output vs Input split).
-  const vatInput = getAccountBalance('acc_vatr', asOf, !includeOpening);   // asset/debit-normal
-  const vatOutput = getAccountBalance('acc_vatp', asOf, !includeOpening);  // liability/credit-normal
+  const vatInput = tbAccountBalance('acc_vatr', from, asOf, includeOpening);   // asset/debit-normal
+  const vatOutput = tbAccountBalance('acc_vatp', from, asOf, includeOpening);  // liability/credit-normal
   const vatNet = round2(vatOutput - vatInput); // +ve = net payable (credit); -ve = net receivable (debit)
   const vatRow = {
     a: { code:'9500', name:'VAT Control (net)', type:'Current Liabilities', system:true, _vatMerged:true },
@@ -8680,10 +8746,11 @@ function tbGroupedData(){
 /* ===== Export trial balance for an external Financial Statement system ===== */
 // Flat trial balance: code, name, type, debit, credit, net (signed to normal side).
 function fsTrialBalanceData(){
+  const from = window._tbFrom || '';
   const asOf = window._rTo || todayStr();
   const includeOpening = window._rIncludeOpening !== false;
   const rows = S.accounts.map(a=>{
-    const bal = getAccountBalance(a.id, asOf, !includeOpening); // signed to account's normal side
+    const bal = tbAccountBalance(a.id, from, asOf, includeOpening); // signed to account's normal side
     const isDebitNormal = accountNormalIsDebit(a.type);
     const debit  = (isDebitNormal && bal>=0) || (!isDebitNormal && bal<0) ? Math.abs(bal) : 0;
     const credit = (!isDebitNormal && bal>=0) || (isDebitNormal && bal<0) ? Math.abs(bal) : 0;
@@ -8777,13 +8844,26 @@ function renderTB(asOf){
     <td class="amt num">${r.debit?fmt(r.debit):''}</td><td class="amt num">${r.credit?fmt(r.credit):''}</td></tr>`;
 
   document.getElementById('report-body').innerHTML = `<div class="card">
-    <div class="card-head" style="flex-wrap:wrap;"><h3>As of</h3><div style="display:flex; gap:8px; align-items:center; margin-left:auto;"><input type="date" value="${asOf}" style="width:150px;" oninput="window._rTo=this.value;" onblur="renderReports();">${reportExportButtons('tbReportModel')}<button class="btn btn-ghost btn-sm" onclick="fsExportTrialBalanceCsv()" title="Export trial balance for a financial statement system (CSV)">↗ FS CSV</button><button class="btn btn-ghost btn-sm" onclick="fsExportTrialBalanceJson()" title="Export trial balance for a financial statement system (JSON)">↗ FS JSON</button></div></div>
+    <div class="card-head" style="flex-wrap:wrap; gap:10px;">
+      <div style="display:flex; gap:10px; align-items:center; flex-wrap:wrap;">
+        <label style="font-size:11px; text-transform:uppercase; letter-spacing:.4px; color:var(--text-muted); font-weight:700;">From</label>
+        <input type="date" value="${window._tbFrom||''}" style="width:150px;" oninput="window._tbFrom=this.value;" onblur="renderReports();">
+        <label style="font-size:11px; text-transform:uppercase; letter-spacing:.4px; color:var(--text-muted); font-weight:700;">To</label>
+        <input type="date" value="${asOf}" style="width:150px;" oninput="window._rTo=this.value;" onblur="renderReports();">
+        ${window._tbFrom? `<button class="btn btn-ghost btn-sm" onclick="window._tbFrom=''; renderReports();" title="Clear the From date and show the standard balance as at the To date">✕ Clear period</button>`:''}
+      </div>
+      <div style="display:flex; gap:8px; align-items:center; margin-left:auto;">${reportExportButtons('tbReportModel')}<button class="btn btn-ghost btn-sm" onclick="fsExportTrialBalanceCsv()" title="Export trial balance for a financial statement system (CSV)">↗ FS CSV</button><button class="btn btn-ghost btn-sm" onclick="fsExportTrialBalanceJson()" title="Export trial balance for a financial statement system (JSON)">↗ FS JSON</button></div>
+    </div>
     <div class="card-body" style="padding-bottom:0;">
       <label style="display:flex; align-items:center; gap:8px; cursor:pointer; text-transform:none; letter-spacing:normal; font-weight:500; color:var(--text); font-size:13px;">
         <input type="checkbox" style="width:auto;" ${includeOpening?'checked':''} onchange="window._rIncludeOpening=this.checked; renderReports();">
         Include opening balances
       </label>
-      <div class="hint">${obCount? `${obCount} journal ${obCount===1?'entry is':'entries are'} marked as an opening balance.` : 'No journal entries are currently marked as an opening balance — tag one when posting a manual journal entry.'}</div>
+      <div class="hint">${window._tbFrom
+        ? (includeOpening
+            ? `Showing balances from ${fmtDate(window._tbFrom)} to ${fmtDate(asOf)}, including the brought-forward balance at the start of the period.`
+            : `Showing only the movement from ${fmtDate(window._tbFrom)} to ${fmtDate(asOf)} (no brought-forward balances).`)
+        : (obCount? `${obCount} journal ${obCount===1?'entry is':'entries are'} marked as an opening balance.` : 'No journal entries are currently marked as an opening balance — tag one when posting a manual journal entry.')}</div>
     </div>
     <table><thead><tr><th>Code</th><th>Account</th><th class="amt">Debit</th><th class="amt">Credit</th></tr></thead><tbody>
       <tr class="tb-section-row"><td colspan="4">Income Statement</td></tr>
