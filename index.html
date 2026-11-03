@@ -10332,6 +10332,7 @@ function showCompanySetup(){
           <div class="field"><label>Currency</label><input type="text" id="setup-currency" value="R" style="width:70px;"></div>
           <div class="field"><label>VAT rate %</label><input type="number" id="setup-vatrate" value="15" step="0.01"></div>
         </div>
+        <div class="field" style="margin-top:4px;"><label>Invite your accountant (optional)</label><input type="email" id="setup-accountant" placeholder="accountant@example.com"><span style="font-size:11px; color:var(--text-muted);">They'll get full access to this company. They must already have a RECONI account.</span></div>
         <label style="display:flex; align-items:center; gap:8px; font-size:13px; margin-top:4px; cursor:pointer;">
           <input type="checkbox" id="setup-sample" style="width:auto;"> Add sample data to explore (you can delete it later)
         </label>
@@ -10349,6 +10350,7 @@ async function submitCompanySetup(){
   const currency = (document.getElementById('setup-currency').value||'R').trim() || 'R';
   const vatRate = Number(document.getElementById('setup-vatrate').value)||0;
   const withSample = document.getElementById('setup-sample').checked;
+  const accountantEmail = (document.getElementById('setup-accountant') && document.getElementById('setup-accountant').value || '').trim();
   const err = document.getElementById('setup-error');
   if(!name){ if(err){ err.textContent='Please enter a company name.'; err.style.display='block'; } return; }
   const btn = document.getElementById('setup-btn'); if(btn) btn.disabled = true;
@@ -10367,9 +10369,18 @@ async function submitCompanySetup(){
     S = co;
     NEEDS_COMPANY_SETUP = false;
     LAST_SAVED_AT = new Date();
+    // If they entered an accountant email, send the invite now (non-blocking).
+    if(accountantEmail && /^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(accountantEmail) && SB && SERVER_MODE && co.serverId){
+      try{
+        const { data:inv, error:invErr } = await SB.functions.invoke('invite-accountant', { body:{ companyId:co.serverId, email:accountantEmail } });
+        if(invErr || (inv && inv.error)){ showToast('Company created. Accountant invite failed: '+((inv&&inv.error)||invErr.message)); }
+        else { showToast('Company created and '+accountantEmail+' invited.'); }
+      }catch(e){ showToast('Company created (accountant invite could not be sent).'); }
+    } else {
+      showToast('Company created — welcome to RECONI');
+    }
     const host = document.getElementById('company-setup'); if(host) host.style.display='none';
     showApp();
-    showToast('Company created — welcome to RECONI');
   }catch(e){
     if(err){ err.textContent='Could not create company. Please try again.'; err.style.display='block'; }
     if(btn) btn.disabled = false;
