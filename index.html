@@ -10513,7 +10513,7 @@ async function createStarterCompanyOnServer(){
   const { data:userRes } = await SB.auth.getUser();
   const uid_ = userRes && userRes.user ? userRes.user.id : null;
   const { data:inserted, error } = await SB.from('companies')
-    .insert({ name:'My Business', data:co, created_by:uid_ })
+    .insert({ name:'My Business', data:co, created_by:uid_, owner_id:uid_ })
     .select('id, updated_at').limit(1);
   if(error){ console.error('starter company insert failed', error); throw error; }
   const serverId = inserted[0].id;
@@ -10589,7 +10589,7 @@ async function createCompanyOnServer(co){
   const uid_ = userRes && userRes.user ? userRes.user.id : null;
   const payload = {...co}; delete payload._loadedAt;
   const { data:inserted, error } = await SB.from('companies')
-    .insert({ name:(co.settings&&co.settings.businessName)||'Company', data:payload, created_by:uid_ })
+    .insert({ name:(co.settings&&co.settings.businessName)||'Company', data:payload, created_by:uid_, owner_id:uid_ })
     .select('id, updated_at').limit(1);
   if(error){ console.error('create company failed', error); return null; }
   if(!inserted || !inserted.length){ console.error('create company returned no row'); return null; }
