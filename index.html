@@ -5112,8 +5112,13 @@ function obInitValues(){
   OB_VALUES = {};
   S.accounts.forEach(a=>{ const ex = obExistingOpeningFor(a.id); OB_VALUES[a.id] = { debit: ex.debit||0, credit: ex.credit||0 }; });
 }
-const OB_TYPE_ORDER = ['Income','Expense','Equity','Non-Current Assets','Current Assets','Non-Current Liabilities','Current Liabilities','Asset','Liability'];
-const OB_TYPE_LABEL = { 'Non-Current Assets':'Non-Current Assets','Current Assets':'Current Assets','Non-Current Liabilities':'Non-Current Liabilities','Current Liabilities':'Current Liabilities', Equity:'Equity', Income:'Income', Expense:'Expenses', Asset:'Assets (legacy)', Liability:'Liabilities (legacy)' };
+// Opening balances apply to BALANCE SHEET accounts only. Income/Expense accounts never
+// carry an opening balance — at year-end their result is closed off to Retained Income,
+// so a new period always starts them at zero.
+const OB_TYPE_ORDER = ['Equity','Non-Current Assets','Current Assets','Non-Current Liabilities','Current Liabilities','Asset','Liability'];
+const OB_TYPE_LABEL = { 'Non-Current Assets':'Non-Current Assets','Current Assets':'Current Assets','Non-Current Liabilities':'Non-Current Liabilities','Current Liabilities':'Current Liabilities', Equity:'Equity', Asset:'Assets (legacy)', Liability:'Liabilities (legacy)' };
+// True for Income/Expense accounts — these are P&L (income-statement) accounts.
+function isPLAccountType(type){ return type==='Income' || type==='Expense'; }
 function renderOpeningBalances(){
   setTopbar('Opening Balances', 'Capture opening balances by account — debits and credits must balance', '');
   if(!OB_AS_OF) OB_AS_OF = obDefaultDate();
@@ -8691,13 +8696,18 @@ function renderBS(asOf){
 //  • With a From date → the net MOVEMENT within From..To, plus (when "Include opening
 //    balances" is ticked) the brought-forward balance as at the day before From.
 function tbAccountBalance(accountId, from, to, includeOpening){
+  // Opening balances belong to BALANCE SHEET accounts only. For an Income/Expense (P&L)
+  // account we never fold in opening-balance journals or brought-forward balances — at
+  // year-end that result is closed to Retained Income, so a P&L account only ever shows
+  // the movement of the period being reported.
+  const isPL = isPLAccountType(accountType(accountId));
   if(!from){
-    // standard "as at" TB; includeOpening here means include opening-balance journals
+    if(isPL) return getAccountBalance(accountId, to, true);   // always exclude opening journals for P&L
     return getAccountBalance(accountId, to, !includeOpening);
   }
   const movement = periodMovement(accountId, from, to);
-  if(!includeOpening) return movement;
-  // add brought-forward balance up to the day before the window starts
+  if(!includeOpening || isPL) return movement;                // P&L: movement only, never brought-forward
+  // Balance sheet: add brought-forward balance up to the day before the window starts
   const dayBefore = isoAddDays(from, -1);
   const broughtFwd = getAccountBalance(accountId, dayBefore, false);
   return round2(broughtFwd + movement);
@@ -9799,6 +9809,14 @@ function renderSettings(){
             </tbody><tbody id="mapping-noresult" style="display:none;"><tr><td colspan="4" style="color:var(--text-muted); font-size:13px;">No mappings match your search.</td></tr></tbody></table>
           ` : `<p style="font-size:13px; color:var(--text-muted);">No mappings yet. They're created when you allocate a description to an account in the Cashbook (it'll ask), or add one here.</p>`}
         </div></div>
+        <div class="card" style="margin-bottom:14px;"><div class="card-head"><h3>Accountant access</h3></div><div class="card-body">
+          <p style="font-size:12px; color:var(--text-muted); margin-top:0;">Invite your accountant or bookkeeper to this company by email. They'll get full access to work in it. They must already have a RECONI account.</p>
+          <div class="field-row" style="align-items:flex-end;">
+            <div class="field" style="flex:1;"><label>Accountant's email</label><input type="email" id="s-invite-email" placeholder="name@example.com"></div>
+            <button class="btn btn-primary" style="flex:0 0 auto;" onclick="inviteAccountant()">Send invite</button>
+          </div>
+          <div id="s-invite-status" style="font-size:12.5px; margin-top:4px;"></div>
+        </div></div>
         <div class="card" style="margin-bottom:14px;"><div class="card-head"><h3>Banking details</h3></div><div class="card-body">
           <p style="font-size:12px; color:var(--text-muted); margin-top:0;">Shown on printed invoices so customers know where to pay.</p>
           <div class="field"><label>Bank name</label><input type="text" id="s-bankname" value="${S.settings.bankName||''}"></div>
@@ -9883,6 +9901,25 @@ function renderSettings(){
       <button class="btn btn-primary btn-sm" style="margin-top:14px;" onclick="openUserForm()">+ Add user</button>
     </div></div>` : ''}
   `;
+}
+// Invite an accountant to the current company by email (creates a user_company_access grant).
+async function inviteAccountant(){
+  const statusEl = document.getElementById('s-invite-status');
+  const emailEl = document.getElementById('s-invite-email');
+  const email = (emailEl && emailEl.value || '').trim();
+  const setStatus = (msg, ok)=>{ if(statusEl){ statusEl.textContent = msg; statusEl.style.color = ok ? 'var(--money-pos)' : 'var(--red)'; } };
+  if(!email || !/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)){ setStatus('Enter a valid email address.', false); return; }
+  if(!SB || !SERVER_MODE){ setStatus('You need to be signed in online to invite people.', false); return; }
+  const companyId = S && S.serverId;
+  if(!companyId){ setStatus('Save this company to the server first, then invite.', false); return; }
+  setStatus('Sending invite…', true);
+  try{
+    const { data, error } = await SB.functions.invoke('invite-accountant', { body:{ companyId, email } });
+    if(error){ setStatus('Invite failed: '+error.message, false); return; }
+    if(data && data.error){ setStatus(data.error, false); return; }
+    setStatus((data && data.message) || 'Invite sent.', true);
+    if(emailEl) emailEl.value = '';
+  }catch(e){ console.error(e); setStatus('Could not send invite. Please try again.', false); }
 }
 function saveSettings(){
   S.settings.businessName = document.getElementById('s-name').value.trim() || 'My Business';
