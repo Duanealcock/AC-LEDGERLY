@@ -4614,6 +4614,29 @@ function parseDateFlexible(str){
   if(!isNaN(parsed.getTime())) return parsed.toISOString().slice(0,10);
   return null;
 }
+// Export the currently-selected bank account's posted transactions as a CSV that the
+// Import CSV form can read straight back (Date, Description, Money In, Money Out). Handy
+// for moving a cashbook to another company/account.
+function exportCashbookCsv(){
+  const accId = CASHBOOK_ACCOUNT;
+  const acc = S.accounts.find(a=>a.id===accId);
+  if(!acc){ showToast('Pick a bank account first'); return; }
+  const lines = getBankLinesForAccount(accId)
+    .slice()
+    .sort((a,b)=> (a.date||'').localeCompare(b.date||''));
+  if(!lines.length){ showToast('No transactions to export for this account'); return; }
+  const header = ['Date','Description','Money In','Money Out'];
+  const rows = lines.map(l=>[
+    l.date || '',
+    (l.desc || '').replace(/\r?\n/g,' '),
+    l.debit ? Number(l.debit).toFixed(2) : '',   // money in = debit to bank
+    l.credit ? Number(l.credit).toFixed(2) : '', // money out = credit to bank
+  ]);
+  const csv = [header, ...rows].map(r=>r.map(csvCell).join(',')).join('\r\n');
+  const safe = (acc.name||'cashbook').toLowerCase().replace(/[^a-z0-9]+/g,'-').replace(/(^-|-$)/g,'');
+  downloadBlob('﻿'+csv, `cashbook-${safe}-${todayStr()}.csv`, 'text/csv;charset=utf-8;');
+  showToast(`Exported ${lines.length} transaction${lines.length===1?'':'s'} for ${acc.name}`);
+}
 function openCsvImportForm(){
   const bankAccounts = S.accounts.filter(a=>a.isBank);
   const categoryAccounts = S.accounts.filter(a=>!a.isBank);
@@ -6526,6 +6549,7 @@ function renderCashbook(){
       <button class="btn btn-primary" onclick="addAllCashbookRows()">✓ Add all valid rows</button>
     ` : `
       <button class="btn btn-ghost" onclick="openCsvImportForm()">⇪ Import CSV</button>
+      <button class="btn btn-ghost" onclick="exportCashbookCsv()">⬇ Export CSV</button>
     `);
 
   const bankBal = getAccountBalance(CASHBOOK_ACCOUNT);
