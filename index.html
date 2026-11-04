@@ -588,10 +588,14 @@ const NAV = [
   {id:'sales', label:'Sales / Invoices', ic:'↗'},
   {id:'recurring', label:'Recurring Invoices', ic:'⟳'},
   {id:'purchases', label:'Purchases / Bills', ic:'↙'},
-  {id:'banking', label:'Banking', ic:'▤'},
+  {group:'banking', label:'Banking', ic:'▤', children:[
+    {id:'banking', label:'Bank Accounts'},
+    {id:'cashbook', label:'Cashbook'},
+    {id:'reconcile-landing', label:'Reconcile'},
+    {id:'bank-import', label:'Import CSV'},
+  ]},
   {id:'journal', label:'Journal Entries', ic:'✎'},
   {id:'opening-balances', label:'Opening Balances', ic:'⇋'},
-  {id:'cashbook', label:'Cashbook', ic:'▥'},
   {sec:'Records'},
   {id:'contacts', label:'All Contacts', ic:'☰'},
   {id:'accounts', label:'Chart of Accounts', ic:'≡'},
@@ -618,6 +622,8 @@ NAV.forEach(item=>{ if(item.group){ item.children.forEach(ch=>{ NAV_GROUP_OF[ch.
 // document-register views reached from the Transactions sub-menu belong to their group too,
 // so the sidebar keeps the right section open and the Transactions child highlighted
 ['quotes','credit-notes'].forEach(v=>{ NAV_GROUP_OF[v]='customers'; });
+// the reconcile page and feed review belong under the Banking group
+['reconcile','feed-review'].forEach(v=>{ NAV_GROUP_OF[v]='banking'; });
 ['supp-quotes','supp-credit-notes'].forEach(v=>{ NAV_GROUP_OF[v]='suppliers'; });
 // the reports group's children are handled directly as nav ids (rep-tb etc.)
 // map these register views back to the "Transactions" child for active highlighting
@@ -2340,6 +2346,8 @@ function render(){
     recurring: renderRecurring,
     purchases: renderPurchases,
     banking: renderBanking,
+    'reconcile-landing': renderReconcileLanding,
+    'bank-import': renderBankImportLanding,
     journal: renderJournal,
     'opening-balances': renderOpeningBalances,
     cashbook: renderCashbook,
@@ -3909,6 +3917,41 @@ function lastReconciliation(accountId){
   const list = S.reconciliations.filter(r=>r.accountId===accountId).sort((a,b)=>a.date.localeCompare(b.date) || a.id.localeCompare(b.id));
   return list.length ? list[list.length-1] : null;
 }
+// Simple Reconcile landing: pick a bank account, then open the reconciliation.
+function renderReconcileLanding(){
+  const bankAccounts = S.accounts.filter(a=>a.isBank);
+  setTopbar('Reconcile', 'Pick a bank or credit card account to reconcile', '');
+  if(!bankAccounts.length){
+    document.getElementById('content').innerHTML = `<div class="card"><div class="card-body">${emptyState('No bank accounts yet','Add a bank or credit card account first (Banking → Bank Accounts), then come back here to reconcile.',"navigate('banking')",'Go to Bank Accounts')}</div></div>`;
+    return;
+  }
+  const rows = bankAccounts.map(acc=>{
+    const bal = getAccountBalance(acc.id);
+    const last = lastReconciliation(acc.id);
+    const uncleared = getBankLinesForAccount(acc.id).filter(l=>!l.reconciled).length;
+    return `<tr class="clickable" onclick="openReconcile('${acc.id}')">
+      <td><strong>${escapeHtml(acc.name)}</strong></td>
+      <td class="amt num">${fmt(bal)}</td>
+      <td>${last? ('Last reconciled '+fmtDateShort(last.date)) : '<span style="color:var(--text-muted);">Never reconciled</span>'}</td>
+      <td class="amt">${uncleared? `<span style="color:var(--gold); font-weight:600;">${uncleared} uncleared</span>` : '<span style="color:var(--money-pos);">All cleared</span>'}</td>
+      <td class="amt"><button class="btn btn-primary btn-sm" onclick="event.stopPropagation(); openReconcile('${acc.id}')">Reconcile →</button></td>
+    </tr>`;
+  }).join('');
+  document.getElementById('content').innerHTML = `
+    <div class="card"><table>
+      <thead><tr><th>Account</th><th class="amt">Book balance</th><th>Status</th><th class="amt">Uncleared</th><th></th></tr></thead>
+      <tbody>${rows}</tbody>
+    </table></div>`;
+}
+// Import CSV landing: just open the import popup (and show a hint page behind it).
+function renderBankImportLanding(){
+  setTopbar('Import bank transactions', 'Import a CSV bank statement into the cashbook', '');
+  document.getElementById('content').innerHTML = `<div class="card"><div class="card-body" style="text-align:center; padding:30px;">
+    <p style="color:var(--text-muted); max-width:460px; margin:0 auto 16px;">Import a CSV from your bank — RECONI auto-detects the Date, Description and Amount columns and sends the rows to the Cashbook for you to allocate.</p>
+    <button class="btn btn-primary" onclick="openCsvImportForm()">⇪ Choose CSV to import</button>
+  </div></div>`;
+  setTimeout(()=>openCsvImportForm(), 120);
+}
 function renderBanking(){
   const bankAccounts = S.accounts.filter(a=>a.isBank);
   setTopbar('Banking', 'View bank ledgers and log manual transactions',
@@ -5173,8 +5216,8 @@ function obInitValues(){
 // Opening balances apply to BALANCE SHEET accounts only. Income/Expense accounts never
 // carry an opening balance — at year-end their result is closed off to Retained Income,
 // so a new period always starts them at zero.
-const OB_TYPE_ORDER = ['Equity','Non-Current Assets','Current Assets','Non-Current Liabilities','Current Liabilities','Asset','Liability'];
-const OB_TYPE_LABEL = { 'Non-Current Assets':'Non-Current Assets','Current Assets':'Current Assets','Non-Current Liabilities':'Non-Current Liabilities','Current Liabilities':'Current Liabilities', Equity:'Equity', Asset:'Assets (legacy)', Liability:'Liabilities (legacy)' };
+const OB_TYPE_ORDER = ['Income','Expense','Equity','Non-Current Assets','Current Assets','Non-Current Liabilities','Current Liabilities','Asset','Liability'];
+const OB_TYPE_LABEL = { 'Non-Current Assets':'Non-Current Assets','Current Assets':'Current Assets','Non-Current Liabilities':'Non-Current Liabilities','Current Liabilities':'Current Liabilities', Equity:'Equity', Income:'Income', Expense:'Expenses', Asset:'Assets (legacy)', Liability:'Liabilities (legacy)' };
 // True for Income/Expense accounts — these are P&L (income-statement) accounts.
 function isPLAccountType(type){ return type==='Income' || type==='Expense'; }
 function renderOpeningBalances(){
@@ -6204,7 +6247,7 @@ function cashbookRowHtml(r){
     </tr>`;
   }
   return `<tr data-id="${r.id}">
-    <td style="text-align:center;"><input type="checkbox" class="cb-tick" title="Select this transaction"></td>
+    <td style="text-align:center;"><input type="checkbox" class="cb-tick" title="Select this transaction" onchange="CASHBOOK_SELECT_ALL.new=false; updateCashbookSelectAllBanner('new');"></td>
     <td><input type="date" value="${r.date}" onchange="updateCashbookField('${r.id}','date',this.value)"></td>
     <td><input type="text" value="${escapeHtml(r.payee)}" placeholder="Payee" onchange="updateCashbookField('${r.id}','payee',this.value)"></td>
     <td><input type="text" value="${escapeHtml(r.description)}" placeholder="Description" onchange="updateCashbookField('${r.id}','description',this.value)"></td>
@@ -6401,7 +6444,9 @@ function tickCommitCashbookRow(id){
 }
 // Commit all currently-ticked New Transactions rows.
 function markSelectedCashbookReviewed(){
-  const ids = Array.from(document.querySelectorAll('#cb-new-body .cb-tick:checked')).map(cb=>cb.closest('tr').getAttribute('data-id'));
+  const ids = CASHBOOK_SELECT_ALL.new
+    ? (S.cashbookDrafts||[]).map(r=>r.id)                 // all drafts, across every page
+    : Array.from(document.querySelectorAll('#cb-new-body .cb-tick:checked')).map(cb=>cb.closest('tr').getAttribute('data-id'));
   if(!ids.length){ showToast('Tick the rows you want to mark as reviewed'); return; }
   const succeeded = [];
   let skipped = 0;
@@ -6418,7 +6463,9 @@ function markSelectedCashbookReviewed(){
 }
 // Delete all ticked rows in the New Transactions tab (drafts only — nothing posted).
 function deleteSelectedCashbookRows(){
-  const ids = Array.from(document.querySelectorAll('#cb-new-body .cb-tick:checked')).map(cb=>cb.closest('tr').getAttribute('data-id'));
+  const ids = CASHBOOK_SELECT_ALL.new
+    ? (S.cashbookDrafts||[]).map(r=>r.id)
+    : Array.from(document.querySelectorAll('#cb-new-body .cb-tick:checked')).map(cb=>cb.closest('tr').getAttribute('data-id'));
   if(!ids.length){ showToast('Tick the rows you want to delete'); return; }
   if(!confirm(`Delete ${ids.length} selected transaction${ids.length===1?'':'s'}? This removes them from New Transactions and cannot be undone.`)) return;
   S.cashbookDrafts = (S.cashbookDrafts||[]).filter(r=>!ids.includes(r.id));
@@ -6428,7 +6475,9 @@ function deleteSelectedCashbookRows(){
 }
 // Move selected Reviewed rows back to New Transactions (reverse the posting).
 function moveSelectedReviewedBack(){
-  const refs = Array.from(document.querySelectorAll('#cb-rev-body .cb-tick:checked')).map(cb=>cb.closest('tr').getAttribute('data-ref'));
+  const refs = CASHBOOK_SELECT_ALL.reviewed
+    ? (S.cashbookReviewed||[]).filter(r=>r.accountId===CASHBOOK_ACCOUNT).map(r=>r.cashbookRef)
+    : Array.from(document.querySelectorAll('#cb-rev-body .cb-tick:checked')).map(cb=>cb.closest('tr').getAttribute('data-ref'));
   if(!refs.length){ showToast('Tick the reviewed rows you want to move back'); return; }
   refs.forEach(ref=> undoReviewedCashbook(ref, true));
   showToast(`${refs.length} moved back to New Transactions`);
@@ -6628,6 +6677,7 @@ function renderCashbook(){
         ${cbSortTh('new','selection','Selection')}${cbSortTh('new','reference','Reference')}${cbSortTh('new','vat','VAT')}
         ${cbSortTh('new','spent','Spent','amt')}${cbSortTh('new','received','Received','amt')}${cbSortTh('new','balance','Balance','amt')}<th></th>
       </tr></thead><tbody id="cb-new-body">${pageRows.map(cashbookRowHtml).join('')}</tbody></table></div>`;
+      html += `<div id="cb-selectall-new" class="hint" style="display:none; margin:0; padding:8px 14px; background:var(--surface-2); border-top:1px solid var(--border); text-align:center;"></div>`;
       html += cashbookPager('new', newRows.length);
       html += `<div class="card-body" style="display:flex; justify-content:space-between; align-items:center; gap:10px; border-top:1px solid var(--border); flex-wrap:wrap;">
         <span class="hint" style="margin:0;">Select the transactions you want to review, then press <strong>Mark as reviewed</strong> to add them to the books.</span>
@@ -6648,9 +6698,54 @@ function renderCashbook(){
   document.getElementById('content').innerHTML = html;
   attachColumnResizers('cb-new-table');
   attachColumnResizers('cb-rev-table');
+  // If 'all across pages' is active for the current tab, re-tick the visible rows + banner.
+  ['new','reviewed'].forEach(tab=>{
+    if(CASHBOOK_SELECT_ALL[tab]){
+      document.querySelectorAll('#'+(tab==='reviewed'?'cb-rev-body':'cb-new-body')+' .cb-tick').forEach(cb=>{ cb.checked = true; });
+    }
+    updateCashbookSelectAllBanner(tab);
+  });
 }
+// When 'all across pages' is on, the bulk actions act on every row, not just the visible page.
+let CASHBOOK_SELECT_ALL = { new:false, reviewed:false };
 function toggleAllCashbookTicks(bodyId, checked){
   document.querySelectorAll('#'+bodyId+' .cb-tick').forEach(cb=>{ cb.checked = checked; });
+  const tab = bodyId==='cb-rev-body' ? 'reviewed' : 'new';
+  if(!checked) CASHBOOK_SELECT_ALL[tab] = false;   // unticking clears the all-pages selection
+  updateCashbookSelectAllBanner(tab);
+}
+// Select EVERY row in this tab, across all pages.
+function selectAllCashbookAcrossPages(tab){
+  CASHBOOK_SELECT_ALL[tab] = true;
+  document.querySelectorAll('#'+(tab==='reviewed'?'cb-rev-body':'cb-new-body')+' .cb-tick').forEach(cb=>{ cb.checked = true; });
+  updateCashbookSelectAllBanner(tab);
+}
+function clearCashbookSelectAll(tab){
+  CASHBOOK_SELECT_ALL[tab] = false;
+  document.querySelectorAll('#'+(tab==='reviewed'?'cb-rev-body':'cb-new-body')+' .cb-tick').forEach(cb=>{ cb.checked = false; });
+  const hdr = document.querySelector('#'+(tab==='reviewed'?'cb-rev-body':'cb-new-body')).closest('table').querySelector('thead .cb-tick, thead input[type=checkbox]');
+  if(hdr) hdr.checked = false;
+  updateCashbookSelectAllBanner(tab);
+}
+// Show/refresh the "select all N across pages" banner.
+function updateCashbookSelectAllBanner(tab){
+  const el = document.getElementById('cb-selectall-'+tab);
+  if(!el) return;
+  const total = tab==='reviewed'
+    ? (S.cashbookReviewed||[]).filter(r=>r.accountId===CASHBOOK_ACCOUNT).length
+    : (S.cashbookDrafts||[]).length;
+  const bodyId = tab==='reviewed'?'cb-rev-body':'cb-new-body';
+  const pageTicked = document.querySelectorAll('#'+bodyId+' .cb-tick:checked').length;
+  const pageTotal = document.querySelectorAll('#'+bodyId+' .cb-tick').length;
+  if(CASHBOOK_SELECT_ALL[tab]){
+    el.innerHTML = `All <strong>${total}</strong> transaction${total===1?'':'s'} selected (across all pages). <a href="#" onclick="event.preventDefault(); clearCashbookSelectAll('${tab}')" style="color:var(--accent-dark); font-weight:600;">Clear selection</a>`;
+    el.style.display = '';
+  } else if(pageTicked>0 && pageTicked===pageTotal && total>pageTotal){
+    el.innerHTML = `All <strong>${pageTotal}</strong> on this page selected. <a href="#" onclick="event.preventDefault(); selectAllCashbookAcrossPages('${tab}')" style="color:var(--accent-dark); font-weight:600;">Select all ${total} across all pages</a>`;
+    el.style.display = '';
+  } else {
+    el.style.display = 'none';
+  }
 }
 function selectionLabel(meta){
   if(cbIsContactType(meta.type)){
@@ -6700,7 +6795,7 @@ function renderCashbookReviewed(reviewed){
       ${cbSortTh('reviewed','reference','Reference')}${cbSortTh('reviewed','vat','VAT')}${cbSortTh('reviewed','spent','Spent','amt')}${cbSortTh('reviewed','received','Received','amt')}${cbSortTh('reviewed','balance','Balance','amt')}<th></th>
     </tr></thead><tbody id="cb-rev-body">
       ${rows.map(r=>{ const locked = isDateInClosedVatPeriod(r.date); return `<tr data-ref="${r.cashbookRef}" class="${locked?'cb-locked-row':''}">
-        <td style="text-align:center;">${locked? `<span class="cb-lock" title="Locked — in a closed VAT period">🔒</span>` : `<input type="checkbox" class="cb-tick">`}</td>
+        <td style="text-align:center;">${locked? `<span class="cb-lock" title="Locked — in a closed VAT period">🔒</span>` : `<input type="checkbox" class="cb-tick" onchange="CASHBOOK_SELECT_ALL.reviewed=false; updateCashbookSelectAllBanner('reviewed');">`}</td>
         <td>${fmtDateShort(r.date)}</td>
         <td>${escapeHtml(r.payee||'—')}</td>
         <td>${escapeHtml(r.description||'—')}</td>
@@ -6716,6 +6811,7 @@ function renderCashbookReviewed(reviewed){
       <tr class="li-total-row"><td colspan="8">Total — ${total} reviewed</td>
         <td class="amt num">${fmt(totalSpent)}</td><td class="amt num">${fmt(totalRecv)}</td><td></td><td></td></tr>
     </tbody></table></div>
+    <div id="cb-selectall-reviewed" class="hint" style="display:none; margin:0; padding:8px 14px; background:var(--surface-2); border-top:1px solid var(--border); text-align:center;"></div>
     ${cashbookPager('reviewed', total)}
     <div class="card-body" style="display:flex; justify-content:space-between; align-items:center; gap:10px; border-top:1px solid var(--border); flex-wrap:wrap;">
       <span class="hint" style="margin:0;">Tick reviewed rows to move them back to New Transactions (this reverses the posting).</span>
@@ -8755,18 +8851,19 @@ function renderBS(asOf){
 //  • With a From date → the net MOVEMENT within From..To, plus (when "Include opening
 //    balances" is ticked) the brought-forward balance as at the day before From.
 function tbAccountBalance(accountId, from, to, includeOpening){
-  // Opening balances belong to BALANCE SHEET accounts only. For an Income/Expense (P&L)
-  // account we never fold in opening-balance journals or brought-forward balances — at
-  // year-end that result is closed to Retained Income, so a P&L account only ever shows
-  // the movement of the period being reported.
+  // Opening balances normally belong to BALANCE SHEET accounts (a P&L account's prior
+  // result is closed to Retained Income at year-end). But opening balances CAN be captured
+  // on Income/Expense accounts, and by default the TB shows them. The "Exclude P&L opening
+  // balances" toggle (window._tbExcludePLOpening) hides them for the accounting-correct view.
   const isPL = isPLAccountType(accountType(accountId));
+  const excludePLOpening = (typeof window!=='undefined' && window._tbExcludePLOpening === true);
   if(!from){
-    if(isPL) return getAccountBalance(accountId, to, true);   // always exclude opening journals for P&L
+    if(isPL && excludePLOpening) return getAccountBalance(accountId, to, true); // drop opening journals for P&L
     return getAccountBalance(accountId, to, !includeOpening);
   }
   const movement = periodMovement(accountId, from, to);
-  if(!includeOpening || isPL) return movement;                // P&L: movement only, never brought-forward
-  // Balance sheet: add brought-forward balance up to the day before the window starts
+  if(!includeOpening || (isPL && excludePLOpening)) return movement;  // P&L excluded: movement only
+  // Add brought-forward balance up to the day before the window starts
   const dayBefore = isoAddDays(from, -1);
   const broughtFwd = getAccountBalance(accountId, dayBefore, false);
   return round2(broughtFwd + movement);
@@ -8927,6 +9024,10 @@ function renderTB(asOf){
       <label style="display:flex; align-items:center; gap:8px; cursor:pointer; text-transform:none; letter-spacing:normal; font-weight:500; color:var(--text); font-size:13px;">
         <input type="checkbox" style="width:auto;" ${includeOpening?'checked':''} onchange="window._rIncludeOpening=this.checked; renderReports();">
         Include opening balances
+      </label>
+      <label style="display:flex; align-items:center; gap:8px; cursor:pointer; text-transform:none; letter-spacing:normal; font-weight:500; color:var(--text); font-size:13px; margin-top:4px;">
+        <input type="checkbox" style="width:auto;" ${window._tbExcludePLOpening===true?'checked':''} onchange="window._tbExcludePLOpening=this.checked; renderReports();">
+        Exclude opening balances on Income &amp; Expense accounts
       </label>
       <div class="hint">${window._tbFrom
         ? (includeOpening
