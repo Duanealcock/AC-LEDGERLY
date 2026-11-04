@@ -4104,14 +4104,25 @@ function reconTotals(){
 // against the entered Statement Balance.
 function reconSageTotals(){
   const all = getBankLinesForAccount(RECON.accountId);
-  // Previously = net of lines reconciled before this session (their original state).
-  // Total      = net of everything currently TICKED (cleared + newly ticked).
-  // Now        = Total − Previously (the net effect of this session's ticking).
+  const from = RECON.from || '';
+  const to = RECON.to || '';
+  // Reconciled Total should equal the book balance AS AT the To date. So:
+  //  • transactions BEFORE the window that are reconciled count automatically (cleared history)
+  //  • transactions IN the window count when they're TICKED
+  //  • anything AFTER the To date is ignored
+  // Set "To 05/10" and the app adds everything up to that date, which should match the
+  // Statement Balance you enter for 05/10.
   let prev = 0, total = 0;
   all.forEach(l=>{
+    const d = l.date || '';
+    if(to && d > to) return;                         // after the To date → ignore
     const amt = (l.debit||0) - (l.credit||0);
+    const beforeWindow = from && d < from;
+    const ticked = !!RECON.ticks[l.lineId];
+    // "Previously" = cumulative balance of already-reconciled lines up to the To date
     if(l.reconciled) prev += amt;
-    if(RECON.ticks[l.lineId]) total += amt;
+    // "Total" = reconciled history before the window + whatever is ticked inside it
+    if(beforeWindow ? l.reconciled : ticked) total += amt;
   });
   prev = round2(prev); total = round2(total);
   const now = round2(total - prev);
