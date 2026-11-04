@@ -1934,6 +1934,8 @@ function docVatTypeId(doc){
 }
 function vatTypeLabel(id){ return vatTypeById(id).name; }
 // Build the <option>s for a VAT-type selector; 'selectedId' marked selected.
+// Default VAT type for a NEW document: 'none' when the business isn't VAT registered.
+function defaultVatType(){ return (S.settings && S.settings.vatRegistered===false) ? 'none' : 'standard'; }
 function vatTypeOptions(selectedId){
   return VAT_TYPES.map(t=>`<option value="${t.id}" ${t.id===selectedId?'selected':''}>${t.name}${t.rate?` (${t.rate}%)`:' (0%)'}</option>`).join('');
 }
@@ -2382,6 +2384,8 @@ function render(){
 // Work out this company's current VAT period and whether its return is due/overdue,
 // based on today's date and the registered SARS category. Used for the dashboard alert.
 function vatDueStatus(){
+  // If this company isn't VAT registered, there are no returns, periods or reminders.
+  if(S.settings && S.settings.vatRegistered === false) return null;
   const cat = (S.settings && S.settings.vatCategory) || 'A';
   const months = (typeof vatCatMonths==='function') ? vatCatMonths(cat) : (cat==='C'?1:cat==='D'?6:cat==='E'?12:2);
   const today = new Date(todayStr()+'T00:00:00');
@@ -2837,7 +2841,7 @@ function openInvoiceForm(editId){
     <div class="field-row">
       <div class="field"><label>Due date</label><input type="date" id="f-due" value="${editInv&&editInv.dueDate?editInv.dueDate:dueStr}"></div>
       <div class="field"><label>${S.settings.taxLabel} type</label>
-        <select id="f-tax" onchange="recalcInvoiceForm()">${vatTypeOptions(editInv?(editInv.vatType||'standard'):'standard')}</select></div>
+        <select id="f-tax" onchange="recalcInvoiceForm()">${vatTypeOptions(editInv?(editInv.vatType||'standard'):defaultVatType())}</select></div>
     </div>
     <div class="section-title">Line items</div>
     <table class="li-table" id="li-body-wrap">
@@ -3476,7 +3480,7 @@ function openBillForm(){
     <div class="field-row">
       <div class="field"><label>Due date</label><input type="date" id="f-due" value="${dueStr}"></div>
       <div class="field"><label>${S.settings.taxLabel} type</label>
-        <select id="f-tax" onchange="recalcInvoiceForm()">${vatTypeOptions('standard')}</select></div>
+        <select id="f-tax" onchange="recalcInvoiceForm()">${vatTypeOptions(defaultVatType())}</select></div>
     </div>
     <div class="section-title">Line items</div>
     <table class="li-table" id="li-body-wrap">
@@ -3632,7 +3636,7 @@ function openQuoteForm(kind){
     <div class="field-row">
       <div class="field"><label>Valid until</label><input type="date" id="f-due" value="${validStr}"></div>
       <div class="field"><label>${S.settings.taxLabel} type</label>
-        <select id="f-tax" onchange="recalcInvoiceForm()">${vatTypeOptions('standard')}</select></div>
+        <select id="f-tax" onchange="recalcInvoiceForm()">${vatTypeOptions(defaultVatType())}</select></div>
     </div>
     <div class="section-title">Line items</div>
     <table class="li-table" id="li-body-wrap">
@@ -3776,7 +3780,7 @@ function openCreditNoteForm(kind, prefillContactId, prefillTargetId){
           ${openDocs.map(d=>`<option value="${d.id}" ${d.id===prefillTargetId?'selected':''}>${d.number} — ${contactName(d.contactId)} (${fmt(docBalanceDue(d))} due)</option>`).join('')}
         </select></div>
       <div class="field"><label>${S.settings.taxLabel} type</label>
-        <select id="f-tax" onchange="recalcInvoiceForm()">${vatTypeOptions('standard')}</select></div>
+        <select id="f-tax" onchange="recalcInvoiceForm()">${vatTypeOptions(defaultVatType())}</select></div>
     </div>
     <div class="section-title">Line items</div>
     <table class="li-table" id="li-body-wrap">
@@ -9794,11 +9798,18 @@ function renderSettings(){
     <div class="grid-2">
       <div class="card"><div class="card-head"><h3>Business</h3></div><div class="card-body">
         <div class="field"><label>Business name</label><input type="text" id="s-name" value="${S.settings.businessName}"></div>
+        <label style="display:flex; align-items:center; gap:8px; cursor:pointer; margin:4px 0 6px; font-size:13px; color:var(--text); text-transform:none; letter-spacing:normal; font-weight:600;">
+          <input type="checkbox" id="s-vatreg" style="width:auto;" ${S.settings.vatRegistered!==false?'checked':''} onchange="toggleVatRegistered(this.checked)">
+          This business is VAT registered
+        </label>
+        <div class="hint" style="margin:-2px 0 10px;">Untick if the business is not registered for VAT. This hides all VAT reminders, removes VAT from new invoices and bills, and switches the default tax rate to 0%.</div>
         <div class="field-row">
           <div class="field"><label>Currency symbol</label><input type="text" id="s-currency" value="${S.settings.currency}"></div>
           <div class="field"><label>Tax label</label><input type="text" id="s-taxlabel" value="${S.settings.taxLabel}"></div>
         </div>
-        <div class="field"><label>Default tax rate (%)</label><input type="number" id="s-taxrate" value="${S.settings.taxRate}" step="0.1"></div>
+        <div id="vat-fields" style="${S.settings.vatRegistered===false?'opacity:.45; pointer-events:none;':''}">
+          <div class="field"><label>Default tax rate (%)</label><input type="number" id="s-taxrate" value="${S.settings.taxRate}" step="0.1"></div>
+        </div>
         <div class="field-row">
           <div class="field"><label>Financial year start</label><input type="date" id="s-fystart" value="${S.settings.fyStartDate||defaultFyStartValue()}"></div>
           <div class="field"><label>Financial year close</label><input type="date" id="s-fyclose" value="${S.settings.fyCloseDate||defaultFyCloseValue()}"></div>
@@ -9978,11 +9989,22 @@ async function inviteAccountant(){
     if(emailEl) emailEl.value = '';
   }catch(e){ console.error(e); setStatus('Could not send invite. Please try again.', false); }
 }
+// Live toggle: grey out the tax-rate field when the business isn't VAT registered.
+function toggleVatRegistered(on){
+  const box = document.getElementById('vat-fields');
+  if(box){ box.style.opacity = on ? '' : '.45'; box.style.pointerEvents = on ? '' : 'none'; }
+  if(!on){ const tr = document.getElementById('s-taxrate'); if(tr) tr.value = 0; }
+}
 function saveSettings(){
   S.settings.businessName = document.getElementById('s-name').value.trim() || 'My Business';
   S.settings.currency = document.getElementById('s-currency').value.trim() || 'R';
   S.settings.taxLabel = document.getElementById('s-taxlabel').value.trim() || 'Tax';
   S.settings.taxRate = Number(document.getElementById('s-taxrate').value)||0;
+  const vatRegEl = document.getElementById('s-vatreg');
+  if(vatRegEl){
+    S.settings.vatRegistered = vatRegEl.checked;
+    if(!vatRegEl.checked) S.settings.taxRate = 0;   // not registered → 0% default
+  }
   const fyStart = document.getElementById('s-fystart'); const fyClose = document.getElementById('s-fyclose');
   if(fyStart && fyClose){
     const sv = fyStart.value, cv = fyClose.value;
