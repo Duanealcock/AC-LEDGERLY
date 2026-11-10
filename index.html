@@ -7382,8 +7382,10 @@ function availableFyLabels(){
   (S.invoices||[]).forEach(d=>push(d.date));
   (S.bills||[]).forEach(d=>push(d.date));
   const cur = currentFyLabel();
-  // always offer current and a couple on either side
-  for(let y=cur-2; y<=cur+1; y++) labels.add(y);
+  // always offer a fixed historical window (FY2021) up to next year, so prior
+  // periods can be selected and imported even before any activity exists in them.
+  const floor = Math.min(2021, cur-2);
+  for(let y=floor; y<=cur+1; y++) labels.add(y);
   return Array.from(labels).filter(Boolean).sort((a,b)=>b-a);
 }
 // Active FY bounds, or null when "All years".
