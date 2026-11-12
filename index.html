@@ -1163,9 +1163,25 @@ function handleRestoreBackup(event){
 
 function companyList(){
   const all = (WORKSPACE.order||Object.keys(WORKSPACE.companies)).map(id=>({id, name:WORKSPACE.companies[id].settings.businessName}));
+  // Sort companies alphabetically (A–Z), case-insensitive, for the switcher and everywhere else.
+  all.sort((a,b)=> String(a.name||'').localeCompare(String(b.name||''), undefined, {sensitivity:'base'}));
   if(!WORKSPACE.authEnabled || !CURRENT_USER || CURRENT_USER.isAdmin) return all;
   const allowed = new Set(CURRENT_USER.companyIds||[]);
   return all.filter(c=>allowed.has(c.id));
+}
+// Live filter for the Switch-company search box: hides rows whose name doesn't contain the text.
+function filterCompanySwitcher(q){
+  const term = String(q||'').trim().toLowerCase();
+  const rows = document.querySelectorAll('.sw-co-row');
+  let shown = 0;
+  rows.forEach(r=>{
+    const name = (r.getAttribute('data-name')||'').toLowerCase();
+    const hit = !term || name.indexOf(term)>-1;
+    r.style.display = hit ? '' : 'none';
+    if(hit) shown++;
+  });
+  const none = document.getElementById('sw-no-match');
+  if(none) none.style.display = shown===0 ? '' : 'none';
 }
 function canManageWorkspace(){
   return !WORKSPACE.authEnabled || (CURRENT_USER && CURRENT_USER.isAdmin);
@@ -1237,7 +1253,7 @@ function openCompanySwitcher(){
   // Non-admins: simple flat list (they only see their own companies anyway)
   if(!showGroups){
     const rowFor = c => `
-      <div style="display:flex; align-items:center; justify-content:space-between; padding:10px 12px; border:1px solid var(--border); border-radius:7px; margin-bottom:8px; ${c.id===WORKSPACE.activeId?'background:var(--surface-2); border-color:var(--accent);':''}">
+      <div class="sw-co-row" data-name="${escapeHtml(c.name)}" style="display:flex; align-items:center; justify-content:space-between; padding:10px 12px; border:1px solid var(--border); border-radius:7px; margin-bottom:8px; ${c.id===WORKSPACE.activeId?'background:var(--surface-2); border-color:var(--accent);':''}">
         <div style="display:flex; align-items:center; gap:9px; cursor:pointer; flex:1;" onclick="switchCompany('${c.id}')">
           <span style="width:9px;height:9px;border-radius:50%;background:${c.id===WORKSPACE.activeId?'var(--accent)':'var(--border-strong)'};display:inline-block;"></span>
           <strong style="font-size:13.5px;">${c.name}</strong>
@@ -1245,7 +1261,9 @@ function openCompanySwitcher(){
         ${(canManage && list.length>1) ? `<button class="icon-btn" onclick="event.stopPropagation(); deleteCompanyAction('${c.id}')">Delete</button>` : ''}
       </div>`;
     const canAdd = canAddCompany();
-    openModal('Switch company', list.map(rowFor).join('') +
+    const searchBox = list.length>5 ? `<input type="text" id="sw-search" placeholder="Search companies…" oninput="filterCompanySwitcher(this.value)" style="width:100%; padding:9px 12px; margin-bottom:10px; border:1px solid var(--border); border-radius:7px; font-size:13.5px;">` : '';
+    openModal('Switch company', searchBox + list.map(rowFor).join('') +
+      `<div id="sw-no-match" class="hint" style="display:none; text-align:center; padding:10px 0;">No companies match your search.</div>` +
       (canAdd ? `<button class="btn btn-ghost" style="width:100%; margin-top:10px; justify-content:center;" onclick="openNewCompanyForm()">+ Add company</button>`
         : `<div class="hint" style="margin-top:8px; text-align:center;">${escapeHtml(companyLimitMessage())} <a href="#" onclick="event.preventDefault(); closeModal(); navigate('subscription');" style="color:var(--accent-dark);">View plans</a></div>`), []);
     return;
@@ -1270,7 +1288,7 @@ function openCompanySwitcher(){
   const inFirm = SWITCHER_FIRM==='__unassigned__' ? unassignedList
     : list.filter(c=> companyPracticeId(WORKSPACE.companies[c.id])===SWITCHER_FIRM );
   const rowFor = c => `
-    <div style="display:flex; align-items:center; justify-content:space-between; padding:10px 12px; border:1px solid var(--border); border-radius:7px; margin-bottom:8px; ${c.id===WORKSPACE.activeId?'background:var(--surface-2); border-color:var(--accent);':''}">
+    <div class="sw-co-row" data-name="${escapeHtml(c.name)}" style="display:flex; align-items:center; justify-content:space-between; padding:10px 12px; border:1px solid var(--border); border-radius:7px; margin-bottom:8px; ${c.id===WORKSPACE.activeId?'background:var(--surface-2); border-color:var(--accent);':''}">
       <div style="display:flex; align-items:center; gap:9px; cursor:pointer; flex:1;" onclick="switchCompany('${c.id}')">
         <span style="width:9px;height:9px;border-radius:50%;background:${c.id===WORKSPACE.activeId?'var(--accent)':'var(--border-strong)'};display:inline-block;"></span>
         <strong style="font-size:13.5px;">${c.name}</strong>
@@ -1280,8 +1298,10 @@ function openCompanySwitcher(){
         ${(canManage && list.length>1) ? `<button class="icon-btn" onclick="event.stopPropagation(); deleteCompanyAction('${c.id}')">Delete</button>` : ''}
       </div>
     </div>`;
-  const companiesHtml = inFirm.length ? inFirm.map(rowFor).join('')
-    : `<div class="hint" style="text-align:center; padding:16px 0;">No companies under this firm yet.</div>`;
+  const searchBox = inFirm.length>5 ? `<input type="text" id="sw-search" placeholder="Search companies…" oninput="filterCompanySwitcher(this.value)" style="width:100%; padding:9px 12px; margin-bottom:10px; border:1px solid var(--border); border-radius:7px; font-size:13.5px;">` : '';
+  const companiesHtml = (inFirm.length ? searchBox + inFirm.map(rowFor).join('')
+    : `<div class="hint" style="text-align:center; padding:16px 0;">No companies under this firm yet.</div>`)
+    + `<div id="sw-no-match" class="hint" style="display:none; text-align:center; padding:10px 0;">No companies match your search.</div>`;
 
   const canAdd = canAddCompany();
   const firmLabel = SWITCHER_FIRM==='__unassigned__' ? 'Unassigned' : practiceName(SWITCHER_FIRM);
