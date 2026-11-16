@@ -3613,6 +3613,7 @@ function openBillDetail(id){
     actions.push({label:'Receive bill', cls:'btn-primary', onclick:`issueBillAction('${bill.id}')`});
   } else if(status==='open' || status==='partial'){
     actions.push({label:'Void', cls:'btn-danger', onclick:`voidBillAction('${bill.id}')`});
+    actions.push({label:'Edit', cls:'btn-ghost', onclick:`openBillEditForm('${bill.id}')`});
     actions.push({label:'Record payment', cls:'btn-primary', onclick:`openBillPaymentForm('${bill.id}')`});
   } else if(status==='paid'){
     actions.push({label:'Void', cls:'btn-danger', onclick:`voidBillAction('${bill.id}')`});
@@ -3647,7 +3648,10 @@ function setBillDueDate(id, newDate){
 // Edit a DRAFT bill: change its supplier, dates and line items (incl per-line VAT + account).
 function openBillEditForm(id){
   const bill = S.bills.find(b=>b.id===id);
-  if(!bill || docStatus(bill)!=='draft'){ showToast('Only draft bills can be edited'); return; }
+  if(!bill){ return; }
+  const st = docStatus(bill);
+  if(st==='void'){ showToast('Voided bills can’t be edited'); return; }
+  if(st==='paid' || (bill.payments&&bill.payments.length)){ showToast('This bill has payments — void it first to edit'); return; }
   const suppliers = S.contacts.filter(c=>c.type==='supplier');
   const acctList = S.accounts.filter(a=>a.type==='Expense' || a.type==='Current Assets' || a.type==='Non-Current Assets');
   const acctOpts = sel => acctList.map(a=>`<option value="${a.id}" ${a.id===sel?'selected':''}>${a.code} ${escapeHtml(a.name)}</option>`).join('');
@@ -3711,11 +3715,19 @@ function saveBillEdit(id){
     if(desc || price) lines.push({id:uid('li'), desc:desc||'Item', qty:qty||1, price, vatType, accountId});
   });
   if(!lines.length){ showToast('Add at least one line'); return; }
+  const wasIssued = !!bill.issueRef && docStatus(bill)!=='void';
+  // If already received, remove its old posted entry first — we'll re-post with the new figures.
+  if(wasIssued){
+    S.journal = S.journal.filter(e=> e.ref!==bill.issueRef);
+    bill.issueRef = null; bill.status = 'draft';
+  }
   bill.contactId = contactId;
   bill.dueDate = due || bill.dueDate;
   bill.lines = lines;
   // bill now uses per-line VAT; clear any document-level rate so totals come from the lines
   bill.vatType = 'none'; bill.taxRate = 0;
+  // Re-post to the ledger with the new figures, keeping the bill's own date.
+  if(wasIssued){ issueBill(bill.id, bill.date || todayStr()); }
   saveState(true);
   showToast('Bill updated');
   openBillDetail(bill.id);
