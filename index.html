@@ -2180,6 +2180,56 @@ function voidBill(billId){
 }
 function contactName(id){ const c=S.contacts.find(x=>x.id===id); return c?c.name:'—'; }
 
+// Capture a supplier/customer OPENING BALANCE (brought forward from before you started
+// in RECONI). Posts to AP/AR against Retained Income, as a document a payment can allocate to.
+function openContactOpeningBalanceForm(kind){
+  const isCust = kind==='customer';
+  const people = S.contacts.filter(c=>c.type===(isCust?'customer':'supplier'));
+  if(!people.length){ showToast('Add a '+(isCust?'customer':'supplier')+' first'); return; }
+  const who = isCust?'customer':'supplier';
+  const body = `
+    <p style="color:var(--text-muted); margin-top:0;">Enter the balance this ${who} was owed/owing <strong>before</strong> you started in RECONI (brought forward). It posts as an opening ${isCust?'invoice':'bill'} so payments can be allocated against it.</p>
+    <div class="field-row">
+      <div class="field"><label>${isCust?'Customer':'Supplier'}</label><select id="ob-contact">${people.map(c=>`<option value="${c.id}">${escapeHtml(c.name)}</option>`).join('')}</select></div>
+      <div class="field"><label>As at date</label><input type="date" id="ob-date" value="${S.settings.fyStartDate||todayStr()}"></div>
+    </div>
+    <div class="field"><label>Opening balance amount (R)</label><input type="number" id="ob-amount" step="0.01" min="0" placeholder="0.00"></div>
+    <div class="hint" style="margin-top:8px;">No VAT is added — a brought-forward balance already included VAT in the prior period.</div>`;
+  openModal('Opening balance', body, [
+    {label:'Cancel', cls:'btn-ghost', onclick:'closeModal()'},
+    {label:'Create opening balance', cls:'btn-primary', onclick:`createContactOpeningBalance('${kind}')`},
+  ]);
+}
+function createContactOpeningBalance(kind){
+  const isCust = kind==='customer';
+  const contactId = document.getElementById('ob-contact').value;
+  const date = document.getElementById('ob-date').value || todayStr();
+  const amount = round2(Number(document.getElementById('ob-amount').value)||0);
+  if(amount<=0){ showToast('Enter an amount greater than zero'); return; }
+  const num = isCust ? ('INV-'+(S.settings.nextInvoiceNo++)) : ('BILL-'+(S.settings.nextBillNo++));
+  const doc = {
+    id: uid(isCust?'inv':'bill'), number:num, contactId, date, dueDate:date,
+    lines: [{id:uid('li'), desc:'Opening balance brought forward', qty:1, price:amount, vatType:'none', accountId:'acc_equity'}],
+    vatType:'none', taxRate:0, status:'open', payments:[], notes:'Opening balance', isOpeningBalance:true
+  };
+  // Post: for a supplier, Cr AP / Dr Retained Income. For a customer, Dr AR / Cr Retained Income.
+  let jlines;
+  if(isCust){
+    jlines = [{accountId:'acc_ar', debit:amount, credit:0}, {accountId:'acc_equity', debit:0, credit:amount}];
+    S.invoices.push(doc);
+  } else {
+    jlines = [{accountId:'acc_equity', debit:amount, credit:0}, {accountId:'acc_ap', debit:0, credit:amount}];
+    S.bills.push(doc);
+  }
+  const entry = postJournal((isCust?'Opening balance — ':'Opening balance — ')+contactName(contactId), date, jlines);
+  entry.manual = true; entry.isOpeningBalance = true; entry.ref = 'open-'+doc.id;
+  doc.issueRef = entry.ref;
+  saveState(true);
+  closeModal();
+  showToast('Opening balance of '+fmt(amount)+' created for '+contactName(contactId));
+  render();
+}
+
 // Delete an invoice or bill straight from a list, cleanly removing its ledger entries.
 function deleteDocFromList(kind, id){
   const coll = kind==='invoice' ? S.invoices : S.bills;
@@ -7569,7 +7619,10 @@ function renderContactDirectory(kind, tab){
     bodyHtml = submenu + `
       <div class="card">
         <div class="card-head"><h3>Recent ${docLabel.toLowerCase()} — all ${label.toLowerCase()}</h3>
-          <button class="btn btn-ghost btn-sm" onclick="navigate('${taxInvoiceView}')">Open ${isCust?'Sales':'Purchases'}</button></div>
+          <div style="display:flex; gap:8px;">
+            <button class="btn btn-ghost btn-sm" onclick="openContactOpeningBalanceForm('${kind}')">+ Opening balance</button>
+            <button class="btn btn-ghost btn-sm" onclick="navigate('${taxInvoiceView}')">Open ${isCust?'Sales':'Purchases'}</button>
+          </div></div>
         ${rows.length? `<table><thead><tr><th>${isCust?'Invoice':'Bill'}</th><th>${singular}</th><th>Date</th><th>Due</th><th class="amt">Total</th><th class="amt">Balance</th><th>Status</th><th></th></tr></thead><tbody>
           ${rows.map(d=>`<tr>
             <td class="mono clickable" onclick="${isCust?`openInvoiceDetail('${d.id}')`:`openBillDetail('${d.id}')`}">${d.number}</td><td>${escapeHtml(contactName(d.contactId))}</td>
