@@ -3578,6 +3578,7 @@ function openBillDetail(id){
   const actions = [];
   if(status==='draft'){
     actions.push({label:'Delete draft', cls:'btn-danger', onclick:`deleteBill('${bill.id}')`});
+    actions.push({label:'Edit', cls:'btn-ghost', onclick:`openBillEditForm('${bill.id}')`});
     actions.push({label:'Receive bill', cls:'btn-primary', onclick:`issueBillAction('${bill.id}')`});
   } else if(status==='open' || status==='partial'){
     actions.push({label:'Void', cls:'btn-danger', onclick:`voidBillAction('${bill.id}')`});
@@ -3590,6 +3591,63 @@ function openBillDetail(id){
 function issueBillAction(id){ issueBill(id); closeModal(); showToast('Bill received into ledger'); navigate('purchases'); }
 function voidBillAction(id){ if(confirm('Void this bill? This reverses its ledger entries.')){ voidBill(id); closeModal(); showToast('Bill voided'); navigate('purchases'); } }
 function deleteBill(id){ if(confirm('Delete this draft bill?')){ S.bills = S.bills.filter(b=>b.id!==id); closeModal(); showToast('Draft deleted'); navigate('purchases'); } }
+
+// Edit a DRAFT bill: change its supplier, dates and line items (incl per-line VAT + account).
+function openBillEditForm(id){
+  const bill = S.bills.find(b=>b.id===id);
+  if(!bill || docStatus(bill)!=='draft'){ showToast('Only draft bills can be edited'); return; }
+  const suppliers = S.contacts.filter(c=>c.type==='supplier');
+  const acctList = S.accounts.filter(a=>a.type==='Expense' || a.type==='Current Assets' || a.type==='Non-Current Assets');
+  const acctOpts = sel => acctList.map(a=>`<option value="${a.id}" ${a.id===sel?'selected':''}>${a.code} ${escapeHtml(a.name)}</option>`).join('');
+  const lineRow = (l={}) => `
+    <tr>
+      <td><input type="text" class="be-desc" value="${escapeHtml(l.desc||'')}" placeholder="Description"></td>
+      <td style="width:60px;"><input type="number" class="be-qty" value="${l.qty!=null?l.qty:1}" min="0" step="1"></td>
+      <td style="width:95px;"><input type="number" class="be-price" value="${l.price!=null?l.price:0}" min="0" step="0.01"></td>
+      <td style="width:120px;"><select class="be-vat">${vatTypeOptions(l.vatType||'none')}</select></td>
+      <td style="width:190px;"><select class="be-acct">${acctOpts(l.accountId)}</select></td>
+      <td style="width:28px;"><button class="icon-btn" onclick="this.closest('tr').remove();">✕</button></td>
+    </tr>`;
+  const body = `
+    <div class="field-row">
+      <div class="field"><label>Supplier</label><select id="be-contact">${suppliers.map(c=>`<option value="${c.id}" ${c.id===bill.contactId?'selected':''}>${escapeHtml(c.name)}</option>`).join('')}</select></div>
+      <div class="field"><label>Due date</label><input type="date" id="be-due" value="${bill.dueDate||''}"></div>
+    </div>
+    <div class="section-title">Line items</div>
+    <table class="li-table"><thead><tr><th>Description</th><th>Qty</th><th>Price (excl)</th><th>VAT</th><th>Account</th><th></th></tr></thead>
+      <tbody id="be-body">${(bill.lines||[]).map(lineRow).join('')}</tbody></table>
+    <button class="btn btn-ghost btn-sm" style="margin-top:8px;" onclick="document.getElementById('be-body').insertAdjacentHTML('beforeend', document.getElementById('be-tmpl').innerHTML);">+ Add line</button>
+    <template id="be-tmpl">${lineRow()}</template>
+    <div class="hint" style="margin-top:10px;">Price is the VAT-exclusive amount; VAT is added per line based on the VAT type you pick.</div>`;
+  openModal('Edit draft bill '+bill.number, body, [
+    {label:'Cancel', cls:'btn-ghost', onclick:`openBillDetail('${bill.id}')`},
+    {label:'Save changes', cls:'btn-primary', onclick:`saveBillEdit('${bill.id}')`},
+  ], true);
+}
+function saveBillEdit(id){
+  const bill = S.bills.find(b=>b.id===id);
+  if(!bill) return;
+  const contactId = document.getElementById('be-contact').value;
+  const due = document.getElementById('be-due').value;
+  const lines = [];
+  document.querySelectorAll('#be-body tr').forEach(r=>{
+    const desc = r.querySelector('.be-desc').value.trim();
+    const qty = Number(r.querySelector('.be-qty').value)||0;
+    const price = Number(r.querySelector('.be-price').value)||0;
+    const vatType = r.querySelector('.be-vat').value;
+    const accountId = r.querySelector('.be-acct').value;
+    if(desc || price) lines.push({id:uid('li'), desc:desc||'Item', qty:qty||1, price, vatType, accountId});
+  });
+  if(!lines.length){ showToast('Add at least one line'); return; }
+  bill.contactId = contactId;
+  bill.dueDate = due || bill.dueDate;
+  bill.lines = lines;
+  // bill now uses per-line VAT; clear any document-level rate so totals come from the lines
+  bill.vatType = 'none'; bill.taxRate = 0;
+  saveState(true);
+  showToast('Bill updated');
+  openBillDetail(bill.id);
+}
 
 /* ===================== IMPORT SUPPLIER STATEMENT (CSV) =====================
    Reads a parsed statement CSV (Document No, Description, Excl VAT, VAT, Incl VAT,
