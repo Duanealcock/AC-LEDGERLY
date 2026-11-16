@@ -3703,7 +3703,7 @@ function renderStatementReview(){
           <td style="width:90px;"><input type="number" step="0.01" value="${l.excl}" onchange="STMT_IMPORT.invoices[${ii}].lines[${li}].excl=Number(this.value)||0; renderStatementReview();" style="width:90px; text-align:right;"></td>
           <td style="width:130px;"><select onchange="STMT_IMPORT.invoices[${ii}].lines[${li}].vatType=this.value; renderStatementReview();">${vatOpts(l.vatType)}</select></td>
           <td class="amt num" style="width:90px;">${fmt(round2(l.excl + (l.vatType==='standard'?l.excl*0.15:0)))}</td>
-          <td style="width:200px;"><select onchange="STMT_IMPORT.invoices[${ii}].lines[${li}].accountId=this.value;">${acctOpts(l.accountId)}</select></td>
+          <td style="width:230px;"><div style="display:flex; gap:4px; align-items:center;"><select onchange="STMT_IMPORT.invoices[${ii}].lines[${li}].accountId=this.value;" style="flex:1;">${acctOpts(l.accountId)}</select><button class="icon-btn" title="Split into a 15% part and a zero-rated part" onclick="splitStatementLine(${ii},${li})">✂</button></div></td>
         </tr>`).join('')}
       </tbody>
       <tfoot><tr style="border-top:2px solid var(--border); font-weight:600;">
@@ -3745,6 +3745,34 @@ function renderStatementReview(){
       <button class="btn btn-primary" onclick="commitStatementImport()">Create all remaining bills</button>
     </div>`;
   document.getElementById('content').innerHTML = html;
+}
+
+// Split a line into a 15%-rated portion and a zero-rated portion, using the statement's
+// own figures (incl & VAT). Handy for OVK "mixed" lines where only part carried VAT.
+function splitStatementLine(ii, li){
+  if(!STMT_IMPORT) return;
+  const inv = STMT_IMPORT.invoices[ii]; if(!inv) return;
+  const l = inv.lines[li]; if(!l) return;
+  const totalExcl = round2(l.excl);
+  // VAT to use: the statement's VAT for this line, or ask if OCR didn't capture it.
+  let vat = round2(Math.abs(l.vat||0));
+  if(vat<=0){
+    const ans = prompt('How much VAT (R) was charged on "'+l.desc+'"?\nThe 15% portion = VAT ÷ 0.15; the rest becomes zero-rated.', '');
+    if(ans===null) return;
+    vat = round2(Math.abs(Number(String(ans).replace(/[^0-9.\-]/g,''))||0));
+    if(vat<=0){ showToast('No VAT entered — nothing to split.'); return; }
+  }
+  const stdExcl = round2(vat/0.15);         // portion that carried 15%
+  const zeroExcl = round2(totalExcl - stdExcl);
+  if(stdExcl<=0 || zeroExcl<0 || stdExcl>Math.abs(totalExcl)+0.02){
+    showToast("The VAT doesn't fit this line's excl amount — check the figures."); return;
+  }
+  const sign = l.excl<0 ? -1 : 1;
+  const stdLine = { desc:l.desc+' (15%)',  excl:round2(sign*stdExcl),  vat:round2(sign*vat), incl:round2(sign*(stdExcl+vat)), vatType:'standard', accountId:l.accountId, check:'' };
+  const zeroLine= { desc:l.desc+' (0%)',   excl:round2(sign*zeroExcl), vat:0,                incl:round2(sign*zeroExcl),      vatType:'zero',     accountId:l.accountId, check:'' };
+  inv.lines.splice(li, 1, stdLine, zeroLine);   // replace the one line with the two parts
+  showToast('Split into R'+fmt(stdExcl)+' @ 15% and R'+fmt(zeroExcl)+' @ 0%.');
+  renderStatementReview();
 }
 
 // Create ONE invoice's draft bill (the "Create this bill" button under each invoice).
