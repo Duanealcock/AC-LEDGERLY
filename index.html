@@ -2372,6 +2372,15 @@ function fmt(n){
   const str = abs.toLocaleString('en-ZA',{minimumFractionDigits:2, maximumFractionDigits:2});
   return (neg? '−':'') + S.settings.currency + str;
 }
+// Number only, no currency symbol — for report columns where the R would float and
+// break alignment. Right-aligned tabular digits line up cleanly down the column.
+function fmtNum(n){
+  n = Number(n)||0;
+  const neg = n < -0.001;
+  const abs = Math.abs(n);
+  const str = abs.toLocaleString('en-ZA',{minimumFractionDigits:2, maximumFractionDigits:2});
+  return (neg? '−':'') + str;
+}
 function fmtDate(d){
   if(!d) return '—';
   const dt = new Date(d+'T00:00:00');
@@ -3581,28 +3590,25 @@ function openBillForm(){
   const lineRow = ()=>`
     <tr>
       <td><input type="text" class="li-desc" placeholder="Description"></td>
-      <td style="width:64px;"><input type="number" class="li-qty" value="1" min="0" step="1"></td>
-      <td style="width:100px;"><input type="number" class="li-price" value="0" min="0" step="0.01"></td>
-      <td style="width:170px;"><select class="li-acct">${expenseAccounts.map(a=>`<option value="${a.id}">${a.code} ${a.name}</option>`).join('')}</select></td>
+      <td style="width:56px;"><input type="number" class="li-qty" value="1" min="0" step="1"></td>
+      <td style="width:95px;"><input type="number" class="li-price" value="0" min="0" step="0.01" oninput="recalcBillNewForm()"></td>
+      <td style="width:120px;"><select class="li-vat" onchange="recalcBillNewForm()">${vatTypeOptions(defaultVatType())}</select></td>
+      <td style="width:150px;"><select class="li-acct">${expenseAccounts.map(a=>`<option value="${a.id}">${a.code} ${a.name}</option>`).join('')}</select></td>
       <td style="width:90px; text-align:right;" class="li-line-total num">${S.settings.currency}0.00</td>
-      <td style="width:30px;"><button class="icon-btn" onclick="this.closest('tr').remove(); recalcInvoiceForm();">✕</button></td>
+      <td style="width:30px;"><button class="icon-btn" onclick="this.closest('tr').remove(); recalcBillNewForm();">✕</button></td>
     </tr>`;
   const body = `
     <div class="field-row">
       <div class="field"><label>Supplier</label><select id="f-contact">${suppliers.map(c=>`<option value="${c.id}">${c.name}</option>`).join('')}</select></div>
       <div class="field"><label>Bill date</label><input type="date" id="f-date" value="${today}"></div>
-    </div>
-    <div class="field-row">
       <div class="field"><label>Due date</label><input type="date" id="f-due" value="${dueStr}"></div>
-      <div class="field"><label>${S.settings.taxLabel} type</label>
-        <select id="f-tax" onchange="recalcInvoiceForm()">${vatTypeOptions(defaultVatType())}</select></div>
     </div>
-    <div class="section-title">Line items</div>
+    <div class="section-title">Line items <span style="font-weight:400; color:var(--text-muted); font-size:12px;">— set VAT per line</span></div>
     <table class="li-table" id="li-body-wrap">
-      <thead><tr><th>Description</th><th>Qty</th><th>Price</th><th>Expense account</th><th class="amt">Total</th><th></th></tr></thead>
+      <thead><tr><th>Description</th><th>Qty</th><th>Price</th><th>VAT</th><th>Expense account</th><th class="amt">Total</th><th></th></tr></thead>
       <tbody id="li-body">${lineRow()}</tbody>
     </table>
-    <button class="btn btn-ghost btn-sm" style="margin-top:8px;" onclick="document.getElementById('li-body').insertAdjacentHTML('beforeend', document.getElementById('li-tmpl').innerHTML); recalcInvoiceForm();">+ Add line</button>
+    <button class="btn btn-ghost btn-sm" style="margin-top:8px;" onclick="document.getElementById('li-body').insertAdjacentHTML('beforeend', document.getElementById('li-tmpl').innerHTML); recalcBillNewForm();">+ Add line</button>
     <template id="li-tmpl">${lineRow()}</template>
     <div style="margin-top:18px; border-top:1px solid var(--border); padding-top:12px;">
       <div class="report-row"><span>Subtotal</span><span class="num" id="sum-sub">${S.settings.currency}0.00</span></div>
@@ -3614,16 +3620,40 @@ function openBillForm(){
     {label:'Save as draft', cls:'btn-ghost', onclick:`submitBillForm(false)`},
     {label:'Save & receive', cls:'btn-primary', onclick:`submitBillForm(true)`},
   ], true);
-  recalcInvoiceForm();
+  recalcBillNewForm();
+}
+// Live totals for the New Bill form (per-line VAT).
+function recalcBillNewForm(){
+  let sub = 0, vat = 0;
+  document.querySelectorAll('#li-body tr').forEach(r=>{
+    const qty = Number(r.querySelector('.li-qty').value)||0;
+    const price = Number(r.querySelector('.li-price').value)||0;
+    const line = qty*price;
+    const vt = r.querySelector('.li-vat') ? r.querySelector('.li-vat').value : 'none';
+    sub += line;
+    vat += line * vatTypeRate(vt)/100;
+    const cell = r.querySelector('.li-line-total'); if(cell) cell.textContent = fmt(round2(line + line*vatTypeRate(vt)/100));
+  });
+  sub = round2(sub); vat = round2(vat);
+  const set = (id,v)=>{ const el=document.getElementById(id); if(el) el.textContent = fmt(v); };
+  set('sum-sub', sub); set('sum-tax', vat); set('sum-total', round2(sub+vat));
 }
 function submitBillForm(issueNow){
   const contactId = document.getElementById('f-contact').value;
   const date = document.getElementById('f-date').value;
   const due = document.getElementById('f-due').value;
-  const taxOn = document.getElementById('f-tax').value==='1';
-  const lines = collectLines('.li-desc','.li-qty','.li-price','.li-acct');
+  const lines = [];
+  document.querySelectorAll('#li-body tr').forEach(r=>{
+    const desc = r.querySelector('.li-desc').value.trim();
+    const qty = Number(r.querySelector('.li-qty').value)||0;
+    const price = Number(r.querySelector('.li-price').value)||0;
+    const vatType = r.querySelector('.li-vat') ? r.querySelector('.li-vat').value : 'none';
+    const accountId = r.querySelector('.li-acct').value;
+    if(desc || price) lines.push({desc:desc||'Item', qty:qty||1, price, vatType, accountId});
+  });
   if(lines.length===0){ showToast('Add at least one line item'); return; }
-  const bill = makeBillObj(contactId, date, due, lines, selectedVatType());
+  // per-line VAT: pass 'none' as the doc-level type so totals come from the lines
+  const bill = makeBillObj(contactId, date, due, lines, 'none');
   S.bills.push(bill);
   if(issueNow) issueBill(bill.id, date);
   closeModal();
@@ -6134,63 +6164,101 @@ function submitJournalEntryForm(){
 function openContactJournalForm(kind){
   const isCust = kind==='customer';
   const contacts = S.contacts.filter(c=>c.type===kind);
-  const acctOpts = S.accounts.slice().sort((a,b)=>(a.code||'').localeCompare(b.code||''))
-    .filter(a=>!['acc_ar','acc_ap'].includes(a.id))  // not the control account itself
-    .map(a=>`<option value="${a.id}" ${a.id===(isCust?'acc_sales':'acc_cos')?'selected':''}>${escapeHtml(a.code+' '+a.name)}</option>`).join('');
+  const control = isCust ? 'acc_ar' : 'acc_ap';
+  const controlAcct = S.accounts.find(a=>a.id===control);
+  const acctOpts = sel => S.accounts.slice().sort((a,b)=>(a.code||'').localeCompare(b.code||''))
+    .filter(a=>!['acc_ar','acc_ap'].includes(a.id))  // the control line is handled separately
+    .map(a=>`<option value="${a.id}" ${a.id===sel?'selected':''}>${escapeHtml(a.code+' '+a.name)}</option>`).join('');
+  // A line row for a contra account: account + debit + credit.
+  const lineRow = (acctSel)=>`
+    <tr>
+      <td><select class="cj-acct" style="width:100%;">${acctOpts(acctSel||(isCust?'acc_sales':'acc_cos'))}</select></td>
+      <td style="width:110px;"><input type="number" class="cj-debit" step="0.01" min="0" placeholder="0.00" oninput="recalcContactJournal()" style="width:100px; text-align:right;"></td>
+      <td style="width:110px;"><input type="number" class="cj-credit" step="0.01" min="0" placeholder="0.00" oninput="recalcContactJournal()" style="width:100px; text-align:right;"></td>
+      <td style="width:28px;"><button class="icon-btn" onclick="this.closest('tr').remove(); recalcContactJournal();">✕</button></td>
+    </tr>`;
   const body = `
     <div class="field-row">
       <div class="field"><label>${isCust?'Customer':'Supplier'}</label>
-        <select id="cj-contact"><option value="">Select ${isCust?'customer':'supplier'}…</option>
+        <select id="cj-contact" onchange="recalcContactJournal()"><option value="">Select ${isCust?'customer':'supplier'}…</option>
           ${contacts.map(c=>`<option value="${c.id}">${escapeHtml(c.name)}</option>`).join('')}</select></div>
       <div class="field"><label>Date</label><input type="date" id="cj-date" value="${todayStr()}"></div>
     </div>
-    <div class="field"><label>Direction</label>
-      <select id="cj-dir">
-        <option value="debit">Debit the ${isCust?'customer':'supplier'} — increases what they ${isCust?'owe you':'you owe adjusts'} </option>
-        <option value="credit">Credit the ${isCust?'customer':'supplier'} — decreases their balance</option>
-      </select>
-      <div class="hint" style="margin-top:4px;">${isCust
-        ? 'Debit raises the amount the customer owes (e.g. a manual charge). Credit reduces it (e.g. a write-off or adjustment).'
-        : 'Credit raises the amount you owe the supplier. Debit reduces it (e.g. an adjustment).'}</div>
-    </div>
-    <div class="field-row">
-      <div class="field"><label>Contra account</label><select id="cj-acct">${acctOpts}</select></div>
-      <div class="field"><label>Amount</label><input type="number" id="cj-amount" step="0.01" min="0" placeholder="0.00"></div>
-    </div>
     <div class="field"><label>Description / reference</label><input type="text" id="cj-desc" placeholder="Reason for the journal"></div>
+    <div class="section-title">Journal lines</div>
+    <div class="hint" style="margin:0 0 8px;">Add the contra lines (Sales, VAT, etc.). The <strong>${escapeHtml(controlAcct?controlAcct.name:(isCust?'Accounts Receivable':'Accounts Payable'))}</strong> line is worked out automatically to balance the entry, and posts to the ${isCust?'customer':'supplier'}'s account.</div>
+    <table class="li-table"><thead><tr><th>Account</th><th class="amt">Debit</th><th class="amt">Credit</th><th></th></tr></thead>
+      <tbody id="cj-body">${lineRow('acc_sales')}</tbody>
+    </table>
+    <button class="btn btn-ghost btn-sm" style="margin-top:8px;" onclick="document.getElementById('cj-body').insertAdjacentHTML('beforeend', document.getElementById('cj-tmpl').innerHTML); recalcContactJournal();">+ Add line</button>
+    <template id="cj-tmpl">${lineRow()}</template>
+    <div style="margin-top:16px; border-top:1px solid var(--border); padding-top:12px;">
+      <div class="report-row"><span>Contra lines — Debit</span><span class="num" id="cj-sum-dr">0.00</span></div>
+      <div class="report-row"><span>Contra lines — Credit</span><span class="num" id="cj-sum-cr">0.00</span></div>
+      <div class="report-row total"><span>${escapeHtml(controlAcct?controlAcct.name:'Control')} (auto)</span><span class="num" id="cj-control"></span></div>
+    </div>
   `;
   openModal((isCust?'Customer':'Supplier')+' journal', body, [
     {label:'Cancel', cls:'btn-ghost', onclick:'closeModal()'},
     {label:'Post journal', cls:'btn-primary', onclick:`submitContactJournal('${kind}')`},
-  ]);
+  ], true);
+  recalcContactJournal();
+}
+// Live totals for the contact journal; the control line balances the contra lines.
+let CJ_KIND = 'customer';
+function recalcContactJournal(){
+  let dr=0, cr=0;
+  document.querySelectorAll('#cj-body tr').forEach(r=>{
+    dr += Number(r.querySelector('.cj-debit').value)||0;
+    cr += Number(r.querySelector('.cj-credit').value)||0;
+  });
+  dr=round2(dr); cr=round2(cr);
+  const set=(id,v)=>{ const el=document.getElementById(id); if(el) el.textContent=v; };
+  set('cj-sum-dr', fmtNum(dr)); set('cj-sum-cr', fmtNum(cr));
+  // The control (AR/AP) takes the balancing side: if contra net is a credit, control is debit (and vice-versa).
+  const net = round2(dr - cr); // >0 means contra debits exceed credits -> control must CREDIT
+  const el = document.getElementById('cj-control');
+  if(el){
+    if(Math.abs(net)<0.005){ el.textContent='—'; }
+    else if(net>0){ el.textContent = 'Credit '+fmtNum(net); }
+    else { el.textContent = 'Debit '+fmtNum(-net); }
+  }
 }
 function submitContactJournal(kind){
   const isCust = kind==='customer';
   const contactId = document.getElementById('cj-contact').value;
   const date = document.getElementById('cj-date').value;
-  const dir = document.getElementById('cj-dir').value;        // 'debit' | 'credit' (relative to the CONTACT)
-  const acctId = document.getElementById('cj-acct').value;
-  const amount = round2(Number(document.getElementById('cj-amount').value)||0);
   const desc = (document.getElementById('cj-desc').value||'').trim();
   if(!contactId){ showToast('Select a '+(isCust?'customer':'supplier')); return; }
   if(!date){ showToast('Choose a date'); return; }
-  if(amount<=0){ showToast('Enter an amount'); return; }
   const control = isCust ? 'acc_ar' : 'acc_ap';
+  const contraLines = [];
+  let dr=0, cr=0;
+  document.querySelectorAll('#cj-body tr').forEach(r=>{
+    const accountId = r.querySelector('.cj-acct').value;
+    const debit = round2(Number(r.querySelector('.cj-debit').value)||0);
+    const credit = round2(Number(r.querySelector('.cj-credit').value)||0);
+    if(debit>0 || credit>0){ contraLines.push({accountId, debit, credit}); dr+=debit; cr+=credit; }
+  });
+  if(!contraLines.length){ showToast('Add at least one journal line'); return; }
+  dr=round2(dr); cr=round2(cr);
+  const net = round2(dr - cr);       // control takes the opposite side to balance
+  if(Math.abs(net)<0.005){ showToast('The contra lines already balance — add the amount that posts to the '+(isCust?'customer':'supplier')); return; }
   const name = contactName(contactId);
   const label = desc || ((isCust?'Customer':'Supplier')+' journal — '+name);
-  // Build the double entry. "Debit the contact" means debit the control account.
-  let lines;
-  if(dir==='debit') lines = [{accountId:control, debit:amount, credit:0}, {accountId:acctId, debit:0, credit:amount}];
-  else              lines = [{accountId:acctId, debit:amount, credit:0}, {accountId:control, debit:0, credit:amount}];
+  // control line balances: contra net debit>0 => control credits; net credit => control debits
+  const controlLine = net>0 ? {accountId:control, debit:0, credit:net} : {accountId:control, debit:-net, credit:0};
+  const lines = contraLines.concat([controlLine]);
   const entry = postJournal(label+' ('+name+')', date, lines);
   entry.manual = true; entry.ref = 'cj-'+entry.id; entry.contactId = contactId;
-  // Record a contact journal so it appears on the statement/aging.
-  // charge = increases balance owed by customer (or owed to supplier); credit = decreases it.
+  // Statement effect: control DEBIT increases a customer's balance (they owe more) /
+  // for a supplier a control CREDIT increases what you owe. charge vs credit on the statement.
+  const controlDebit = controlLine.debit>0;
   S.contactJournals = S.contactJournals || [];
   S.contactJournals.push({
     id:uid('cj'), contactId, kind, date, ref:'JNL', desc:label,
-    charge: dir==='debit' ? amount : 0,
-    credit: dir==='credit' ? amount : 0,
+    charge: isCust ? (controlDebit? Math.abs(net):0) : (controlDebit?0:Math.abs(net)),
+    credit: isCust ? (controlDebit?0:Math.abs(net)) : (controlDebit?Math.abs(net):0),
     entryRef: entry.ref,
   });
   saveState(true);
@@ -6835,7 +6903,7 @@ function openInvoiceAllocator(rowId){
   if(!r){ showToast('Row not found'); return; }
   const amount = (Number(r.received)||0) > 0 ? Number(r.received) : Number(r.spent)||0;
   if(!amount){ showToast('Enter the payment amount (Spent or Received) first'); return; }
-  ALLOC = { rowId, contactId: r.contactSelection || '', picks: {} };
+  ALLOC = { rowId, contactId: r.contactSelection || '', picks: {}, tab: 'unallocated' };
   // seed from any existing allocations on the row
   if(Array.isArray(r.allocations)) r.allocations.forEach(a=>{ ALLOC.picks[a.docId]=a.amount; });
   else if(r.matchDocId) ALLOC.picks[r.matchDocId] = amount;
@@ -6858,7 +6926,9 @@ function renderInvoiceAllocator(){
     : [];
   const allocated = Object.values(ALLOC.picks).reduce((s,v)=>s+(Number(v)||0),0);
   const remaining = round2(payment - allocated);
-  const docRows = docs.length ? docs.map(d=>{
+  if(!ALLOC.tab) ALLOC.tab = 'unallocated';
+
+  const rowFor = d => {
     const due = docBalanceDue(d);
     const picked = ALLOC.picks[d.id]!=null;
     const val = picked ? ALLOC.picks[d.id] : '';
@@ -6871,7 +6941,17 @@ function renderInvoiceAllocator(){
       <input type="number" step="0.01" min="0" placeholder="0.00" value="${val}" style="width:120px;" ${picked?'':'disabled'}
         onchange="setAllocAmount('${d.id}', this.value)" title="Amount to allocate to this ${isIn?'invoice':'bill'}">
     </div>`;
-  }).join('') : (ALLOC.contactId ? `<div class="hint">No open ${isIn?'invoices':'bills'} for this ${isIn?'customer':'supplier'}.</div>` : '');
+  };
+  const unticked = docs.filter(d=>ALLOC.picks[d.id]==null);
+  const ticked   = docs.filter(d=>ALLOC.picks[d.id]!=null);
+  const activeList = ALLOC.tab==='allocated' ? ticked : unticked;
+  const listHtml = !ALLOC.contactId
+    ? `<div class="hint">Pick a ${isIn?'customer':'supplier'} to see open documents.</div>`
+    : (activeList.length
+        ? activeList.map(rowFor).join('')
+        : `<div class="hint" style="text-align:center; padding:16px 0;">${ALLOC.tab==='allocated'?'Nothing allocated yet — tick a '+(isIn?'invoice':'bill')+' in the Unallocated tab.':'All open '+(isIn?'invoices':'bills')+' have been allocated.'}</div>`);
+
+  const tabBtn = (id,label,n)=>`<button class="pill ${ALLOC.tab===id?'active':''}" onclick="ALLOC.tab='${id}'; renderInvoiceAllocator();" style="cursor:pointer;">${label} <span style="opacity:.7;">(${n})</span></button>`;
 
   const body = `
     <div class="field"><label>${isIn?'Customer':'Supplier'}</label>
@@ -6885,8 +6965,12 @@ function renderInvoiceAllocator(){
       <div>Allocated: <strong>${fmt(allocated)}</strong></div>
       <div>Remaining: <strong style="color:${Math.abs(remaining)<0.005?'var(--money-pos)':(remaining<0?'var(--red)':'var(--text)')};">${fmt(remaining)}</strong></div>
     </div>
-    <div style="max-height:320px; overflow-y:auto;">${docRows || `<div class="hint">Pick a ${isIn?'customer':'supplier'} to see open documents.</div>`}</div>
-    <div class="hint" style="margin-top:8px;">Tick documents and enter how much of the payment goes to each, until the remaining reaches zero. Ticking a document fills in its full amount due by default.${isIn?' <strong>Or</strong> leave nothing ticked and click <strong>Leave on account</strong> to record a retainer/deposit — it credits the customer and auto-applies to the oldest invoices.':''}</div>
+    <div class="filter-pills" style="margin:12px 0 10px;">
+      ${tabBtn('unallocated','Unallocated', unticked.length)}
+      ${tabBtn('allocated','Allocated', ticked.length)}
+    </div>
+    <div style="max-height:300px; overflow-y:auto;">${listHtml}</div>
+    <div class="hint" style="margin-top:8px;">Tick a ${isIn?'invoice':'bill'} to allocate part of the payment to it — it moves to the <strong>Allocated</strong> tab. Untick to send it back. Fill amounts until Remaining reaches zero.${isIn?' <strong>Or</strong> leave nothing ticked and click <strong>Leave on account</strong> to record a retainer/deposit.':''}</div>
   `;
   const actions = [
     {label:'Auto-fill oldest first', cls:'btn-ghost', onclick:'autoFillAllocations()'},
@@ -10075,21 +10159,26 @@ function renderVatDetail(){
     const rows = bucketEntry.lines
       .slice().sort((a,b)=>(a.date||'').localeCompare(b.date||''))
       .map(l=>`<tr>
-        <td>${fmtDateShort(l.date)}</td>
+        <td style="white-space:nowrap;">${fmtDateShort(l.date)}</td>
         <td class="mono">${escapeHtml(l.ref||'')}</td>
         <td>${escapeHtml(cleanDesc(l.name)||'')}</td>
-        <td class="amt num">${fmt(l.net)}</td>
-        <td class="amt num">${fmt(round2(l.net + l.vat))}</td>
-        <td class="amt num">${fmt(l.vat)}</td>
+        <td class="amt num">${fmtNum(l.net)}</td>
+        <td class="amt num">${fmtNum(round2(l.net + l.vat))}</td>
+        <td class="amt num">${fmtNum(l.vat)}</td>
       </tr>`).join('');
     return `<div style="margin-top:14px;">
       <div style="display:flex; justify-content:space-between; align-items:baseline; border-bottom:2px solid var(--border-strong); padding-bottom:4px; margin-bottom:2px;">
         <strong>${t.name} — ${t.rate}%</strong>
         <span style="font-size:11px; color:var(--text-muted);">${bucketEntry.lines.length} transaction${bucketEntry.lines.length===1?'':'s'}</span>
       </div>
-      <table style="margin:0;"><thead><tr><th>Date</th><th>Ref</th><th>Name</th><th class="amt">Exclusive</th><th class="amt">Inclusive</th><th class="amt">${biz.taxLabel}</th></tr></thead>
+      <table style="margin:0; table-layout:fixed; width:100%;"><thead><tr>
+        <th style="width:90px;">Date</th><th style="width:90px;">Ref</th><th>Name</th>
+        <th class="amt" style="width:120px;">Exclusive (${S.settings.currency})</th>
+        <th class="amt" style="width:120px;">Inclusive (${S.settings.currency})</th>
+        <th class="amt" style="width:110px;">${biz.taxLabel} (${S.settings.currency})</th>
+      </tr></thead>
         <tbody>${rows}
-          <tr class="li-total-row"><td colspan="3">${t.name} subtotal</td><td class="amt num">${fmt(bucketEntry.net)}</td><td class="amt num">${fmt(round2(bucketEntry.net + bucketEntry.vat))}</td><td class="amt num">${fmt(bucketEntry.vat)}</td></tr>
+          <tr class="li-total-row"><td colspan="3">${t.name} subtotal</td><td class="amt num">${fmtNum(bucketEntry.net)}</td><td class="amt num">${fmtNum(round2(bucketEntry.net + bucketEntry.vat))}</td><td class="amt num">${fmtNum(bucketEntry.vat)}</td></tr>
         </tbody></table>
     </div>`;
   }
