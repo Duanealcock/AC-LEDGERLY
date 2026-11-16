@@ -2180,6 +2180,30 @@ function voidBill(billId){
 }
 function contactName(id){ const c=S.contacts.find(x=>x.id===id); return c?c.name:'—'; }
 
+// Delete an invoice or bill straight from a list, cleanly removing its ledger entries.
+function deleteDocFromList(kind, id){
+  const coll = kind==='invoice' ? S.invoices : S.bills;
+  const doc = coll.find(d=>d.id===id);
+  if(!doc) return;
+  const label = (kind==='invoice'?'invoice ':'bill ')+doc.number;
+  const paid = (doc.payments||[]).length>0;
+  const msg = paid
+    ? 'Delete '+label+'? It has payments recorded — those will be removed too, and all its ledger entries reversed. This cannot be undone.'
+    : 'Delete '+label+'? Its ledger entries will be removed. This cannot be undone.';
+  if(!confirm(msg)) return;
+  // Remove the posted journal entries for this document (issue + each payment), by ref.
+  const refs = [];
+  if(doc.issueRef) refs.push(doc.issueRef);
+  (doc.payments||[]).forEach(p=>{ if(p.journalRef) refs.push(p.journalRef); });
+  if(refs.length) S.journal = S.journal.filter(e=> !refs.includes(e.ref));
+  // Remove the document itself.
+  if(kind==='invoice') S.invoices = S.invoices.filter(d=>d.id!==id);
+  else S.bills = S.bills.filter(d=>d.id!==id);
+  saveState(true);
+  showToast(label.charAt(0).toUpperCase()+label.slice(1)+' deleted');
+  render();
+}
+
 /* ============================= QUOTES (non-posting until converted) ============================= */
 // Customer quotes (sales) and supplier quotes (purchase) share this shape.
 function makeQuoteObj(kind, contactId, date, expiryDate, lines, vat){
@@ -3565,7 +3589,12 @@ function openBillDetail(id){
   const body = `
     <div style="display:flex; justify-content:space-between; margin-bottom:16px;">
       <div><div style="font-size:12px; color:var(--text-muted);">Supplier</div><strong>${contactName(bill.contactId)}</strong></div>
-      <div style="text-align:right;">${statusBadge(status)}<div style="font-size:12px; color:var(--text-muted); margin-top:6px;">Received ${bill.status==='draft'?'—':fmtDate(bill.date)} · Due ${fmtDate(bill.dueDate)}</div></div>
+      <div style="text-align:right;">${statusBadge(status)}
+        <div style="font-size:12px; color:var(--text-muted); margin-top:6px; display:flex; gap:10px; align-items:center; justify-content:flex-end;">
+          <span>Date <input type="date" value="${bill.date||''}" onchange="setBillDate('${bill.id}', this.value)" style="width:140px; font-size:12px;"></span>
+          <span>Due <input type="date" value="${bill.dueDate||''}" onchange="setBillDueDate('${bill.id}', this.value)" style="width:140px; font-size:12px;"></span>
+        </div>
+      </div>
     </div>
     <table><thead><tr><th>Description</th><th class="amt">Qty</th><th class="amt">Price</th><th class="amt">Total</th></tr></thead><tbody>${rows}</tbody></table>
     <div style="margin-top:14px; padding-top:10px; border-top:1px solid var(--border);">
@@ -3593,6 +3622,27 @@ function openBillDetail(id){
 function issueBillAction(id){ issueBill(id); closeModal(); showToast('Bill received into ledger'); navigate('purchases'); }
 function voidBillAction(id){ if(confirm('Void this bill? This reverses its ledger entries.')){ voidBill(id); closeModal(); showToast('Bill voided'); navigate('purchases'); } }
 function deleteBill(id){ if(confirm('Delete this draft bill?')){ S.bills = S.bills.filter(b=>b.id!==id); closeModal(); showToast('Draft deleted'); navigate('purchases'); } }
+
+// Change a bill's date inline (and keep its posted journal entry in step, if received).
+function setBillDate(id, newDate){
+  const bill = S.bills.find(b=>b.id===id);
+  if(!bill || !newDate) return;
+  bill.date = newDate;
+  if(bill.issueRef){
+    const entry = S.journal.find(e=>e.ref===bill.issueRef);
+    if(entry) entry.date = newDate;
+  }
+  saveState(true);
+  showToast('Bill date set to '+fmtDateShort(newDate));
+  openBillDetail(id);
+}
+function setBillDueDate(id, newDate){
+  const bill = S.bills.find(b=>b.id===id);
+  if(!bill || !newDate) return;
+  bill.dueDate = newDate;
+  saveState(true);
+  openBillDetail(id);
+}
 
 // Edit a DRAFT bill: change its supplier, dates and line items (incl per-line VAT + account).
 function openBillEditForm(id){
@@ -7508,13 +7558,14 @@ function renderContactDirectory(kind, tab){
       <div class="card">
         <div class="card-head"><h3>Recent ${docLabel.toLowerCase()} — all ${label.toLowerCase()}</h3>
           <button class="btn btn-ghost btn-sm" onclick="navigate('${taxInvoiceView}')">Open ${isCust?'Sales':'Purchases'}</button></div>
-        ${rows.length? `<table><thead><tr><th>${isCust?'Invoice':'Bill'}</th><th>${singular}</th><th>Date</th><th>Due</th><th class="amt">Total</th><th class="amt">Balance</th><th>Status</th></tr></thead><tbody>
-          ${rows.map(d=>`<tr class="clickable" onclick="${isCust?`openInvoiceDetail('${d.id}')`:`openBillDetail('${d.id}')`}">
-            <td class="mono">${d.number}</td><td>${escapeHtml(contactName(d.contactId))}</td>
+        ${rows.length? `<table><thead><tr><th>${isCust?'Invoice':'Bill'}</th><th>${singular}</th><th>Date</th><th>Due</th><th class="amt">Total</th><th class="amt">Balance</th><th>Status</th><th></th></tr></thead><tbody>
+          ${rows.map(d=>`<tr>
+            <td class="mono clickable" onclick="${isCust?`openInvoiceDetail('${d.id}')`:`openBillDetail('${d.id}')`}">${d.number}</td><td>${escapeHtml(contactName(d.contactId))}</td>
             <td>${d.status==='draft'?'—':fmtDateShort(d.date)}</td><td>${fmtDateShort(d.dueDate)}</td>
             <td class="amt num">${fmt(totalOf(d))}</td>
             <td class="amt num ${docBalanceDue(d)>0?'neg':''}">${fmt(docBalanceDue(d))}</td>
             <td>${statusBadge(docStatus(d))}</td>
+            <td style="text-align:right;"><button class="icon-btn" title="Delete this ${isCust?'invoice':'bill'}" onclick="event.stopPropagation(); deleteDocFromList('${isCust?'invoice':'bill'}','${d.id}')">🗑</button></td>
           </tr>`).join('')}
         </tbody></table>` : emptyState(`No ${docLabel.toLowerCase()} yet`, `${docLabel} you raise for ${label.toLowerCase()} will appear here.`, null)}
       </div>`;
