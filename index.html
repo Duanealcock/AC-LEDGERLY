@@ -300,7 +300,7 @@
   .cashbook-table input, .cashbook-table select{ font-size:12.5px; padding:6px 7px; width:100%; }
   .cashbook-table input[type=number]{ text-align:right; }
   .cashbook-table select{ color:var(--text); }
-  .cashbook-table .cb-actions{ display:flex; gap:4px; padding-top:8px; }
+  .cashbook-table .cb-actions{ display:flex; gap:3px; padding-top:8px; white-space:nowrap; justify-content:flex-end; }
   /* compact, square summary tiles */
   .cb-stats{ display:flex; gap:8px; }
   .cb-stat{ min-width:88px; height:64px; padding:8px 12px; border:1px solid var(--border); border-radius:8px; background:var(--surface-2);
@@ -311,7 +311,7 @@
   .cashbook-table th{ position:relative; }
   .cb-col-resizer{ position:absolute; top:0; right:-3px; width:7px; height:100%; cursor:col-resize; user-select:none; z-index:2; }
   .cb-col-resizer:hover, .cb-col-resizer.dragging{ background:linear-gradient(90deg, transparent 40%, var(--accent) 40%, var(--accent) 60%, transparent 60%); }
-  .cb-add-btn, .cb-del-btn, .cb-map-btn, .cb-alloc-btn{ width:24px; height:24px; border-radius:50%; border:none; cursor:pointer; color:#fff; font-size:16px; font-weight:700; display:inline-flex; align-items:center; justify-content:center; line-height:1; }
+  .cb-add-btn, .cb-del-btn, .cb-map-btn, .cb-alloc-btn, .cb-split-btn{ width:22px; height:22px; flex:0 0 22px; border-radius:50%; border:none; cursor:pointer; color:#fff; font-size:14px; font-weight:700; display:inline-flex; align-items:center; justify-content:center; line-height:1; }
   .cb-add-btn{ background:var(--money-pos); }
   .cb-add-btn:hover{ background:#155943; }
   .cb-del-btn{ background:var(--red); }
@@ -6330,10 +6330,12 @@ function clearCashbookFilters(){
 // Saved per-column widths (px) for the cashbook grid. Keyed by column key.
 let CASHBOOK_COLW = {};
 const CASHBOOK_COLS = ['sel','date','payee','description','type','selection','reference','vat','spent','received','balance','act'];
-const CASHBOOK_COLW_DEFAULT = { sel:32, date:110, payee:130, description:180, type:96, selection:150, reference:110, vat:120, spent:96, received:96, balance:120, act:96 };
+const CASHBOOK_COLW_DEFAULT = { sel:32, date:110, payee:130, description:180, type:96, selection:150, reference:110, vat:120, spent:96, received:96, balance:120, act:136 };
 function cashbookColW(key){
   const saved = (WORKSPACE && WORKSPACE.uiPrefs && WORKSPACE.uiPrefs.cashbookColW) || CASHBOOK_COLW;
-  return saved[key] || CASHBOOK_COLW[key] || CASHBOOK_COLW_DEFAULT[key] || 110;
+  let w = saved[key] || CASHBOOK_COLW[key] || CASHBOOK_COLW_DEFAULT[key] || 110;
+  if(key==='act') w = Math.max(w, 136);   // the actions column must fit all 5 round buttons
+  return w;
 }
 function cashbookColgroup(){
   return `<colgroup>${CASHBOOK_COLS.map(k=>`<col style="width:${cashbookColW(k)}px;">`).join('')}</colgroup>`;
