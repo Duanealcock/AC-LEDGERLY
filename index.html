@@ -7492,7 +7492,9 @@ function buildStatement(contact, kind, fromDate, toDate){
   let running=0, openingBalance=0;
   const rows=[];
   events.forEach(e=>{
-    const inRange = (!fromDate || e.date>=fromDate) && (!toDate || e.date<=toDate);
+    // Ignore anything AFTER the window end — it must not affect this statement's balance.
+    if(toDate && e.date > toDate) return;
+    const inRange = (!fromDate || e.date>=fromDate);
     running += e.charge - e.credit;
     if(fromDate && e.date < fromDate){ openingBalance = running; return; }
     if(inRange) rows.push({...e, balance:running});
@@ -7967,7 +7969,9 @@ function renderFySelector(){
 function statementCardHtml(contact, kind, compact, fromDate, toDate){  const isCust = kind==='customer';
   const st = buildStatement(contact, kind, fromDate||null, toDate||null);
   const openDocs = (isCust?S.invoices:S.bills).filter(d=>d.contactId===contact.id && d.status!=='draft' && docStatus(d)!=='void' && docBalanceDue(d)>0);
-  const aging = agingForDocs(openDocs, todayStr());
+  // Age the outstanding as at the statement's end date (not today), so the aging total
+  // agrees with the statement's closing balance for the chosen period.
+  const aging = agingForDocs(openDocs, toDate||todayStr());
   const rows = st.rows;
   const periodNote = (fromDate||toDate) ? ` · ${fromDate?fmtDate(fromDate):'start'}–${toDate?fmtDate(toDate):fmtDate(todayStr())}` : '';
   return `
