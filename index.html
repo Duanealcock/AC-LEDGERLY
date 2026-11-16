@@ -3602,11 +3602,11 @@ function openBillEditForm(id){
   const lineRow = (l={}) => `
     <tr>
       <td><input type="text" class="be-desc" value="${escapeHtml(l.desc||'')}" placeholder="Description"></td>
-      <td style="width:60px;"><input type="number" class="be-qty" value="${l.qty!=null?l.qty:1}" min="0" step="1"></td>
-      <td style="width:95px;"><input type="number" class="be-price" value="${l.price!=null?l.price:0}" min="0" step="0.01"></td>
-      <td style="width:120px;"><select class="be-vat">${vatTypeOptions(l.vatType||'none')}</select></td>
+      <td style="width:60px;"><input type="number" class="be-qty" value="${l.qty!=null?l.qty:1}" min="0" step="1" oninput="recalcBillEdit()"></td>
+      <td style="width:95px;"><input type="number" class="be-price" value="${l.price!=null?l.price:0}" min="0" step="0.01" oninput="recalcBillEdit()"></td>
+      <td style="width:120px;"><select class="be-vat" onchange="recalcBillEdit()">${vatTypeOptions(l.vatType||'none')}</select></td>
       <td style="width:190px;"><select class="be-acct">${acctOpts(l.accountId)}</select></td>
-      <td style="width:28px;"><button class="icon-btn" onclick="this.closest('tr').remove();">✕</button></td>
+      <td style="width:28px;"><button class="icon-btn" onclick="this.closest('tr').remove(); recalcBillEdit();">✕</button></td>
     </tr>`;
   const body = `
     <div class="field-row">
@@ -3616,13 +3616,33 @@ function openBillEditForm(id){
     <div class="section-title">Line items</div>
     <table class="li-table"><thead><tr><th>Description</th><th>Qty</th><th>Price (excl)</th><th>VAT</th><th>Account</th><th></th></tr></thead>
       <tbody id="be-body">${(bill.lines||[]).map(lineRow).join('')}</tbody></table>
-    <button class="btn btn-ghost btn-sm" style="margin-top:8px;" onclick="document.getElementById('be-body').insertAdjacentHTML('beforeend', document.getElementById('be-tmpl').innerHTML);">+ Add line</button>
+    <button class="btn btn-ghost btn-sm" style="margin-top:8px;" onclick="document.getElementById('be-body').insertAdjacentHTML('beforeend', document.getElementById('be-tmpl').innerHTML); recalcBillEdit();">+ Add line</button>
     <template id="be-tmpl">${lineRow()}</template>
-    <div class="hint" style="margin-top:10px;">Price is the VAT-exclusive amount; VAT is added per line based on the VAT type you pick.</div>`;
+    <div style="margin-top:16px; border-top:1px solid var(--border); padding-top:12px;">
+      <div class="report-row"><span>Subtotal (excl)</span><span class="num" id="be-sub">${S.settings.currency}0.00</span></div>
+      <div class="report-row"><span>${S.settings.taxLabel}</span><span class="num" id="be-vat">${S.settings.currency}0.00</span></div>
+      <div class="report-row total"><span>Total (incl)</span><span class="num" id="be-total">${S.settings.currency}0.00</span></div>
+    </div>
+    <div class="hint" style="margin-top:8px;">Price is the VAT-exclusive amount; VAT is added per line based on the VAT type you pick.</div>`;
   openModal('Edit draft bill '+bill.number, body, [
     {label:'Cancel', cls:'btn-ghost', onclick:`openBillDetail('${bill.id}')`},
     {label:'Save changes', cls:'btn-primary', onclick:`saveBillEdit('${bill.id}')`},
   ], true);
+  recalcBillEdit();
+}
+// Live totals for the bill-edit form.
+function recalcBillEdit(){
+  let sub = 0, vat = 0;
+  document.querySelectorAll('#be-body tr').forEach(r=>{
+    const qty = Number(r.querySelector('.be-qty').value)||0;
+    const price = Number(r.querySelector('.be-price').value)||0;
+    const line = qty*price;
+    sub += line;
+    vat += line * vatTypeRate(r.querySelector('.be-vat').value)/100;
+  });
+  sub = round2(sub); vat = round2(vat);
+  const set = (id,v)=>{ const el=document.getElementById(id); if(el) el.textContent = fmt(v); };
+  set('be-sub', sub); set('be-vat', vat); set('be-total', round2(sub+vat));
 }
 function saveBillEdit(id){
   const bill = S.bills.find(b=>b.id===id);
@@ -3680,6 +3700,17 @@ function handleStatementCsv(ev){
 }
 
 function stmtNum(v){ const n = Number(String(v==null?'':v).replace(/[^0-9.\-]/g,'')); return isNaN(n)?0:n; }
+// Normalise a statement date string to ISO yyyy-mm-dd. Accepts yyyy/mm/dd, yyyy-mm-dd,
+// dd/mm/yyyy, dd-mm-yyyy. Returns '' if it can't tell.
+function normStmtDate(v){
+  const s = String(v==null?'':v).trim();
+  if(!s) return '';
+  let m = s.match(/^(\d{4})[\/\-.](\d{1,2})[\/\-.](\d{1,2})$/);          // yyyy/mm/dd
+  if(m) return `${m[1]}-${m[2].padStart(2,'0')}-${m[3].padStart(2,'0')}`;
+  m = s.match(/^(\d{1,2})[\/\-.](\d{1,2})[\/\-.](\d{4})$/);             // dd/mm/yyyy
+  if(m) return `${m[3]}-${m[2].padStart(2,'0')}-${m[1].padStart(2,'0')}`;
+  return '';
+}
 
 function buildStatementImport(rows){
   if(!rows || rows.length<2){ showToast('CSV has no data rows'); return; }
@@ -3691,6 +3722,7 @@ function buildStatementImport(rows){
   const cIncl = guessColumn(H, ['incl vat','incl','inclusive','total','vat incl']);
   const cType = guessColumn(H, ['type','kind']);
   const cChk  = guessColumn(H, ['check','flag']);
+  const cDate = guessColumn(H, ['date','datum','dat','invoice date']);
   if(cDesc<0 || cIncl<0){ showToast('CSV needs at least Description and Incl VAT columns'); return; }
 
   const invMap = {}; const invOrder = []; const others = [];
@@ -3711,10 +3743,12 @@ function buildStatementImport(rows){
       const implied = Math.abs(excl)>0 ? Math.abs(vat)/Math.abs(excl)*100 : 0;
       vatType = (Math.abs(implied-15) < 2) ? 'standard' : 'zero';
     }
+    const rowDate = cDate>-1 ? normStmtDate(r[cDate]) : '';
     if(type==='line' || type==='discount'){
       // discount lines attach to their invoice (same doc) — negative amounts are fine
       const key = doc || ('_nodoc_'+i);
-      if(!invMap[key]){ invMap[key] = {doc:doc||'(no doc)', lines:[]}; invOrder.push(key); }
+      if(!invMap[key]){ invMap[key] = {doc:doc||'(no doc)', date:rowDate||'', lines:[]}; invOrder.push(key); }
+      if(rowDate && !invMap[key].date) invMap[key].date = rowDate;
       invMap[key].lines.push({ desc, excl:round2(excl), vat:round2(vat), incl:round2(incl),
         vatType, accountId:'', check:chk });
     } else {
@@ -3724,7 +3758,9 @@ function buildStatementImport(rows){
   }
   const invoices = invOrder.map(k=>invMap[k]);
   if(!invoices.length && !others.length){ showToast('No importable rows found in that CSV'); return; }
-  STMT_IMPORT = { supplierId:'', invoices, others };
+  // default date = the most common invoice date found, else today
+  const dates = invoices.map(i=>i.date).filter(Boolean);
+  STMT_IMPORT = { supplierId:'', defaultDate: dates[0] || todayStr(), invoices, others };
   navigate('statement-review');
 }
 
@@ -3738,11 +3774,14 @@ function renderStatementReview(){
 
   const flagCount = STMT_IMPORT.invoices.reduce((n,inv)=>n+inv.lines.filter(l=>l.check).length,0);
   let html = `<div class="card"><div class="card-body" style="display:flex; gap:16px; align-items:flex-end; flex-wrap:wrap;">
-      <div class="field" style="min-width:260px; margin:0;"><label>Supplier (applies to all bills)</label>
+      <div class="field" style="min-width:240px; margin:0;"><label>Supplier (applies to all bills)</label>
         <select id="stmt-supplier" onchange="STMT_IMPORT.supplierId=this.value;">
           <option value="">— choose supplier —</option>
           ${suppliers.map(c=>`<option value="${c.id}" ${c.id===STMT_IMPORT.supplierId?'selected':''}>${escapeHtml(c.name)}</option>`).join('')}
         </select></div>
+      <div class="field" style="margin:0;"><label>Default date</label>
+        <input type="date" id="stmt-default-date" value="${STMT_IMPORT.defaultDate||todayStr()}" onchange="STMT_IMPORT.defaultDate=this.value;"></div>
+      <button class="btn btn-ghost btn-sm" onclick="applyStatementDefaultDate()" title="Set every invoice without its own date to the default date">Apply date to all</button>
       ${flagCount? `<div class="hint" style="margin:0; color:var(--danger,#b00);">⚠ ${flagCount} line${flagCount===1?'':'s'} marked CHECK — OCR wasn't sure of the amount. Fix them against the paper statement before creating bills.</div>`:''}
     </div></div>`;
 
@@ -3754,7 +3793,11 @@ function renderStatementReview(){
     const flagged  = inv.lines.some(l=>l.check);
     const noAcct   = inv.lines.some(l=>l.excl!==0 && !l.accountId);
     html += `<div class="card" style="margin-top:14px;">
-      <div class="card-head"><h3 style="font-size:14px;">Invoice ${escapeHtml(inv.doc)} <span style="color:var(--text-muted); font-weight:400;">· ${inv.lines.length} line${inv.lines.length===1?'':'s'}</span></h3></div>
+      <div class="card-head" style="display:flex; justify-content:space-between; align-items:center;">
+        <h3 style="font-size:14px; margin:0;">Invoice ${escapeHtml(inv.doc)} <span style="color:var(--text-muted); font-weight:400;">· ${inv.lines.length} line${inv.lines.length===1?'':'s'}</span></h3>
+        <div style="display:flex; align-items:center; gap:6px;"><label style="font-size:11px; color:var(--text-muted); margin:0;">Date</label>
+          <input type="date" value="${inv.date||''}" onchange="STMT_IMPORT.invoices[${ii}].date=this.value;" style="width:150px;"></div>
+      </div>
       <table><thead><tr><th>Description</th><th class="amt">Excl</th><th>VAT</th><th class="amt">Incl</th><th>Expense account</th></tr></thead><tbody>
         ${inv.lines.map((l,li)=>`<tr ${l.check?'style="background:rgba(200,0,0,0.06);"':''}>
           <td><input type="text" value="${escapeHtml(l.desc)}" onchange="STMT_IMPORT.invoices[${ii}].lines[${li}].desc=this.value;" style="width:100%; min-width:200px;">${l.check?' <span class="badge badge-draft" title="OCR flagged — verify">CHECK</span>':''}</td>
@@ -3805,6 +3848,15 @@ function renderStatementReview(){
   document.getElementById('content').innerHTML = html;
 }
 
+// Fill every invoice's date with the default date (overwrites blanks and existing dates).
+function applyStatementDefaultDate(){
+  if(!STMT_IMPORT) return;
+  const d = STMT_IMPORT.defaultDate || todayStr();
+  STMT_IMPORT.invoices.forEach(inv=>{ inv.date = d; });
+  showToast('Set all invoice dates to '+fmtDateShort(d)+'.');
+  renderStatementReview();
+}
+
 // Split a line into a 15%-rated portion and a zero-rated portion, using the statement's
 // own figures (incl & VAT). Handy for OVK "mixed" lines where only part carried VAT.
 function splitStatementLine(ii, li){
@@ -3840,13 +3892,14 @@ function createOneStatementBill(ii){
   const inv = STMT_IMPORT.invoices[ii];
   if(!inv){ return; }
   const lines = inv.lines.filter(l=>l.accountId && l.excl!==0).map(l=>({
-    description:l.desc, qty:1, price:round2(l.excl), accountId:l.accountId, vatType:l.vatType
+    desc:l.desc, qty:1, price:round2(l.excl), accountId:l.accountId, vatType:l.vatType
   }));
   if(!lines.length){ showToast('Pick an expense account on at least one line first'); return; }
   const skipped = inv.lines.filter(l=>l.excl!==0 && !l.accountId).length;
   if(skipped && !confirm(skipped+' line'+(skipped===1?'':'s')+' without an account will be skipped. Create the bill?')) return;
-  const due = new Date(); due.setDate(due.getDate()+30);
-  const bill = makeBillObj(STMT_IMPORT.supplierId, todayStr(), due.toISOString().slice(0,10), lines, 'none');
+  const billDate = inv.date || STMT_IMPORT.defaultDate || todayStr();
+  const due = new Date(billDate+'T00:00:00'); due.setDate(due.getDate()+30);
+  const bill = makeBillObj(STMT_IMPORT.supplierId, billDate, due.toISOString().slice(0,10), lines, 'none');
   bill.notes = 'Imported from statement — doc '+inv.doc;
   S.bills.push(bill);
   saveState(true);
@@ -3864,15 +3917,16 @@ function commitStatementImport(){
   STMT_IMPORT.invoices.forEach(inv=>inv.lines.forEach(l=>{ if(l.excl!==0 && !l.accountId) missing++; }));
   if(missing){ if(!confirm(missing+' line'+(missing===1?'':'s')+' have no expense account and will be skipped. Continue?')) return; }
 
-  const due = new Date(); due.setDate(due.getDate()+30); const dueStr = due.toISOString().slice(0,10);
   let billsMade = 0;
   STMT_IMPORT.invoices.forEach(inv=>{
     const lines = inv.lines.filter(l=>l.accountId && l.excl!==0).map(l=>({
-      description:l.desc, qty:1, price:round2(l.excl), accountId:l.accountId, vatType:l.vatType
+      desc:l.desc, qty:1, price:round2(l.excl), accountId:l.accountId, vatType:l.vatType
     }));
     if(!lines.length) return;
+    const billDate = inv.date || STMT_IMPORT.defaultDate || todayStr();
+    const due = new Date(billDate+'T00:00:00'); due.setDate(due.getDate()+30);
     // makeBillObj assigns its own number; we store the statement doc no in notes for traceability
-    const bill = makeBillObj(STMT_IMPORT.supplierId, todayStr(), dueStr, lines, 'none');
+    const bill = makeBillObj(STMT_IMPORT.supplierId, billDate, due.toISOString().slice(0,10), lines, 'none');
     bill.notes = 'Imported from statement — doc '+inv.doc;
     S.bills.push(bill);
     billsMade++;
