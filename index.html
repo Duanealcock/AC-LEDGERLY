@@ -11463,20 +11463,30 @@ async function createStarterCompanyOnServer(){
 }
 
 // Save one company's payload to the server.
+// A per-company lock stops two saves of the same company running at once — the main cause
+// of a false "conflict" when you're the only user (your own saves racing each other).
+let SAVE_IN_FLIGHT = {};
 async function saveCompanyToServer(companyId){
   if(!SB || !SERVER_MODE) return false;
+  if(SAVE_IN_FLIGHT[companyId]){
+    // A save is already running for this company — wait for it, then run this one after,
+    // so they serialise instead of colliding.
+    try{ await SAVE_IN_FLIGHT[companyId]; }catch(e){}
+  }
+  const p = _saveCompanyInner(companyId);
+  SAVE_IN_FLIGHT[companyId] = p.catch(()=>{});
+  try{ return await p; }
+  finally{ if(SAVE_IN_FLIGHT[companyId]===p || true) delete SAVE_IN_FLIGHT[companyId]; }
+}
+async function _saveCompanyInner(companyId, isRetry){
   const co = WORKSPACE.companies[companyId];
   if(!co) return false;
   const serverId = co.serverId || companyId;
   const nowIso = new Date().toISOString();
-  // Don't persist our own bookkeeping fields inside the JSON blob.
   const loadedAt = co._loadedAt;
   const payload = {...co};
   delete payload._loadedAt;
   try{
-    // Optimistic-lock: only overwrite if the row hasn't changed since we loaded it.
-    // The extra .eq('updated_at', loadedAt) means a save by someone else (which bumped
-    // updated_at) makes this update match zero rows — so we never clobber their work.
     let q = SB.from('companies')
       .update({ name:(co.settings && co.settings.businessName)||'Company', data:payload, updated_at:nowIso })
       .eq('id', serverId);
@@ -11484,7 +11494,29 @@ async function saveCompanyToServer(companyId){
     const { data:updated, error } = await q.select('id, updated_at');
     if(error){ console.error('save company failed', error); return false; }
     if(!updated || updated.length===0){
-      // Nothing updated → someone else saved since we loaded. Don't overwrite them.
+      // The row's updated_at changed since we loaded it. Before treating this as a real
+      // multi-user conflict, re-sync our version marker and retry ONCE with our current
+      // data — this quietly fixes the common case of our own earlier save bumping the
+      // timestamp, without discarding anything the user just did.
+      if(!isRetry){
+        const { data:rows } = await SB.from('companies').select('id, updated_at, data').eq('id', serverId).limit(1);
+        const fresh = rows && rows[0];
+        if(fresh){
+          // Decide: was the timestamp bumped by OUR OWN earlier save (server data == what
+          // we last pushed) or by ANOTHER writer (server data differs)?
+          let serverSig = '';
+          try{ serverSig = cheapSignature(JSON.stringify(fresh.data||{})); }catch(e){}
+          const ourLastSig = LAST_SERVER_SIG[companyId];
+          if(ourLastSig && serverSig && serverSig===ourLastSig){
+            // Server matches our last push → this was our own race. Adopt the timestamp
+            // and re-save our current in-memory version (keeps the user's latest edits).
+            co._loadedAt = fresh.updated_at || null;
+            return await _saveCompanyInner(companyId, true);
+          }
+          // Server data differs from our last push → a genuine other-writer change.
+        }
+      }
+      // Still blocked after a retry → a real conflict from another writer.
       await handleSaveConflict(companyId, serverId);
       return false;
     }
