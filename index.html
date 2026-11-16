@@ -1970,7 +1970,15 @@ function vatTypeOptions(selectedId){
 /* ============================= INVOICES ============================= */
 function lineSubtotal(line){ return (Number(line.qty)||0) * (Number(line.price)||0); }
 function docSubtotal(doc){ return doc.lines.reduce((s,l)=>s+lineSubtotal(l),0); }
-function docTax(doc){ const rate = doc.taxRate!=null ? doc.taxRate : vatTypeRate(docVatTypeId(doc)); return rate>0 ? docSubtotal(doc)*rate/100 : 0; }
+// A document carries per-line VAT when any line has its own vatType. Otherwise VAT is
+// document-level (the original behaviour) — this keeps every existing bill/invoice working.
+function docHasLineVat(doc){ return !!(doc.lines && doc.lines.some(l=>l.vatType)); }
+function lineTax(line){ return line.vatType ? round2(lineSubtotal(line)*vatTypeRate(line.vatType)/100) : 0; }
+function docTax(doc){
+  if(docHasLineVat(doc)) return round2(doc.lines.reduce((s,l)=>s+lineTax(l),0));
+  const rate = doc.taxRate!=null ? doc.taxRate : vatTypeRate(docVatTypeId(doc));
+  return rate>0 ? docSubtotal(doc)*rate/100 : 0;
+}
 function invoiceTotal(doc){ return docSubtotal(doc)+docTax(doc); }
 function billTotal(doc){ return docSubtotal(doc)+docTax(doc); }
 function docPaidAmount(doc){ return (doc.payments||[]).reduce((s,p)=>s+p.amount,0); }
@@ -2369,6 +2377,7 @@ function render(){
     banking: renderBanking,
     'reconcile-landing': renderReconcileLanding,
     'bank-import': renderBankImportLanding,
+    'statement-review': renderStatementReview,
     journal: renderJournal,
     'opening-balances': renderOpeningBalances,
     cashbook: renderCashbook,
@@ -3461,7 +3470,8 @@ function printInvoiceWindow(id){
 let PURCH_FILTER = 'all';
 function renderPurchases(){
   setTopbar('Purchases / Bills', 'Track bills and supplier payments',
-    `<button class="btn btn-primary" onclick="openBillForm()">+ New Bill</button>`);
+    `<button class="btn btn-ghost" onclick="openStatementImport()">⇪ Import statement</button>
+     <button class="btn btn-primary" onclick="openBillForm()">+ New Bill</button>`);
   const list = S.bills.filter(b=> PURCH_FILTER==='all' || docStatus(b)===PURCH_FILTER).sort((a,b)=>b.date.localeCompare(a.date));
   document.getElementById('content').innerHTML = `
     <div class="toolbar">
@@ -3580,6 +3590,198 @@ function openBillDetail(id){
 function issueBillAction(id){ issueBill(id); closeModal(); showToast('Bill received into ledger'); navigate('purchases'); }
 function voidBillAction(id){ if(confirm('Void this bill? This reverses its ledger entries.')){ voidBill(id); closeModal(); showToast('Bill voided'); navigate('purchases'); } }
 function deleteBill(id){ if(confirm('Delete this draft bill?')){ S.bills = S.bills.filter(b=>b.id!==id); closeModal(); showToast('Draft deleted'); navigate('purchases'); } }
+
+/* ===================== IMPORT SUPPLIER STATEMENT (CSV) =====================
+   Reads a parsed statement CSV (Document No, Description, Excl VAT, VAT, Incl VAT,
+   Type, Check) — e.g. an OVK statement converted to CSV — groups the lines by
+   document number into draft bills (with per-line VAT and a per-line expense
+   account you choose), and turns the payment / interest / journal rows into their
+   own draft entries. Nothing posts until you review and confirm.                 */
+let STMT_IMPORT = null; // { supplierId, invoices:[{doc, date, lines:[{desc,excl,vat,incl,vatType,accountId,check}]}], others:[...] }
+
+function openStatementImport(){
+  if(S.contacts.filter(c=>c.type==='supplier').length===0){
+    showToast('Add the supplier first'); openContactForm('supplier'); return;
+  }
+  const body = `
+    <p style="color:var(--text-muted); margin-top:0;">Upload a statement CSV (Document&nbsp;No, Description, Excl, VAT, Incl, Type). RECONI groups it into one draft bill per document number for you to review — nothing posts until you confirm.</p>
+    <input type="file" id="stmt-csv" accept=".csv,text/csv" style="display:none;" onchange="handleStatementCsv(event)">
+    <button class="btn btn-primary" style="width:100%; justify-content:center;" onclick="document.getElementById('stmt-csv').click()">⇪ Choose statement CSV</button>`;
+  openModal('Import supplier statement', body, [{label:'Cancel', cls:'btn-ghost', onclick:'closeModal()'}]);
+}
+
+function handleStatementCsv(ev){
+  const file = ev.target.files && ev.target.files[0];
+  if(!file) return;
+  const reader = new FileReader();
+  reader.onload = e => {
+    try{ buildStatementImport(parseCSV(String(e.target.result))); }
+    catch(err){ console.error(err); showToast('Could not read that CSV — check the format.'); }
+  };
+  reader.readAsText(file);
+}
+
+function stmtNum(v){ const n = Number(String(v==null?'':v).replace(/[^0-9.\-]/g,'')); return isNaN(n)?0:n; }
+
+function buildStatementImport(rows){
+  if(!rows || rows.length<2){ showToast('CSV has no data rows'); return; }
+  const H = rows[0];
+  const cDoc  = guessColumn(H, ['document no','doc no','document','doc']);
+  const cDesc = guessColumn(H, ['description','desc','beskrywing']);
+  const cExcl = guessColumn(H, ['excl vat','excl','exclusive','vat excl']);
+  const cVat  = guessColumn(H, ['vat','btw','tax']);
+  const cIncl = guessColumn(H, ['incl vat','incl','inclusive','total','vat incl']);
+  const cType = guessColumn(H, ['type','kind']);
+  const cChk  = guessColumn(H, ['check','flag']);
+  if(cDesc<0 || cIncl<0){ showToast('CSV needs at least Description and Incl VAT columns'); return; }
+
+  const invMap = {}; const invOrder = []; const others = [];
+  for(let i=1;i<rows.length;i++){
+    const r = rows[i];
+    const type = (cType>-1 ? String(r[cType]||'').trim().toLowerCase() : 'line');
+    if(['opening','closing','subtotal'].includes(type)) continue; // display-only rows, skip
+    const desc = cDesc>-1 ? String(r[cDesc]||'').trim() : '';
+    if(!desc) continue;
+    const excl = cExcl>-1 ? stmtNum(r[cExcl]) : 0;
+    const vat  = cVat>-1  ? stmtNum(r[cVat])  : 0;
+    const incl = cIncl>-1 ? stmtNum(r[cIncl]) : 0;
+    const doc  = cDoc>-1 ? String(r[cDoc]||'').trim() : '';
+    const chk  = cChk>-1 ? String(r[cChk]||'').trim() : '';
+    // per-line VAT type: 15% if VAT present & ~15% of excl, else zero-rated
+    let vatType = 'zero';
+    if(Math.abs(vat) > 0.005){
+      const implied = Math.abs(excl)>0 ? Math.abs(vat)/Math.abs(excl)*100 : 0;
+      vatType = (Math.abs(implied-15) < 2) ? 'standard' : 'zero';
+    }
+    if(type==='line' || type==='discount'){
+      // discount lines attach to their invoice (same doc) — negative amounts are fine
+      const key = doc || ('_nodoc_'+i);
+      if(!invMap[key]){ invMap[key] = {doc:doc||'(no doc)', lines:[]}; invOrder.push(key); }
+      invMap[key].lines.push({ desc, excl:round2(excl), vat:round2(vat), incl:round2(incl),
+        vatType, accountId:'', check:chk });
+    } else {
+      // payment / journal / insurance → their own entries
+      others.push({ type, doc, desc, excl:round2(excl), vat:round2(vat), incl:round2(incl), accountId:'' });
+    }
+  }
+  const invoices = invOrder.map(k=>invMap[k]);
+  if(!invoices.length && !others.length){ showToast('No importable rows found in that CSV'); return; }
+  STMT_IMPORT = { supplierId:'', invoices, others };
+  navigate('statement-review');
+}
+
+function renderStatementReview(){
+  setTopbar('Review statement import', 'Check each line, pick an expense account, then create draft bills', '');
+  if(!STMT_IMPORT){ document.getElementById('content').innerHTML = `<div class="card"><div class="card-body">Nothing to import. <a href="#" onclick="event.preventDefault(); openStatementImport();">Choose a CSV</a>.</div></div>`; return; }
+  const suppliers = S.contacts.filter(c=>c.type==='supplier');
+  const expenseAccounts = S.accounts.filter(a=>a.type==='Expense' || a.type==='Current Assets' || a.type==='Non-Current Assets');
+  const acctOpts = sel => `<option value="">— pick account —</option>` + expenseAccounts.map(a=>`<option value="${a.id}" ${a.id===sel?'selected':''}>${a.code} ${escapeHtml(a.name)}</option>`).join('');
+  const vatOpts = sel => vatTypeOptions(sel);
+
+  const flagCount = STMT_IMPORT.invoices.reduce((n,inv)=>n+inv.lines.filter(l=>l.check).length,0);
+  let html = `<div class="card"><div class="card-body" style="display:flex; gap:16px; align-items:flex-end; flex-wrap:wrap;">
+      <div class="field" style="min-width:260px; margin:0;"><label>Supplier (applies to all bills)</label>
+        <select id="stmt-supplier" onchange="STMT_IMPORT.supplierId=this.value;">
+          <option value="">— choose supplier —</option>
+          ${suppliers.map(c=>`<option value="${c.id}" ${c.id===STMT_IMPORT.supplierId?'selected':''}>${escapeHtml(c.name)}</option>`).join('')}
+        </select></div>
+      ${flagCount? `<div class="hint" style="margin:0; color:var(--danger,#b00);">⚠ ${flagCount} line${flagCount===1?'':'s'} marked CHECK — OCR wasn't sure of the amount. Fix them against the paper statement before creating bills.</div>`:''}
+    </div></div>`;
+
+  // Invoices → draft bills
+  STMT_IMPORT.invoices.forEach((inv, ii)=>{
+    const billExcl = inv.lines.reduce((s,l)=>s+l.excl,0);
+    const billVat  = inv.lines.reduce((s,l)=>s+(l.vatType==='standard'?round2(l.excl*0.15):0),0);
+    html += `<div class="card" style="margin-top:14px;">
+      <div class="card-head"><h3 style="font-size:14px;">Invoice ${escapeHtml(inv.doc)} <span style="color:var(--text-muted); font-weight:400;">· ${inv.lines.length} line${inv.lines.length===1?'':'s'} · ${fmt(round2(billExcl+billVat))}</span></h3></div>
+      <table><thead><tr><th>Description</th><th class="amt">Excl</th><th>VAT</th><th class="amt">Incl</th><th>Expense account</th></tr></thead><tbody>
+        ${inv.lines.map((l,li)=>`<tr ${l.check?'style="background:rgba(200,0,0,0.06);"':''}>
+          <td><input type="text" value="${escapeHtml(l.desc)}" onchange="STMT_IMPORT.invoices[${ii}].lines[${li}].desc=this.value;" style="width:100%; min-width:200px;">${l.check?' <span class="badge badge-draft" title="OCR flagged — verify">CHECK</span>':''}</td>
+          <td style="width:90px;"><input type="number" step="0.01" value="${l.excl}" onchange="STMT_IMPORT.invoices[${ii}].lines[${li}].excl=Number(this.value)||0; renderStatementReview();" style="width:90px; text-align:right;"></td>
+          <td style="width:130px;"><select onchange="STMT_IMPORT.invoices[${ii}].lines[${li}].vatType=this.value; renderStatementReview();">${vatOpts(l.vatType)}</select></td>
+          <td class="amt num" style="width:90px;">${fmt(round2(l.excl + (l.vatType==='standard'?l.excl*0.15:0)))}</td>
+          <td style="width:200px;"><select onchange="STMT_IMPORT.invoices[${ii}].lines[${li}].accountId=this.value;">${acctOpts(l.accountId)}</select></td>
+        </tr>`).join('')}
+      </tbody></table>
+    </div>`;
+  });
+
+  // Other items → payment / interest / journal
+  if(STMT_IMPORT.others.length){
+    html += `<div class="card" style="margin-top:14px;">
+      <div class="card-head"><h3 style="font-size:14px;">Other items <span style="color:var(--text-muted); font-weight:400;">· payments, interest, journals</span></h3></div>
+      <div class="hint" style="margin:10px 14px 0;">These aren't supplier bills. Payments reduce what you owe; interest/journals post to an account you pick. Leave an account blank to skip that row.</div>
+      <table><thead><tr><th>Type</th><th>Description</th><th class="amt">Incl</th><th>Account</th></tr></thead><tbody>
+        ${STMT_IMPORT.others.map((o,oi)=>`<tr>
+          <td><span class="badge badge-open">${escapeHtml(o.type)}</span></td>
+          <td>${escapeHtml(o.desc)}</td>
+          <td class="amt num">${fmt(o.incl)}</td>
+          <td style="width:220px;"><select onchange="STMT_IMPORT.others[${oi}].accountId=this.value;">
+            <option value="">— skip —</option>
+            ${S.accounts.map(a=>`<option value="${a.id}" ${a.id===o.accountId?'selected':''}>${a.code} ${escapeHtml(a.name)}</option>`).join('')}
+          </select></td>
+        </tr>`).join('')}
+      </tbody></table>
+    </div>`;
+  }
+
+  html += `<div style="display:flex; gap:10px; margin-top:16px;">
+      <button class="btn btn-ghost" onclick="STMT_IMPORT=null; navigate('purchases');">Cancel</button>
+      <button class="btn btn-primary" onclick="commitStatementImport()">Create draft bills</button>
+    </div>`;
+  document.getElementById('content').innerHTML = html;
+}
+
+function commitStatementImport(){
+  if(!STMT_IMPORT){ return; }
+  if(!STMT_IMPORT.supplierId){ showToast('Choose the supplier first'); return; }
+  // every invoice line needs an account
+  let missing = 0;
+  STMT_IMPORT.invoices.forEach(inv=>inv.lines.forEach(l=>{ if(l.excl!==0 && !l.accountId) missing++; }));
+  if(missing){ if(!confirm(missing+' line'+(missing===1?'':'s')+' have no expense account and will be skipped. Continue?')) return; }
+
+  const due = new Date(); due.setDate(due.getDate()+30); const dueStr = due.toISOString().slice(0,10);
+  let billsMade = 0;
+  STMT_IMPORT.invoices.forEach(inv=>{
+    const lines = inv.lines.filter(l=>l.accountId && l.excl!==0).map(l=>({
+      description:l.desc, qty:1, price:round2(l.excl), accountId:l.accountId, vatType:l.vatType
+    }));
+    if(!lines.length) return;
+    // makeBillObj assigns its own number; we store the statement doc no in notes for traceability
+    const bill = makeBillObj(STMT_IMPORT.supplierId, todayStr(), dueStr, lines, 'none');
+    bill.notes = 'Imported from statement — doc '+inv.doc;
+    S.bills.push(bill);
+    billsMade++;
+  });
+
+  // Other items → simple journal entries against Accounts Payable (supplier control)
+  let othersMade = 0;
+  STMT_IMPORT.others.forEach(o=>{
+    if(!o.accountId) return;
+    const amt = round2(o.incl);
+    if(amt===0) return;
+    let jlines;
+    if(o.type==='payment'){
+      // payment reduces AP: Dr Accounts Payable, Cr bank/the chosen account
+      jlines = [{accountId:'acc_ap', debit:Math.abs(amt), credit:0},
+                {accountId:o.accountId, debit:0, credit:Math.abs(amt)}];
+    } else if(amt<0){
+      jlines = [{accountId:o.accountId, debit:0, credit:Math.abs(amt)},
+                {accountId:'acc_ap', debit:Math.abs(amt), credit:0}];
+    } else {
+      jlines = [{accountId:o.accountId, debit:amt, credit:0},
+                {accountId:'acc_ap', debit:0, credit:amt}];
+    }
+    const entry = postJournal(o.desc+' (statement import)', todayStr(), jlines);
+    entry.manual = true; entry.ref = 'stmt-'+entry.id;
+    othersMade++;
+  });
+
+  saveState(true);
+  STMT_IMPORT = null;
+  showToast(`Created ${billsMade} draft bill${billsMade===1?'':'s'}${othersMade?` and ${othersMade} journal entr${othersMade===1?'y':'ies'}`:''}.`);
+  navigate('purchases');
+}
 function openBillPaymentForm(id){
   const bill = S.bills.find(b=>b.id===id);
   const bankAccounts = S.accounts.filter(a=>a.isBank);
@@ -6748,7 +6950,8 @@ let CASHBOOK_SELECT_ALL = { new:false, reviewed:false };
 function toggleAllCashbookTicks(bodyId, checked){
   document.querySelectorAll('#'+bodyId+' .cb-tick').forEach(cb=>{ cb.checked = checked; });
   const tab = bodyId==='cb-rev-body' ? 'reviewed' : 'new';
-  if(!checked) CASHBOOK_SELECT_ALL[tab] = false;   // unticking clears the all-pages selection
+  // The header tick selects/clears EVERY transaction across all pages, not just this page.
+  CASHBOOK_SELECT_ALL[tab] = !!checked;
   updateCashbookSelectAllBanner(tab);
 }
 // Select EVERY row in this tab, across all pages.
