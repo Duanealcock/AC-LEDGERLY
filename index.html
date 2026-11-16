@@ -320,8 +320,9 @@
   .cb-map-btn:hover{ background:var(--accent-dark); }
   .cb-alloc-btn{ background:var(--accent-dark); font-size:14px; }
   .cb-alloc-btn:hover{ filter:brightness(1.1); }
-  .cb-split-btn{ background:#6b4fa0; font-size:13px; width:auto; min-width:24px; padding:0 6px; }
+  .cb-split-btn{ background:#6b4fa0; font-size:13px; }
   .cb-split-btn:hover{ filter:brightness(1.1); }
+  .cb-split-btn .cb-split-n{ font-size:9px; font-weight:700; margin-left:1px; }
   .alloc-doc-row{ display:flex; align-items:center; gap:10px; padding:8px 10px; border:1px solid var(--border); border-radius:8px; margin-bottom:6px; }
   .alloc-doc-row.picked{ border-color:var(--accent); background:var(--surface-2); }
   .alloc-summary{ display:flex; justify-content:space-between; gap:16px; padding:10px 12px; background:var(--surface-2); border-radius:8px; margin:10px 0; font-size:13px; }
@@ -6922,7 +6923,7 @@ function cashbookRowHtml(r){
       <button class="cb-del-btn" onclick="deleteCashbookRow('${r.id}')" title="Delete this transaction">−</button>
       <button class="cb-map-btn" onclick="openMappingFromRow('${r.id}')" title="Create a description→account mapping from this row">⇄</button>
       <button class="cb-alloc-btn" onclick="openInvoiceAllocator('${r.id}')" title="Allocate this payment to customer/supplier invoices">⑂</button>
-      <button class="cb-split-btn" onclick="openCashbookSplit('${r.id}')" title="Split this transaction across several accounts">${(r.splits&&r.splits.length)?'✂·'+r.splits.length:'✂'}</button>
+      <button class="cb-split-btn" onclick="openCashbookSplit('${r.id}')" title="${(r.splits&&r.splits.length)?'Split into '+r.splits.length+' lines — click to edit':'Split this transaction across several accounts'}">✂</button>
     </td>
   </tr>`;
 }
