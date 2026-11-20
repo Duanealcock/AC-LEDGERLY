@@ -501,6 +501,25 @@
       <button class="btn btn-ghost" style="width:100%; justify-content:center; margin-top:12px;" onclick="gateSignOut()">Back to sign in</button>
     </div>
 
+    <!-- SET NEW PASSWORD (after clicking the email reset link) -->
+    <div id="gate-recovery" style="display:none; margin-top:14px; text-align:left;">
+      <div style="font-weight:700; margin-bottom:4px;">Set a new password</div>
+      <div style="font-size:12.5px; color:var(--text-muted); margin-bottom:12px;">Enter a new password for your account below.</div>
+      <div class="field"><label>New password</label>
+        <div class="pw-wrap">
+          <input type="password" id="gate-new-pw" autocomplete="new-password" placeholder="At least 6 characters">
+          <button type="button" class="pw-eye" id="gate-new-pw-eye" onclick="togglePasswordVisibility('gate-new-pw','gate-new-pw-eye')" title="Show password">👁</button>
+        </div>
+      </div>
+      <div class="field"><label>Confirm new password</label>
+        <input type="password" id="gate-new-pw2" autocomplete="new-password" onkeydown="if(event.key==='Enter') submitNewPassword();">
+      </div>
+      <div id="gate-recovery-error" class="login-error" style="display:none;"></div>
+      <div id="gate-recovery-info" style="display:none; background:#e7f6ef; color:#12674a; font-size:12px; padding:8px 10px; border-radius:6px; margin:10px 0 4px;"></div>
+      <button class="btn btn-primary" style="width:100%; justify-content:center; margin-top:6px;" onclick="submitNewPassword()">Update password</button>
+      <button class="btn btn-ghost" style="width:100%; justify-content:center; margin-top:8px;" onclick="gateSignOut()">Cancel</button>
+    </div>
+
     <div class="login-note">RECONI accounts are managed centrally. New registrations require administrator approval before access is granted.</div>
     <div style="margin-top:10px; font-size:11px; text-align:center;">
       <a href="#" onclick="event.preventDefault(); openPolicy('terms')" style="color:var(--text-muted);">Terms</a> ·
@@ -7280,8 +7299,22 @@ function cashbookPager(tab, total){
       ${btns}
       <button class="cb-page-btn" ${page>=pages?'disabled':''} onclick="setCashbookPage('${tab}', ${page+1})">Next ›</button>
       <button class="cb-page-btn" ${page>=pages?'disabled':''} onclick="setCashbookPage('${tab}', ${pages})">Last »</button>
+      <span style="display:inline-flex; align-items:center; gap:4px; margin-left:8px;">
+        <span style="font-size:12px; color:var(--text-muted);">Go to</span>
+        <input type="number" min="1" max="${pages}" value="${page}" style="width:58px; padding:4px 6px; font-size:12px; text-align:center;"
+          onkeydown="if(event.key==='Enter'){ jumpCashbookPage('${tab}', this.value, ${pages}); }"
+          onchange="jumpCashbookPage('${tab}', this.value, ${pages})" title="Type a page number and press Enter">
+        <span style="font-size:12px; color:var(--text-muted);">/ ${pages}</span>
+      </span>
     </div>
   </div>`;
+}
+// Jump straight to a typed page number (clamped to the valid range).
+function jumpCashbookPage(tab, val, pages){
+  let p = parseInt(val, 10);
+  if(isNaN(p)) return;
+  p = Math.min(Math.max(1, p), pages);
+  setCashbookPage(tab, p);
 }
 function renderCashbook(){
   const bankAccounts = S.accounts.filter(a=>a.isBank);
@@ -11203,6 +11236,40 @@ async function gateForgotPassword(e){
     gateShowInfo('If that email has an account, a password-reset link is on its way.');
   }catch(err){ gateShowError('Could not send reset email.'); }
 }
+// Show the "set a new password" screen (after the user clicks the email reset link).
+function showRecoveryScreen(){
+  document.getElementById('shell').style.display = 'none';
+  document.getElementById('login-screen').style.display = 'none';
+  const g = document.getElementById('auth-gate');
+  if(g) g.style.display = 'flex';
+  gateEl('gate-form').style.display = 'none';
+  gateEl('gate-pending').style.display = 'none';
+  const sub = gateEl('gate-sub'); if(sub) sub.textContent = 'Reset your password';
+  const rec = gateEl('gate-recovery'); if(rec) rec.style.display = 'block';
+}
+async function submitNewPassword(){
+  const errEl = gateEl('gate-recovery-error'); const infoEl = gateEl('gate-recovery-info');
+  const show = (el,msg)=>{ if(el){ el.textContent=msg; el.style.display='block'; } };
+  const hide = el=>{ if(el) el.style.display='none'; };
+  hide(errEl); hide(infoEl);
+  if(!SB){ show(errEl,'Connection not ready — please refresh.'); return; }
+  const pw = (gateEl('gate-new-pw').value||'');
+  const pw2 = (gateEl('gate-new-pw2').value||'');
+  if(pw.length < 6){ show(errEl,'Password must be at least 6 characters.'); return; }
+  if(pw !== pw2){ show(errEl,'The two passwords don’t match.'); return; }
+  try{
+    const { error } = await SB.auth.updateUser({ password: pw });
+    if(error){ show(errEl, error.message); return; }
+    show(infoEl, 'Password updated. Signing you in…');
+    // clear the recovery token from the URL so a refresh doesn't re-trigger it
+    try{ history.replaceState(null, '', window.location.pathname + window.location.search); }catch(e){}
+    setTimeout(async ()=>{
+      gateEl('gate-recovery').style.display='none';
+      gateEl('gate-form').style.display='block';
+      await afterAuthenticated();
+    }, 900);
+  }catch(err){ show(errEl, 'Could not update the password. Please try the reset link again.'); }
+}
 // Fetch the signed-in user's profile and decide: allowed in, or pending/blocked.
 async function afterAuthenticated(){
   const { data:{ user }, error } = await SB.auth.getUser();
@@ -12252,9 +12319,30 @@ async function init(){
     showApp();
     return;
   }
+  // Catch the password-recovery event: when the user clicks the reset link in their email,
+  // Supabase signs them into a short-lived recovery session and fires PASSWORD_RECOVERY.
+  // We then show the "set a new password" screen instead of entering the app.
+  let RECOVERY_MODE = false;
+  try{
+    SB.auth.onAuthStateChange((event)=>{
+      if(event === 'PASSWORD_RECOVERY'){ RECOVERY_MODE = true; showRecoveryScreen(); }
+    });
+  }catch(e){ console.error('auth listener failed', e); }
+
+  // Also detect a recovery link directly from the URL (in case the event timing is missed),
+  // e.g. ...#access_token=...&type=recovery or ?type=recovery&code=...
+  const hash = window.location.hash || '';
+  const search = window.location.search || '';
+  if(/type=recovery/.test(hash) || /type=recovery/.test(search)){
+    RECOVERY_MODE = true;
+    showRecoveryScreen();
+    return; // don't fall through to the normal session/enter flow
+  }
+
   // Is there already a valid Supabase session? If so, check the profile and enter.
   try{
     const { data:{ session } } = await SB.auth.getSession();
+    if(RECOVERY_MODE) return;       // recovery screen is up — don't enter the app
     if(session){
       showAuthGate();               // show gate container (will be hidden if approved)
       await afterAuthenticated();
