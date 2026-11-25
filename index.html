@@ -968,17 +968,27 @@ async function saveState(immediate){
   clearTimeout(SAVE_TIMER);
   const doSave = async ()=>{
     try{
-      // Always keep a local cache (offline fallback + non-authed use) — this is cheap.
-      const result = await storageSet(STORAGE_KEY, JSON.stringify(WORKSPACE));
+      // In SERVER MODE the server is the source of truth. The whole workspace can be
+      // large (many companies) and will NOT fit in the browser's ~5MB localStorage, so
+      // we do NOT cache it there — a quota failure must never be reported as "could not
+      // save" when the server has the data. We only localStorage-cache in non-server mode.
+      let localOk = true;   // treat as fine unless we actually depend on it and it fails
+      if(!SERVER_MODE){
+        const result = await storageSet(STORAGE_KEY, JSON.stringify(WORKSPACE));
+        localOk = !!result;
+      } else {
+        // best-effort tiny pointer only (which company is active); never the full data.
+        try{ await storageSet(STORAGE_KEY+':last', JSON.stringify({activeId:WORKSPACE.activeId, at:Date.now()})); }catch(e){}
+      }
       // In server mode, push to Supabase ONLY when the active company actually changed.
-      // This avoids a disk write on every re-render / navigation (which burned Disk IO).
-      let serverOk = true;
+      let serverOk = true, serverNeeded = false;
       if(SERVER_MODE && WORKSPACE && WORKSPACE.activeId){
         const co = WORKSPACE.companies[WORKSPACE.activeId];
         if(co){
           const payload = {...co}; delete payload._loadedAt;
           const sig = cheapSignature(JSON.stringify(payload));
           if(LAST_SERVER_SIG[WORKSPACE.activeId] !== sig){
+            serverNeeded = true;
             serverOk = await saveCompanyToServer(WORKSPACE.activeId);
             if(serverOk) LAST_SERVER_SIG[WORKSPACE.activeId] = sig;
           }
@@ -987,9 +997,14 @@ async function saveState(immediate){
       }
       // also mirror to the linked disk file, if any
       if(FILE_HANDLE) await writeWorkspaceToHandle();
-      if(result || FILE_HANDLE || serverOk){ LAST_SAVED_AT = new Date(); updateSaveIndicator(); }
-      else { showToast('Could not save — changes may not persist'); }
-    }catch(e){ console.error('save failed', e); showToast('Could not save — changes may not persist'); }
+      // Decide success honestly per mode:
+      //  - server mode: OK if the server save succeeded OR nothing needed saving.
+      //  - local mode: OK if localStorage (or a linked file) accepted the write.
+      const ok = SERVER_MODE ? (serverOk || !serverNeeded) : (localOk || !!FILE_HANDLE);
+      if(ok){ LAST_SAVED_AT = new Date(); updateSaveIndicator(); }
+      else if(SERVER_MODE){ showToast('Could not save to the server — please check your connection and try again.'); }
+      else { showToast('Could not save — storage is full. Your data is large; consider removing old sample data.'); }
+    }catch(e){ console.error('save failed', e); showToast('Could not save — please check your connection and try again.'); }
   };
   if(immediate) return doSave();
   SAVE_TIMER = setTimeout(doSave, 1500);   // batch rapid edits into one server write
@@ -10093,16 +10108,11 @@ function renderVatReport(){
   const openPeriod = periods.find(p=>p.status==='open');
   const closed = periods.filter(p=>p.status==='closed');
 
-  // suggest sensible default dates for a new period: continue after the last period, else this VAT-ish period
-  const lastTo = periods.length ? periods.map(p=>p.to).sort().slice(-1)[0] : null;
-  let sugFrom, sugTo;
-  if(lastTo){
-    const d = new Date(lastTo+'T00:00:00'); d.setDate(d.getDate()+1); sugFrom = d.toISOString().slice(0,10);
-    const e = new Date(sugFrom+'T00:00:00'); e.setMonth(e.getMonth()+2); e.setDate(0); sugTo = e.toISOString().slice(0,10);
-  } else {
-    sugFrom = todayStr().slice(0,8)+'01';
-    const e = new Date(sugFrom+'T00:00:00'); e.setMonth(e.getMonth()+2); e.setDate(0); sugTo = e.toISOString().slice(0,10);
-  }
+  // suggest default dates for a new period from the saved category, continuing after the
+  // last period — so it's already filled in (category-aware: monthly/bi-monthly/etc.).
+  const sugCat = (S.settings && S.settings.vatCategory) || 'A';
+  const sug = nextVatPeriodDates(sugCat);
+  const sugFrom = sug.from, sugTo = sug.to;
 
   let html = '';
 
@@ -10180,6 +10190,24 @@ function renderVatReport(){
 
 // Number of months in a SARS VAT category's period.
 function vatCatMonths(cat){ return cat==='C'?1 : cat==='D'?6 : cat==='E'?12 : 2; }
+// Work out the NEXT VAT period's dates: it starts the day after the last period's end
+// (or the current month if there's none yet) and runs for the category's length.
+function nextVatPeriodDates(cat){
+  const pad = n=>String(n).padStart(2,'0');
+  const months = vatCatMonths(cat);
+  const periods = (S.vatPeriods||[]);
+  const lastTo = periods.length ? periods.map(p=>p.to).filter(Boolean).sort().slice(-1)[0] : null;
+  let from;
+  if(lastTo){
+    const d = new Date(lastTo+'T00:00:00'); d.setDate(d.getDate()+1);
+    from = `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())}`;
+  } else {
+    from = todayStr().slice(0,8)+'01';   // first of the current month
+  }
+  const e = new Date(from+'T00:00:00'); e.setMonth(e.getMonth()+months); e.setDate(0); // last day of the period
+  const to = `${e.getFullYear()}-${pad(e.getMonth()+1)}-${pad(e.getDate())}`;
+  return { from, to };
+}
 const VAT_CAT_HINTS = {
   A:'Bi-monthly return. Returns & payment are due by the 25th of the month after the period end.',
   B:'Bi-monthly return. Returns & payment are due by the 25th of the month after the period end.',
@@ -10238,7 +10266,19 @@ function closeVatPeriod(id){
   p.status = 'closed'; p.closedAt = todayStr();
   // snapshot the figures at close so the history is stable even if later entries are backdated
   p.snapshot = r;
-  showToast('VAT period closed — transactions in this period are now locked');
+  // Auto-open the NEXT period straight away, using the same category and continuing from
+  // this period's end — so you never have to pick dates again.
+  const cat = p.category || (S.settings && S.settings.vatCategory) || 'A';
+  const nxt = nextVatPeriodDates(cat);
+  let opened = false;
+  const overlap = (S.vatPeriods||[]).some(x=> x.status!=='closed'? false : (nxt.from <= x.to && nxt.to >= x.from && x.id!==p.id));
+  if(!overlap){
+    S.vatPeriods.push({ id:uid('vat'), from:nxt.from, to:nxt.to, status:'open', category:cat, openedAt:todayStr(), autoOpened:true });
+    opened = true;
+  }
+  showToast(opened
+    ? 'Period closed. Next period opened automatically: '+fmtPeriodLabel(nxt.from, nxt.to)
+    : 'VAT period closed — transactions in this period are now locked');
   saveState(true);
   renderReports();
 }
@@ -10484,8 +10524,28 @@ function printVatReport(periodId){
         ${section(bd.input, 'Input Tax') || '<tr><td colspan="8" style="color:#888; padding-top:10px;">No input transactions</td></tr>'}
 
         <tr class="ttype netblock"><td colspan="8" style="padding-top:16px;">Summary</td></tr>
-        <tr class="netblock"><td colspan="5">Output Tax</td><td class="r">${money(outNet)}</td><td class="r">${money(outIncl)}</td><td class="r">${money(outVat)}</td></tr>
-        <tr class="netblock"><td colspan="5">Input Tax</td><td class="r">${money(inNet)}</td><td class="r">${money(inIncl)}</td><td class="r">${money(inVat)}</td></tr>
+        ${(()=>{
+          // Per-rate breakdown for the summary. One line per VAT type that has activity,
+          // shown in a sensible order, under an Output and an Input heading.
+          const sumRows = (bucket, heading) => {
+            let rows = `<tr class="netblock" style="background:#f3f3f3; -webkit-print-color-adjust:exact; print-color-adjust:exact;"><td colspan="8" style="font-weight:700;">${heading}</td></tr>`;
+            let any = false;
+            order.forEach(tId=>{
+              const be = bucket[tId];
+              if(!be || !be.lines.length) return;
+              any = true;
+              const t = be.type;
+              const incl = round2(be.net + be.vat);
+              const label = `${heading.split(' ')[0]} ${escapeHtml(t.name)} — ${t.rate}%`;
+              rows += `<tr><td colspan="5" style="padding-left:16px;">${label}</td><td class="r">${money(be.net)}</td><td class="r">${money(incl)}</td><td class="r">${money(be.vat)}</td></tr>`;
+            });
+            if(!any) rows += `<tr><td colspan="5" style="padding-left:16px; color:#888;">None</td><td class="r">${money(0)}</td><td class="r">${money(0)}</td><td class="r">${money(0)}</td></tr>`;
+            return rows;
+          };
+          return sumRows(bd.output, 'Output Tax') + sumRows(bd.input, 'Input Tax');
+        })()}
+        <tr class="netblock" style="border-top:1px solid #111;"><td colspan="5">Total Output Tax</td><td class="r">${money(outNet)}</td><td class="r">${money(outIncl)}</td><td class="r">${money(outVat)}</td></tr>
+        <tr class="netblock"><td colspan="5">Total Input Tax</td><td class="r">${money(inNet)}</td><td class="r">${money(inIncl)}</td><td class="r">${money(inVat)}</td></tr>
         ${(()=>{ const payable = netVat>=0; const col = payable ? '#c0392b' : '#1e8449';
           return `<tr class="grand"><td colspan="5" style="color:${col}; -webkit-print-color-adjust:exact; print-color-adjust:exact;">${payable? 'Net VAT Payable to SARS' : 'Net VAT Refundable'}</td>
           <td class="r" style="color:${col}; -webkit-print-color-adjust:exact; print-color-adjust:exact;">${money(netNet)}</td><td class="r" style="color:${col}; -webkit-print-color-adjust:exact; print-color-adjust:exact;">${money(netIncl)}</td><td class="r" style="color:${col}; -webkit-print-color-adjust:exact; print-color-adjust:exact;">${money(netVat)}</td></tr>`; })()}
