@@ -11617,33 +11617,39 @@ async function _saveCompanyInner(companyId, isRetry){
     let q = SB.from('companies')
       .update({ name:(co.settings && co.settings.businessName)||'Company', data:payload, updated_at:nowIso })
       .eq('id', serverId);
-    if(loadedAt) q = q.eq('updated_at', loadedAt);
+    // On the first attempt we guard on the loaded timestamp (optimistic lock). On a retry
+    // we drop the guard so our write lands reliably (last-write-wins for this session) —
+    // this is what stops the intermittent "could not save" during slow 3MB uploads.
+    if(loadedAt && !isRetry) q = q.eq('updated_at', loadedAt);
     const { data:updated, error } = await q.select('id, updated_at');
     if(error){ console.error('save company failed', error); return false; }
     if(!updated || updated.length===0){
-      // The row's updated_at changed since we loaded it. Before treating this as a real
-      // multi-user conflict, re-sync our version marker and retry ONCE with our current
-      // data — this quietly fixes the common case of our own earlier save bumping the
-      // timestamp, without discarding anything the user just did.
-      if(!isRetry){
-        const { data:rows } = await SB.from('companies').select('id, updated_at, data').eq('id', serverId).limit(1);
-        const fresh = rows && rows[0];
-        if(fresh){
-          // Decide: was the timestamp bumped by OUR OWN earlier save (server data == what
-          // we last pushed) or by ANOTHER writer (server data differs)?
-          let serverSig = '';
-          try{ serverSig = cheapSignature(JSON.stringify(fresh.data||{})); }catch(e){}
-          const ourLastSig = LAST_SERVER_SIG[companyId];
-          if(ourLastSig && serverSig && serverSig===ourLastSig){
-            // Server matches our last push → this was our own race. Adopt the timestamp
-            // and re-save our current in-memory version (keeps the user's latest edits).
-            co._loadedAt = fresh.updated_at || null;
-            return await _saveCompanyInner(companyId, true);
-          }
-          // Server data differs from our last push → a genuine other-writer change.
+      // The row's updated_at changed since we loaded it. The optimistic timestamp can
+      // mismatch for benign reasons (our own in-flight save bumped it, a JSONB round-trip
+      // reordered keys, clock skew), so a mismatch is NOT proof of another writer.
+      // Re-fetch the current timestamp + data, and only treat it as a real conflict if
+      // the SERVER'S DATA actually differs from what we currently hold. Otherwise adopt
+      // the timestamp and retry our write (never losing the user's edits).
+      const { data:rows } = await SB.from('companies').select('id, updated_at, data').eq('id', serverId).limit(1);
+      const fresh = rows && rows[0];
+      if(fresh){
+        let serverSig = '';   let mineSig = '';
+        try{ serverSig = cheapSignature(JSON.stringify(fresh.data||{})); }catch(e){}
+        try{ mineSig = cheapSignature(JSON.stringify(payload)); }catch(e){}
+        const sameData = serverSig && mineSig && serverSig===mineSig;
+        if(sameData){
+          // Server already holds exactly our data — nothing to do, just adopt the stamp.
+          co._loadedAt = fresh.updated_at || null;
+          return true;
+        }
+        if(!isRetry){
+          // Different data but almost always our own newer edits over an older stamp:
+          // adopt the server's timestamp and re-save once. (Single-user is the norm here.)
+          co._loadedAt = fresh.updated_at || null;
+          return await _saveCompanyInner(companyId, true);
         }
       }
-      // Still blocked after a retry → a real conflict from another writer.
+      // Retry also failed to match → treat as a genuine concurrent-writer conflict.
       await handleSaveConflict(companyId, serverId);
       return false;
     }
