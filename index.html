@@ -10318,7 +10318,32 @@ function vatReturnModel(){
     push([b.type.name+' subtotal','','','','', round2(b.net), round2(b.net+b.vat), round2(b.vat)],'total');
   });
   push(['Total input '+biz.taxLabel+' (Box 14)','','','','','','', round2(bd.inputTotals.vat)],'total');
-  push([(bd.net>=0?'Net '+biz.taxLabel+' payable (Box 20)':'Net '+biz.taxLabel+' refundable (Box 20)'),'','','','','','', round2(Math.abs(bd.net))],'grand');
+
+  // ---- Summary (mirrors the printed VAT report): per-rate Output/Input breakdown,
+  // Total Output Tax, Total Input Tax, then the Net line. Columns 6/7/8 = Exclusive/Inclusive/Tax.
+  push([], '');
+  push(['Summary','','','','','','',''],'section');
+  const sumRows = (bucket, heading) => {
+    push([heading,'','','','','','',''],'section');
+    let any = false;
+    order.forEach(tId=>{
+      const be = bucket[tId];
+      if(!be || !be.lines.length) return;
+      any = true;
+      const incl = round2(be.net + be.vat);
+      push([`${heading.split(' ')[0]} ${be.type.name} — ${be.type.rate}%`,'','','','', round2(be.net), incl, round2(be.vat)], '');
+    });
+    if(!any) push(['None','','','','', 0, 0, 0], '');
+  };
+  sumRows(bd.output, 'Output Tax');
+  sumRows(bd.input, 'Input Tax');
+  const outNet = bd.outputTotals.net, outVat = bd.outputTotals.vat, outIncl = round2(outNet+outVat);
+  const inNet = bd.inputTotals.net, inVat = bd.inputTotals.vat, inIncl = round2(inNet+inVat);
+  push(['Total Output Tax','','','','', round2(outNet), outIncl, round2(outVat)], 'total');
+  push(['Total Input Tax','','','','', round2(inNet), inIncl, round2(inVat)], 'total');
+  const netNet = round2(outNet - inNet), netIncl = round2(outIncl - inIncl), netVat = round2(outVat - inVat);
+  push([(netVat>=0?'Net '+biz.taxLabel+' Payable to SARS':'Net '+biz.taxLabel+' Refundable'),'','','','', netNet, netIncl, netVat],'grand');
+
   return { title:'VAT Return', meta:[{label:'Period',value:fmtPeriodLabel(p.from,p.to)},{label:'Ref',value:vatPeriodRef(p.from,p.to)},biz.businessVatNo?{label:'VAT No.',value:biz.businessVatNo}:null].filter(Boolean),
     columns:['Date','Type','Account','Reference','Description', S.settings.currency+' Exclusive', S.settings.currency+' Inclusive', S.settings.currency+' '+biz.taxLabel], rows, rowClasses };
 }
